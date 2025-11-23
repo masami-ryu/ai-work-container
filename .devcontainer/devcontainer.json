@@ -1,39 +1,16 @@
-
 {
-  "name": "Git Worktree Dev Container",
-
-  // ベースイメージにDockerfileを使う
+  "name": "Dev Container (anyenv + nodenv)",
   "build": {
     "dockerfile": "Dockerfile",
-    "context": ".." // worktree の親ディレクトリをコンテキストにする
+    "context": "."
   },
-
-  // VS Code が「開く」ワークスペース＝worktree の絶対パスに合わせる
-  "workspaceFolder": "${localWorkspaceFolder}",
-
-  // worktree と親ディレクトリの両方を「同じ絶対パス」でコンテナへバインド
-  "mounts": [
-    "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
-    "source=${localWorkspaceFolder}/..,target=${localWorkspaceFolder}/..,type=bind"
-  ],
-
-  // コンテナ側で使う環境変数にホストのワークスペース絶対パスを渡す
-  "containerEnv": {
-    "LOCAL_WORKSPACE": "${localWorkspaceFolder}"
-  },
-
-  // コンテナ起動のたびに repair を走らせる（初回も再接続時もケア）
-  "postStartCommand": "bash .devcontainer/scripts/worktree-repair.sh",
-
-  // 拡張や推奨設定（必要に応じて）
   "customizations": {
     "vscode": {
       "extensions": [
         "biomejs.biome"
-      ],
-      "settings": {
-        "git.autofetch": true
-      }
+      ]
     }
-  }
+  },
+  "postCreateCommand": "/usr/local/bin/devcontainer-post-create.sh",
+  "remoteUser": "vscode"
 }
