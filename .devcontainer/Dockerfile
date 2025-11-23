@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/vscode/devcontainers/base:ubuntu
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install basic packages required for anyenv/nodenv and node-build
+# anyenv/nodenv と node-build に必要な基本パッケージをインストール
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     curl \
@@ -17,29 +17,26 @@ RUN apt-get update \
   && locale-gen en_US.UTF-8 \
   && rm -rf /var/lib/apt/lists/*
 
-# anyenv will be installed into /home/vscode/.anyenv by the post-create script
+# anyenv と nodenv のルートディレクトリ設定
+# 実際のインストールは post-create スクリプトで実行
 ENV ANYENV_ROOT="/home/vscode/.anyenv"
 ENV NODENV_ROOT="/home/vscode/.nodenv"
 
-# Ensure vscode user exists (provided by base image) and user has home
 ARG USERNAME=vscode
-ARG USER_UID=1000
-ARG USER_GID=1000
 
+# ホームディレクトリの作成(権限設定は post-create.sh で実施)
 USER root
+RUN mkdir -p /home/vscode
 
-# Give vscode user ownership for anyenv paths just in case
-RUN mkdir -p /home/vscode && chown -R ${USERNAME}:${USERNAME} /home/vscode
-
+# nodenv を PATH に追加
 USER ${USERNAME}
-
 ENV PATH="$NODENV_ROOT/bin:$NODENV_ROOT/shims:$PATH"
 
-## Copy post-create script into image (path simplified so it works whether build context is repo root or .devcontainer)
+# post-create スクリプトをコンテナにコピーして実行権限を付与
 COPY post-create.sh /usr/local/bin/devcontainer-post-create.sh
 USER root
 RUN chmod +x /usr/local/bin/devcontainer-post-create.sh \
-  && chown ${USERNAME}:${USERNAME} /usr/local/bin/devcontainer-post-create.sh
-USER ${USERNAME}
+  && chown vscode:vscode /usr/local/bin/devcontainer-post-create.sh
 
+USER ${USERNAME}
 CMD ["sleep", "infinity"]

@@ -1,16 +1,26 @@
 {
+  // コンテナ名: anyenv + nodenv を使用した開発環境
   "name": "Dev Container (anyenv + nodenv)",
+  
+  // ビルド設定
   "build": {
     "dockerfile": "Dockerfile",
     "context": "."
   },
+  
+  // VS Code カスタマイズ
   "customizations": {
     "vscode": {
+      // インストールする拡張機能
       "extensions": [
         "biomejs.biome"
       ]
     }
   },
+  
+  // コンテナ作成後に実行するコマンド
   "postCreateCommand": "/usr/local/bin/devcontainer-post-create.sh",
+  
+  // コンテナ内で使用するユーザー
   "remoteUser": "vscode"
 }
