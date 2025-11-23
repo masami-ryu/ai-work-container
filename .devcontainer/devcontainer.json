@@ -13,6 +13,10 @@
     "vscode": {
       // インストールする拡張機能
       "extensions": [
+        "ms-ceintl.vscode-language-pack-ja",
+        "eamodio.gitlens",
+        "github.vscode-pull-request-github",
+        "github.vscode-github-actions",
         "biomejs.biome"
       ]
     }
