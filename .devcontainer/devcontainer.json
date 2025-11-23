@@ -22,6 +22,7 @@
         "git.autofetch": false,
         // Git 機能の無効化 （スキャンが終了しない問題の対策）
         "git.enabled": false,
+        // 参加者タイムアウト設定
         "files.participants.timeout": 0
       }
     }
