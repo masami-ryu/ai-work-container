@@ -36,7 +36,7 @@ USER ${USERNAME}
 ENV PATH="$NODENV_ROOT/bin:$NODENV_ROOT/shims:$PATH"
 
 ## Copy post-create script into image (path simplified so it works whether build context is repo root or .devcontainer)
-COPY scripts/post-create.sh /usr/local/bin/devcontainer-post-create.sh
+COPY post-create.sh /usr/local/bin/devcontainer-post-create.sh
 USER root
 RUN chmod +x /usr/local/bin/devcontainer-post-create.sh \
   && chown ${USERNAME}:${USERNAME} /usr/local/bin/devcontainer-post-create.sh
