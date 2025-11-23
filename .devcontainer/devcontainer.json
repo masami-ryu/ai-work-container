@@ -21,7 +21,8 @@
         // Git の自動フェッチ無効化
         "git.autofetch": false,
         // Git 機能の無効化 （スキャンが終了しない問題の対策）
-        "git.enabled": false
+        "git.enabled": false,
+        "files.participants.timeout": 0
       }
     }
   },
