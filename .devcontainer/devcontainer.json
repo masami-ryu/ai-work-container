@@ -12,10 +12,7 @@
   "customizations": {
     "vscode": {
       // インストールする拡張機能
-      "extensions": [
-        "ms-ceintl.vscode-language-pack-ja",
-        "biomejs.biome"
-      ],
+      "extensions": [],
       // VS Code 設定
       "settings": {
         // Git の自動フェッチ無効化
