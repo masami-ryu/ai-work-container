@@ -18,7 +18,12 @@
         "github.vscode-pull-request-github",
         "github.vscode-github-actions",
         "biomejs.biome"
-      ]
+      ],
+      // VS Code 設定
+      "settings": {
+        // Git の自動フェッチを有効化
+        "git.autofetch": true
+      }
     }
   },
   
@@ -27,6 +32,9 @@
   
   // コンテナ内で使用するユーザー
   "remoteUser": "vscode",
+
+  // コンテナ起動時に使用するユーザー
+  "containerUser": "vscode",
   
   // node_modules のマウント除外設定（パフォーマンス向上）
   "mounts": [
