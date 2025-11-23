@@ -12,13 +12,17 @@
   "customizations": {
     "vscode": {
       // インストールする拡張機能
-      "extensions": [],
+      "extensions": [
+        "eamodio.gitlens",
+        "github.vscode-pull-request-github",
+        "github.vscode-github-actions"
+      ],
       // VS Code 設定
       "settings": {
-        // Git の自動フェッチ無効化
-        "git.autofetch": false,
-        // Git 機能の無効化 （スキャンが終了しない問題の対策）
-        "git.enabled": false,
+        // Git の自動フェッチ有効化（問題がある場合は無効化する）
+        "git.autofetch": true,
+        // Git 機能の有効化（問題がある場合は無効化する）
+        "git.enabled": true,
         // 参加者タイムアウト設定
         "files.participants.timeout": 0
       }
