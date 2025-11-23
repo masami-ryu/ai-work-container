@@ -14,15 +14,14 @@
       // インストールする拡張機能
       "extensions": [
         "ms-ceintl.vscode-language-pack-ja",
-        "eamodio.gitlens",
-        "github.vscode-pull-request-github",
-        "github.vscode-github-actions",
         "biomejs.biome"
       ],
       // VS Code 設定
       "settings": {
-        // Git の自動フェッチを有効化
-        "git.autofetch": true
+        // Git の自動フェッチ無効化
+        "git.autofetch": false,
+        // Git 機能の無効化 （スキャンが終了しない問題の対策）
+        "git.enabled": false
       }
     }
   },
