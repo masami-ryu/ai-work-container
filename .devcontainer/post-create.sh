@@ -64,6 +64,21 @@ else
   (cd "$ANYENV_DEFINITION_ROOT" && git fetch --depth 1 origin && git reset --hard origin/HEAD || echo "[警告] 定義の更新に失敗しました")
 fi
 
+# anyenv-update プラグインのインストール
+ANYENV_UPDATE_DIR="$ANYENV_DIR/plugins/anyenv-update"
+if [ ! -d "$ANYENV_UPDATE_DIR" ]; then
+  mkdir -p "$ANYENV_DIR/plugins"
+  if git clone https://github.com/znz/anyenv-update.git "$ANYENV_UPDATE_DIR"; then
+    echo "anyenv-update プラグインをインストールしました。"
+  else
+    echo "[警告] anyenv-update プラグインのクローンに失敗しました。"
+  fi
+else
+  echo "anyenv-update プラグインは既にインストールされています。"
+  # 既存の場合は最新に更新
+  (cd "$ANYENV_UPDATE_DIR" && git fetch --depth 1 origin && git reset --hard origin/HEAD || echo "[警告] anyenv-update の更新に失敗しました")
+fi
+
 # nodenv のインストール
 echo "nodenv をセットアップ中..."
 if ! command -v nodenv >/dev/null 2>&1; then
@@ -202,4 +217,40 @@ else
   else
     echo "Node.js バージョンが検出されず(.node-version / package.json engines.node)、デフォルトも適用されませんでした。"
   fi
+fi
+
+# GitHub Copilot CLI のインストール
+echo "GitHub Copilot CLI をインストール中..."
+if command -v node >/dev/null 2>&1; then
+  npm install -g @github/copilot || echo "[警告] GitHub Copilot CLI のインストールに失敗しました。"
+  
+  # npm グローバル bin ディレクトリを PATH に追加（現在のセッション用）
+  NPM_BIN_DIR="$(npm bin -g 2>/dev/null || true)"
+  if [ -n "$NPM_BIN_DIR" ]; then
+    export PATH="$NPM_BIN_DIR:$PATH"
+    echo "GitHub Copilot CLI をインストールしました。"
+    echo "PATH に npm グローバル bin を追加: $NPM_BIN_DIR"
+    
+    # .bashrc への PATH 設定追加（永続化・重複チェック付き）
+    # 複数回実行されても既存の設定はスキップされる
+    if ! grep -q "# GitHub Copilot CLI" ~/.bashrc; then
+      echo "" >> ~/.bashrc
+      echo "# GitHub Copilot CLI" >> ~/.bashrc
+      echo "export PATH=\"$NPM_BIN_DIR:\$PATH\"" >> ~/.bashrc
+      echo ".bashrc に npm グローバル bin の PATH を追加しました: $NPM_BIN_DIR"
+      
+      # 即座に設定を反映（現在のセッションで利用可能にする）
+      source ~/.bashrc || true
+    else
+      echo ".bashrc には既に GitHub Copilot CLI の設定が存在します。"
+      echo "※ PATH が変更されている場合は、手動で .bashrc の該当行を更新してください。"
+    fi
+  fi
+  
+  # nodenv の shim を更新
+  if command -v nodenv >/dev/null 2>&1; then
+    nodenv rehash || true
+  fi
+else
+  echo "[警告] Node.js がインストールされていないため、GitHub Copilot CLI のインストールをスキップします。"
 fi
