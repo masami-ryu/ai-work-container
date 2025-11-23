@@ -22,5 +22,10 @@
   "postCreateCommand": "/usr/local/bin/devcontainer-post-create.sh",
   
   // コンテナ内で使用するユーザー
-  "remoteUser": "vscode"
+  "remoteUser": "vscode",
+  
+  // node_modules のマウント除外設定（パフォーマンス向上）
+  "mounts": [
+    "type=volume,source=ai-work-container-node_modules,target=/workspaces/ai-work-container/node_modules"
+  ]
 }
