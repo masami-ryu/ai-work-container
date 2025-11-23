@@ -15,4 +15,5 @@ tools: ['runCommands', 'runTasks', 'edit', 'runNotebooks', 'search', 'new', 'ext
 - 実行可能な計画を作成し、ドキュメント化する。
 
 ## 出力先
-- 計画はMarkdown形式でドキュメント化され、プロジェクトの`ai/plans`ディレクトリに保存されます。
+- 新規作成する計画はMarkdown形式でドキュメント化され、プロジェクトの`ai/plans`ディレクトリに保存されます。
+- 既存の計画を更新する場合は、該当するMarkdownファイルを編集します。
