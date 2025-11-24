@@ -219,38 +219,100 @@ else
   fi
 fi
 
-# GitHub Copilot CLI のインストール
-echo "GitHub Copilot CLI をインストール中..."
-if command -v node >/dev/null 2>&1; then
-  npm install -g @github/copilot || echo "[警告] GitHub Copilot CLI のインストールに失敗しました。"
-  
-  # npm グローバル bin ディレクトリを PATH に追加（現在のセッション用）
-  NPM_BIN_DIR="$(npm bin -g 2>/dev/null || true)"
-  if [ -n "$NPM_BIN_DIR" ]; then
-    export PATH="$NPM_BIN_DIR:$PATH"
-    echo "GitHub Copilot CLI をインストールしました。"
-    echo "PATH に npm グローバル bin を追加: $NPM_BIN_DIR"
-    
-    # .bashrc への PATH 設定追加（永続化・重複チェック付き）
-    # 複数回実行されても既存の設定はスキップされる
-    if ! grep -q "# GitHub Copilot CLI" ~/.bashrc; then
-      echo "" >> ~/.bashrc
-      echo "# GitHub Copilot CLI" >> ~/.bashrc
-      echo "export PATH=\"$NPM_BIN_DIR:\$PATH\"" >> ~/.bashrc
-      echo ".bashrc に npm グローバル bin の PATH を追加しました: $NPM_BIN_DIR"
-      
-      # 即座に設定を反映（現在のセッションで利用可能にする）
-      source ~/.bashrc || true
-    else
-      echo ".bashrc には既に GitHub Copilot CLI の設定が存在します。"
-      echo "※ PATH が変更されている場合は、手動で .bashrc の該当行を更新してください。"
-    fi
-  fi
-  
-  # nodenv の shim を更新
-  if command -v nodenv >/dev/null 2>&1; then
-    nodenv rehash || true
-  fi
+# Claude Code CLI のネイティブインストール
+echo "Claude Code CLI をインストール中..."
+
+# インストール済みチェック(冪等性確保)
+if command -v claude >/dev/null 2>&1; then
+  INSTALLED_VERSION=$(claude --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+  echo "Claude Code CLI は既にインストールされています: v${INSTALLED_VERSION}"
+  echo "再インストールをスキップします。"
 else
-  echo "[警告] Node.js がインストールされていないため、GitHub Copilot CLI のインストールをスキップします。"
+  # ログファイルの設定(日付ローテーション)
+  LOG_DIR="${HOME}/.cache/claude-install-logs"
+  mkdir -p "$LOG_DIR"
+  LOGFILE_CLAUDE="${LOG_DIR}/install-$(date '+%Y%m%d').log"
+  touch "$LOGFILE_CLAUDE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Claude Code CLI インストール開始" | tee -a "$LOGFILE_CLAUDE"
+
+  # 古いログファイルのクリーンアップ(7日以上前のログを削除)
+  find "$LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
+
+  # アーキテクチャとOSの検出
+  ARCH=$(uname -m)
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+  # アーキテクチャの正規化
+  case "$ARCH" in
+    x86_64|amd64)
+      ARCH="x64"
+      ;;
+    aarch64|arm64)
+      ARCH="arm64"
+      ;;
+    *)
+      echo "[エラー] サポートされていないアーキテクチャ: $ARCH" | tee -a "$LOGFILE_CLAUDE"
+      ;;
+  esac
+
+  # インストールスクリプトのダウンロードと実行
+  INSTALL_URL="https://claude.ai/install.sh"
+  MAX_RETRIES=3
+  RETRY_COUNT=0
+
+  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -fsSL "$INSTALL_URL" 2>&1 | tee -a "$LOGFILE_CLAUDE" | bash; then
+      echo "Claude Code CLI のインストールに成功しました。" | tee -a "$LOGFILE_CLAUDE"
+      break
+    else
+      RETRY_COUNT=$((RETRY_COUNT + 1))
+      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+        echo "[警告] インストール失敗。リトライ中... ($RETRY_COUNT/$MAX_RETRIES)" | tee -a "$LOGFILE_CLAUDE"
+        sleep 2
+      else
+        echo "[エラー] Claude Code CLI のインストールに失敗しました。ログを確認してください: $LOGFILE_CLAUDE" | tee -a "$LOGFILE_CLAUDE"
+      fi
+    fi
+  done
+
+  # インストール先の確認とPATH設定
+  CLAUDE_INSTALL_DIR="$HOME/.local/bin"
+  if [ ! -d "$CLAUDE_INSTALL_DIR" ]; then
+    CLAUDE_INSTALL_DIR="/usr/local/bin"
+  fi
+
+  # PATH への追加(存在しない場合のみ)
+  if [ -d "$CLAUDE_INSTALL_DIR" ]; then
+    export PATH="$CLAUDE_INSTALL_DIR:$PATH"
+    
+    # 各シェル設定ファイルへの PATH 追加(bash / zsh 対応)
+    for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+      if [ -f "$SHELL_RC" ]; then
+        if ! grep -q "# Claude Code CLI" "$SHELL_RC"; then
+          echo "" >> "$SHELL_RC"
+          echo "# Claude Code CLI" >> "$SHELL_RC"
+          echo "export PATH=\"$CLAUDE_INSTALL_DIR:\$PATH\"" >> "$SHELL_RC"
+          echo "$(basename $SHELL_RC) に Claude Code CLI の PATH を追加しました" | tee -a "$LOGFILE_CLAUDE"
+        fi
+      fi
+    done
+  fi
+
+  # インストール確認
+  if command -v claude >/dev/null 2>&1; then
+    FINAL_VERSION=$(claude --version 2>/dev/null || echo "version check failed")
+    echo "Claude Code CLI が正常にインストールされました: ${FINAL_VERSION}" | tee -a "$LOGFILE_CLAUDE"
+  else
+    echo "[警告] Claude Code CLI が見つかりません。手動でインストールしてください。" | tee -a "$LOGFILE_CLAUDE"
+  fi
+fi
+
+# Claude Code 環境変数(オプション)
+if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
+  echo "" >> ~/.bashrc
+  echo "# Claude Code 環境変数" >> ~/.bashrc
+  echo "export CLAUDE_CODE_EXIT_AFTER_STOP_DELAY=5000" >> ~/.bashrc
+  echo "export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0" >> ~/.bashrc
+  echo "export DISABLE_AUTOUPDATER=0" >> ~/.bashrc
+  echo "Claude Code 環境変数を .bashrc に追加しました"
 fi
