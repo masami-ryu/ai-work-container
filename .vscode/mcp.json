@@ -18,7 +18,7 @@
 			"headers": {
 				"Authorization": "Bearer ${input:github_mcp_pat}"
 			}
-		},
+		}
 	},
 	"inputs": [
 		{
