@@ -278,7 +278,6 @@ for server in $servers; do
     url=""
     command=""
     args=()
-    headers=""
     header_args=()
     
     echo ""
@@ -307,6 +306,7 @@ for server in $servers; do
             
             # 各ヘッダーを処理
             header_args=()
+            header_error=false
             while IFS= read -r header_line; do
                 key=$(echo "$header_line" | cut -d: -f1)
                 value=$(echo "$header_line" | cut -d: -f2-)
@@ -316,9 +316,17 @@ for server in $servers; do
                     header_args+=("-H" "$key: $resolved_value")
                     log_debug "ヘッダー追加: $key: [MASKED]"
                 else
-                    log_warn "ヘッダー $key の環境変数置換に失敗（スキップ）"
+                    log_error "ヘッダー $key の環境変数置換に失敗したため、$server をスキップします"
+                    header_error=true
+                    break
                 fi
             done < <(echo "$headers_json" | jq -r 'to_entries[] | "\(.key):\(.value)"')
+            
+            # ヘッダー処理でエラーがあった場合はサーバー追加をスキップ
+            if [ "$header_error" = true ]; then
+                fail_count=$((fail_count + 1))
+                continue
+            fi
         fi
         
         # コマンド構築
