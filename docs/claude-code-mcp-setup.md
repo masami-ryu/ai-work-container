@@ -89,15 +89,161 @@ echo $GITHUB_MCP_PAT
 - `.env` ファイルに保存する場合は、`.gitignore` に含まれていることを確認
 - リポジトリにコミットしないでください
 
-#### 3.3 MCPサーバーの再設定
+# Claude Code & MCP セットアップガイド
 
-GitHub PATを設定したら、MCPセットアップスクリプトを再実行します：
+## 概要
+このドキュメントでは、devcontainer環境でのClaude CodeとMCP (Model Context Protocol)のセットアップ手順とトラブルシューティング方法を説明します。
 
+## セットアップ手順
+
+### 前提条件
+- Dev Container環境が起動していること
+- インターネット接続が利用可能であること
+
+### Phase 1: 環境確認
+
+コンテナ起動後、以下のコマンドで環境を確認します：
+
+```bash
+# Node.jsバージョン確認
+node --version
+
+# Claude Code CLIの確認
+claude --version
+
+# MCPサーバー一覧確認
+claude mcp list
+```
+
+**期待される結果:**
+- Node.js: v22.x以降
+- Claude Code CLI: v2.0.x以降
+- MCPサーバー: msdocs, context7, github-mcp-server の3つ
+
+### Phase 2: Claude Code CLI初期セットアップ
+
+#### 認証
+
+初めてClaude Codeを使用する際は、認証が必要です。
+
+```bash
+claude whoami
+```
+
+まだ認証していない場合、ブラウザが開いてAnthropicアカウントでのログインが求められます。
+
+**トラブルシューティング:**
+- ブラウザが開かない場合: 表示されたURLを手動でブラウザにコピー&ペースト
+- 認証エラーが発生する場合: `claude logout` してから再度 `claude whoami` を実行
+
+#### 動作確認
+
+簡単なプロンプトで動作を確認します：
+
+```bash
+claude -p "Hello, Claude!"
+```
+
+応答が返ってくれば正常に動作しています。
+
+### Phase 3: GitHub PAT設定
+
+GitHub MCP サーバーを使用するには、Personal Access Token (PAT)が必要です。
+
+#### 3.1 GitHub PATの取得
+
+1. GitHubにログイン
+2. Settings → Developer settings → Personal access tokens → Tokens (classic) に移動
+3. "Generate new token (classic)" をクリック
+4. 以下のスコープを選択：
+   - `repo:status` - リポジトリステータスへのアクセス
+   - `public_repo` - 公開リポジトリへのアクセス
+   - `read:org` - 組織情報の読み取り
+   - `read:user` - ユーザー情報の読み取り
+
+5. "Generate token" をクリック
+6. 表示されたトークンをコピー（この画面を離れると二度と表示されません）
+
+#### 3.2 環境変数に設定
+
+```bash
+# .bashrcに追加（永続化）
+echo 'export GITHUB_MCP_PAT=ghp_your_token_here' >> ~/.bashrc
+source ~/.bashrc
+
+# 確認
+echo $GITHUB_MCP_PAT
+```
+
+**⚠️ セキュリティ注意:**
+- トークンは秘密情報として扱ってください
+- `.env` ファイルに保存する場合は、`.gitignore` に含まれていることを確認
+- リポジトリにコミットしないでください
+
+### Phase 4: MCPセットアップスクリプトの実行
+
+#### 基本的な使用方法
+
+`.vscode/mcp.json`に定義されたMCPサーバーを自動的にClaude Code CLIに追加します：
+
+```bash
+# 基本実行（既存サーバーをスキップ）
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
+
+# ドライランモード（実際の変更なし）
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh --dry-run
+
+# デバッグモード
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh --debug
+```
+
+#### コマンドラインオプション
+
+```bash
+使用方法: setup-claude-mcp.sh [オプション]
+
+オプション:
+  --clean, --overwrite   既存のMCPサーバーをクリーンアップしてから追加
+  --force                既存サーバーを確認せず上書き追加
+  --dry-run              実際の変更を行わず、実行内容のみ表示
+  --debug                デバッグ情報を出力
+  -h, --help             このヘルプメッセージを表示
+
+モード:
+  デフォルト: 既存サーバーをスキップして新規サーバーのみ追加
+  --clean:    全既存サーバーを削除してから全サーバーを追加
+  --force:    既存チェックをスキップして全サーバーを強制追加
+```
+
+#### 実行例
+
+**初回セットアップ:**
 ```bash
 bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
 ```
 
-### Phase 4: MCP統合動作確認
+**設定の全リセット:**
+```bash
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh --clean
+```
+
+**変更内容の事前確認:**
+```bash
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh --dry-run --debug
+```
+
+**インタラクティブモード:**
+スクリプトを引数なしで実行すると、既存サーバーが検出された場合に対話的な選択肢が表示されます：
+```
+既存のMCPサーバーが検出されました。どのように処理しますか？
+  1) スキップ - 既存サーバーはそのままで、新規サーバーのみ追加
+  2) クリーンアップ - すべての既存サーバーを削除してから追加
+  3) 強制上書き - 既存チェックをスキップして全サーバーを追加
+  4) キャンセル - セットアップを中止
+選択してください [1-4]:
+```
+
+### Phase 5: MCP統合動作確認
 
 #### MCPサーバーのヘルスチェック
 
@@ -230,9 +376,70 @@ claude mcp remove msdocs
 claude mcp remove context7
 claude mcp remove github-mcp-server
 
-# 再追加
-bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
+# クリーンモードで全サーバーを再追加
+bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh --clean
 ```
+
+### 設定ファイルのカスタマイズ
+
+MCPセットアップスクリプトは `.vscode/mcp.json` または `.vscode/settings.json` から設定を読み込みます。
+
+#### .vscode/mcp.json (推奨)
+
+```json
+{
+  "servers": {
+    "custom-server": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:custom_token}"
+      }
+    },
+    "local-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./path/to/server.js"]
+    }
+  },
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "custom_token",
+      "description": "Custom API Token",
+      "password": true
+    }
+  ]
+}
+```
+
+#### .vscode/settings.json（代替）
+
+```json
+{
+  "mcp.servers": {
+    "custom-server": {
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  },
+  "mcp.inputs": []
+}
+```
+
+#### 環境変数の設定
+
+`inputs` 配列で定義したIDは、自動的に対応する環境変数名に変換されます：
+
+| Input ID | 環境変数名 | 例 |
+|----------|----------|-----|
+| `github_mcp_pat` | `GITHUB_MCP_PAT` | `export GITHUB_MCP_PAT=ghp_xxx` |
+| `custom_token` | `CUSTOM_TOKEN` | `export CUSTOM_TOKEN=abc123` |
+| `api-key` | `API_KEY` | `export API_KEY=xyz789` |
+
+変換ルール:
+- すべて大文字に変換
+- ハイフン（-）をアンダースコア（_）に変換
 
 ## よくある質問（FAQ）
 
