@@ -107,7 +107,7 @@ else
     
     if $GITHUB_AUTH_AVAILABLE; then
       # GitHub PAT を使用して認証ヘッダーを追加
-      if claude mcp add --transport http -H "Authorization: Bearer $GITHUB_MCP_PAT" github-mcp-server "$GITHUB_URL"; then
+      if claude mcp add --transport http github-mcp-server "$GITHUB_URL" -H "Authorization: Bearer $GITHUB_MCP_PAT"; then
         echo "✓ github-mcp-server を追加しました (URL: $GITHUB_URL, 認証: あり)"
       else
         echo "✗ github-mcp-server の追加に失敗しました"
