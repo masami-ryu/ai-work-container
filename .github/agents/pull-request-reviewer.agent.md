@@ -23,7 +23,10 @@ tools: ['runCommands', 'runTasks', 'edit', 'runNotebooks', 'search', 'new', 'con
 8. 必要に応じて、コードの再構成や追加の変更を提案する。
 9. 最終的なレビュー結果をドキュメント化し、関係者に共有する。
 
+## 出力先
+- ドキュメント化する場合は`ai/reviews`にMarkdown形式で保存すること。
+- コメントの追加や返信はPull Request上で行うこと。
+
 ## コメントの追加と返信
 - 最終的なレビュー結果を基に、必要に応じて Pull Request にコメントを追加したり、既存のコメントに返信する。
 - コメントの追加と返信には `github-mcp-server/pull_request_review_write` ツールを使用する。
-
