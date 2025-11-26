@@ -152,24 +152,37 @@ echo ""
 
 # Node.js バージョンの自動検出とインストール
 detect_node_version() {
-  # 1) .node-version ファイルの確認
+  # ワークスペースルートディレクトリを取得（post-create.shの実行ディレクトリの親）
+  # 通常 post-create.sh は /workspaces/<project>/.devcontainer で実行されるため
+  local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  
+  # 1) .workspace_node_version ファイルの確認（優先度最高）
   if [ -f "$HOME_DIR/.workspace_node_version" ]; then
     cat "$HOME_DIR/.workspace_node_version"
     return 0
   fi
 
+  # 2) プロジェクトルートの .node-version ファイルの確認
+  if [ -f "$WORKSPACE_ROOT/.node-version" ]; then
+    cat "$WORKSPACE_ROOT/.node-version"
+    return 0
+  fi
+  
+  # カレントディレクトリにも.node-versionがある場合は検出
   if [ -f ".node-version" ]; then
     cat ".node-version"
     return 0
   fi
 
-  # 2) package.json の engines.node フィールドの確認
-  if [ -f "package.json" ]; then
+  # 3) package.json の engines.node フィールドの確認
+  local PKG_JSON="$WORKSPACE_ROOT/package.json"
+  if [ -f "$PKG_JSON" ]; then
     if command -v node >/dev/null 2>&1; then
-      node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));console.log((p.engines&&p.engines.node)||'')" || true
+      node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('$PKG_JSON'));console.log((p.engines&&p.engines.node)||'')" 2>/dev/null || true
       return 0
     else
-      NODE_ENGINE=$(grep -oP '"engines"\s*:\s*\{[^}]*"node"\s*:\s*"\K[^"]+' package.json || true)
+      NODE_ENGINE=$(grep -oP '"engines"\s*:\s*\{[^}]*"node"\s*:\s*"\K[^"]+' "$PKG_JSON" 2>/dev/null || true)
       if [ -n "$NODE_ENGINE" ]; then
         echo "$NODE_ENGINE"
         return 0
@@ -180,43 +193,66 @@ detect_node_version() {
   return 1
 }
 
-NODE_VER_RAW=$(detect_node_version || true)
-NODE_VER=$(echo "$NODE_VER_RAW" | tr -d ' \n\r' || true)
+# nodenv が利用可能な場合のみ、Node.js のセットアップを実行
+if command -v nodenv >/dev/null 2>&1; then
+  # バージョン検出
+  NODE_VER_RAW=$(detect_node_version || true)
+  NODE_VER=$(echo "$NODE_VER_RAW" | tr -d ' \n\r' || true)
 
-if [ -n "$NODE_VER" ] && command -v nodenv >/dev/null 2>&1; then
-  echo "Node.js バージョンを検出: $NODE_VER"
-  if ! nodenv versions --bare | grep -qx "$NODE_VER"; then
-    echo "Node.js $NODE_VER をインストール中..."
-    nodenv install -s "$NODE_VER" || nodenv install "$NODE_VER" || true
-  else
-    echo "Node.js $NODE_VER は既にインストールされています。"
-  fi
-
-  # プロジェクトに .node-version がある場合はローカル設定、なければグローバル設定
-  if [ -f ".node-version" ]; then
-    echo "ローカルの Node.js バージョンを $NODE_VER に設定します。"
-    nodenv local "$NODE_VER" || true
-  else
-    echo "グローバルの Node.js バージョンを $NODE_VER に設定します。"
-    nodenv global "$NODE_VER" || true
-  fi
-
-  nodenv rehash || true
-elif [ -n "$NODE_VER" ]; then
-  echo "Node.js バージョン '$NODE_VER' が検出されましたが、nodenv がインストールされていません。"
-else
-  if [ -n "$DEFAULT_NODE_VERSION" ] && command -v nodenv >/dev/null 2>&1; then
-    echo "明示的な Node.js バージョンが見つかりません。デフォルト $DEFAULT_NODE_VERSION を使用します。"
+  # 検出できなかった場合はデフォルトバージョンを使用
+  if [ -z "$NODE_VER" ]; then
     NODE_VER="$DEFAULT_NODE_VERSION"
-    if ! nodenv versions --bare | grep -qx "$NODE_VER"; then
-      echo "デフォルトの Node.js $NODE_VER をインストール中..."
-      nodenv install -s "$NODE_VER" || nodenv install "$NODE_VER" || true
-    fi
-    nodenv global "$NODE_VER" || true
-    nodenv rehash || true
+    echo "明示的な Node.js バージョンが見つかりません。デフォルト $DEFAULT_NODE_VERSION を使用します。"
   else
-    echo "Node.js バージョンが検出されず(.node-version / package.json engines.node)、デフォルトも適用されませんでした。"
+    echo "Node.js バージョンを検出: $NODE_VER"
   fi
+
+  # バージョンが設定されている場合（常にtrueになるはず）
+  if [ -n "$NODE_VER" ]; then
+    # インストール処理
+    if ! nodenv versions --bare | grep -qx "$NODE_VER"; then
+      echo "Node.js $NODE_VER をインストール中..."
+      nodenv install -s "$NODE_VER" || nodenv install "$NODE_VER" || {
+        echo "[警告] Node.js $NODE_VER のインストールに失敗しました。"
+      }
+    else
+      echo "Node.js $NODE_VER は既にインストールされています。"
+    fi
+
+    # グローバル設定（.node-versionがあってもglobalは設定する）
+    echo "グローバルの Node.js バージョンを $NODE_VER に設定します。"
+    nodenv global "$NODE_VER" || echo "[警告] nodenv global の設定に失敗しました。"
+
+    # プロジェクトに.node-versionがある場合はローカル設定も行う
+    if [ -f ".node-version" ]; then
+      echo "ローカルの Node.js バージョンも $NODE_VER に設定します。"
+      nodenv local "$NODE_VER" || echo "[警告] nodenv local の設定に失敗しました。"
+    fi
+
+    # rehash
+    nodenv rehash || echo "[警告] nodenv rehash に失敗しました。"
+
+    # 設定確認
+    CURRENT_GLOBAL=$(nodenv global 2>/dev/null || echo "未設定")
+    echo "現在のグローバルバージョン: $CURRENT_GLOBAL"
+    
+    # npm/nodeのshimパス確認
+    NPM_PATH=$(nodenv which npm 2>/dev/null || echo "未設定")
+    NODE_PATH=$(nodenv which node 2>/dev/null || echo "未設定")
+    echo "npm shimパス: $NPM_PATH"
+    echo "node shimパス: $NODE_PATH"
+    
+    # /workspaces での動作確認（serenaの実行環境）
+    if (cd /workspaces && node -v >/dev/null 2>&1); then
+      WORKSPACES_NODE_VER=$(cd /workspaces && node -v)
+      echo "✓ /workspaces で node コマンドが正常に動作します: $WORKSPACES_NODE_VER"
+    else
+      echo "[警告] /workspaces で node コマンドが失敗しました。"
+      echo "リカバリ手順: eval \"\$(nodenv init -)\" を実行してください。"
+    fi
+  fi
+else
+  echo "[警告] nodenv がインストールされていません。Node.js のセットアップをスキップします。"
 fi
 
 # Claude Code CLI のネイティブインストール
@@ -304,6 +340,98 @@ else
     echo "Claude Code CLI が正常にインストールされました: ${FINAL_VERSION}" | tee -a "$LOGFILE_CLAUDE"
   else
     echo "[警告] Claude Code CLI が見つかりません。手動でインストールしてください。" | tee -a "$LOGFILE_CLAUDE"
+  fi
+fi
+
+# ======================================
+# uv (Astral Python Package Manager) のインストール
+# ======================================
+echo "uv をインストール中..."
+
+# インストール済みチェック（冪等性確保）
+if command -v uv >/dev/null 2>&1; then
+  INSTALLED_UV_VERSION=$(uv --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+  echo "uv は既にインストールされています: v${INSTALLED_UV_VERSION}"
+  echo "再インストールをスキップします。"
+else
+  # ログファイルの設定（日付ローテーション）
+  UV_LOG_DIR="${HOME}/.cache/uv-install-logs"
+  mkdir -p "$UV_LOG_DIR"
+  UV_LOGFILE="${UV_LOG_DIR}/install-$(date '+%Y%m%d').log"
+  touch "$UV_LOGFILE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] uv インストール開始" | tee -a "$UV_LOGFILE"
+
+  # 古いログファイルのクリーンアップ（7日以上前のログを削除）
+  find "$UV_LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
+
+  # uvインストールスクリプトのダウンロードと実行
+  UV_INSTALL_URL="https://astral.sh/uv/install.sh"
+  UV_MAX_RETRIES=3
+  UV_RETRY_COUNT=0
+
+  while [ $UV_RETRY_COUNT -lt $UV_MAX_RETRIES ]; do
+    if curl -fsSL "$UV_INSTALL_URL" 2>&1 | tee -a "$UV_LOGFILE" | sh; then
+      echo "uv のインストールに成功しました。" | tee -a "$UV_LOGFILE"
+      break
+    else
+      UV_RETRY_COUNT=$((UV_RETRY_COUNT + 1))
+      if [ $UV_RETRY_COUNT -lt $UV_MAX_RETRIES ]; then
+        echo "[警告] インストール失敗。リトライ中... ($UV_RETRY_COUNT/$UV_MAX_RETRIES)" | tee -a "$UV_LOGFILE"
+        sleep 2
+      else
+        echo "[エラー] uv のインストールに失敗しました。ログを確認してください: $UV_LOGFILE" | tee -a "$UV_LOGFILE"
+      fi
+    fi
+  done
+
+  # インストール先の確認とPATH設定
+  UV_INSTALL_DIR="$HOME/.local/bin"
+  if [ ! -d "$UV_INSTALL_DIR" ]; then
+    UV_INSTALL_DIR="$HOME/.cargo/bin"
+  fi
+
+  # PATH への追加（存在しない場合のみ）
+  if [ -d "$UV_INSTALL_DIR" ]; then
+    export PATH="$UV_INSTALL_DIR:$PATH"
+    
+    # 各シェル設定ファイルへの PATH 追加（bash / zsh 対応）
+    for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+      # シェル設定ファイルが存在しない場合は作成
+      if [ ! -f "$SHELL_RC" ]; then
+        touch "$SHELL_RC"
+        echo "$(basename $SHELL_RC) を新規作成しました" | tee -a "$UV_LOGFILE"
+      fi
+      
+      # マーカーコメントの有無に関わらず、ディレクトリパスの重複チェックを実施
+      # これにより手動追加された設定との競合も回避
+      if ! grep -qF "$UV_INSTALL_DIR" "$SHELL_RC"; then
+        echo "" >> "$SHELL_RC"
+        echo "# uv - Astral Python Package Manager" >> "$SHELL_RC"
+        echo "# PATH重複回避のためcase文を使用" >> "$SHELL_RC"
+        echo "case \":\$PATH:\" in" >> "$SHELL_RC"
+        echo "  *:\"$UV_INSTALL_DIR\":*) ;;" >> "$SHELL_RC"
+        echo "  *) export PATH=\"$UV_INSTALL_DIR:\$PATH\" ;;" >> "$SHELL_RC"
+        echo "esac" >> "$SHELL_RC"
+        echo "$(basename $SHELL_RC) に uv の PATH を追加しました" | tee -a "$UV_LOGFILE"
+      else
+        echo "$(basename $SHELL_RC) には既に $UV_INSTALL_DIR が含まれています（スキップ）" | tee -a "$UV_LOGFILE"
+      fi
+    done
+  fi
+
+  # インストール確認
+  if command -v uv >/dev/null 2>&1; then
+    FINAL_UV_VERSION=$(uv --version 2>/dev/null || echo "version check failed")
+    echo "uv が正常にインストールされました: ${FINAL_UV_VERSION}" | tee -a "$UV_LOGFILE"
+    
+    # uvx の確認
+    if command -v uvx >/dev/null 2>&1; then
+      echo "uvx コマンドも利用可能です。" | tee -a "$UV_LOGFILE"
+    else
+      echo "[警告] uvx コマンドが見つかりません。" | tee -a "$UV_LOGFILE"
+    fi
+  else
+    echo "[警告] uv が見つかりません。手動でインストールしてください。" | tee -a "$UV_LOGFILE"
   fi
 fi
 
