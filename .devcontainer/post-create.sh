@@ -243,7 +243,7 @@ if command -v nodenv >/dev/null 2>&1; then
     echo "node shimパス: $NODE_PATH"
     
     # /workspaces での動作確認（serenaの実行環境）
-    if cd /workspaces && node -v >/dev/null 2>&1; then
+    if (cd /workspaces && node -v >/dev/null 2>&1); then
       WORKSPACES_NODE_VER=$(cd /workspaces && node -v)
       echo "✓ /workspaces で node コマンドが正常に動作します: $WORKSPACES_NODE_VER"
     else
