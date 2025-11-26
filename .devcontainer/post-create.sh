@@ -307,6 +307,98 @@ else
   fi
 fi
 
+# ======================================
+# uv (Astral Python Package Manager) のインストール
+# ======================================
+echo "uv をインストール中..."
+
+# インストール済みチェック（冪等性確保）
+if command -v uv >/dev/null 2>&1; then
+  INSTALLED_UV_VERSION=$(uv --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
+  echo "uv は既にインストールされています: v${INSTALLED_UV_VERSION}"
+  echo "再インストールをスキップします。"
+else
+  # ログファイルの設定（日付ローテーション）
+  UV_LOG_DIR="${HOME}/.cache/uv-install-logs"
+  mkdir -p "$UV_LOG_DIR"
+  UV_LOGFILE="${UV_LOG_DIR}/install-$(date '+%Y%m%d').log"
+  touch "$UV_LOGFILE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] uv インストール開始" | tee -a "$UV_LOGFILE"
+
+  # 古いログファイルのクリーンアップ（7日以上前のログを削除）
+  find "$UV_LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
+
+  # uvインストールスクリプトのダウンロードと実行
+  UV_INSTALL_URL="https://astral.sh/uv/install.sh"
+  UV_MAX_RETRIES=3
+  UV_RETRY_COUNT=0
+
+  while [ $UV_RETRY_COUNT -lt $UV_MAX_RETRIES ]; do
+    if curl -fsSL "$UV_INSTALL_URL" 2>&1 | tee -a "$UV_LOGFILE" | sh; then
+      echo "uv のインストールに成功しました。" | tee -a "$UV_LOGFILE"
+      break
+    else
+      UV_RETRY_COUNT=$((UV_RETRY_COUNT + 1))
+      if [ $UV_RETRY_COUNT -lt $UV_MAX_RETRIES ]; then
+        echo "[警告] インストール失敗。リトライ中... ($UV_RETRY_COUNT/$UV_MAX_RETRIES)" | tee -a "$UV_LOGFILE"
+        sleep 2
+      else
+        echo "[エラー] uv のインストールに失敗しました。ログを確認してください: $UV_LOGFILE" | tee -a "$UV_LOGFILE"
+      fi
+    fi
+  done
+
+  # インストール先の確認とPATH設定
+  UV_INSTALL_DIR="$HOME/.local/bin"
+  if [ ! -d "$UV_INSTALL_DIR" ]; then
+    UV_INSTALL_DIR="$HOME/.cargo/bin"
+  fi
+
+  # PATH への追加（存在しない場合のみ）
+  if [ -d "$UV_INSTALL_DIR" ]; then
+    export PATH="$UV_INSTALL_DIR:$PATH"
+    
+    # 各シェル設定ファイルへの PATH 追加（bash / zsh 対応）
+    for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+      # シェル設定ファイルが存在しない場合は作成
+      if [ ! -f "$SHELL_RC" ]; then
+        touch "$SHELL_RC"
+        echo "$(basename $SHELL_RC) を新規作成しました" | tee -a "$UV_LOGFILE"
+      fi
+      
+      # マーカーコメントの有無に関わらず、ディレクトリパスの重複チェックを実施
+      # これにより手動追加された設定との競合も回避
+      if ! grep -qF "$UV_INSTALL_DIR" "$SHELL_RC"; then
+        echo "" >> "$SHELL_RC"
+        echo "# uv - Astral Python Package Manager" >> "$SHELL_RC"
+        echo "# PATH重複回避のためcase文を使用" >> "$SHELL_RC"
+        echo "case \":\$PATH:\" in" >> "$SHELL_RC"
+        echo "  *:\"$UV_INSTALL_DIR\":*) ;;" >> "$SHELL_RC"
+        echo "  *) export PATH=\"$UV_INSTALL_DIR:\$PATH\" ;;" >> "$SHELL_RC"
+        echo "esac" >> "$SHELL_RC"
+        echo "$(basename $SHELL_RC) に uv の PATH を追加しました" | tee -a "$UV_LOGFILE"
+      else
+        echo "$(basename $SHELL_RC) には既に $UV_INSTALL_DIR が含まれています（スキップ）" | tee -a "$UV_LOGFILE"
+      fi
+    done
+  fi
+
+  # インストール確認
+  if command -v uv >/dev/null 2>&1; then
+    FINAL_UV_VERSION=$(uv --version 2>/dev/null || echo "version check failed")
+    echo "uv が正常にインストールされました: ${FINAL_UV_VERSION}" | tee -a "$UV_LOGFILE"
+    
+    # uvx の確認
+    if command -v uvx >/dev/null 2>&1; then
+      echo "uvx コマンドも利用可能です。" | tee -a "$UV_LOGFILE"
+    else
+      echo "[警告] uvx コマンドが見つかりません。" | tee -a "$UV_LOGFILE"
+    fi
+  else
+    echo "[警告] uv が見つかりません。手動でインストールしてください。" | tee -a "$UV_LOGFILE"
+  fi
+fi
+
 # Claude Code 環境変数(オプション)
 if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
   echo "" >> ~/.bashrc
