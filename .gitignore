@@ -1,1 +1,4 @@
 **/node_modules
+
+# ローカル設定（個人用、リポジトリに含めない）
+.claude/settings.local.json
