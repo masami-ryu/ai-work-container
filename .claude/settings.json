@@ -12,7 +12,13 @@
       "Bash(head:*)",
       "Bash(tail:*)",
       "Bash(find:*)",
-      "Read(**)"
+      "Bash(grep:*)",
+      "Read(**)",
+      "Grep",
+      "Glob",
+      "Write",
+      "Edit",
+      "WebFetch"
     ],
     "deny": [
       "Read(./.env)",
