@@ -1,6 +1,7 @@
 ---
 name: plan
 description: 実行可能なプランを作成する
+allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
 ---
 
 ## コンテキスト

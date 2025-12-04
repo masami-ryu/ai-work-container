@@ -1,6 +1,7 @@
 ---
 name: commit
 description: 変更をコミットする
+allowed-tools: Bash
 ---
 
 ## コンテキスト

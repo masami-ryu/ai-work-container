@@ -1,6 +1,7 @@
 ---
 name: doc
 description: ドキュメントを作成・更新する
+allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
 ---
 
 ## コンテキスト
