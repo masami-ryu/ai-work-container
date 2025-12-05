@@ -130,6 +130,61 @@ list_issues owner:masami-ryu repo:ai-work-container
 - カバレッジ80%以上を維持
 ```
 
+### プロジェクト設定（.claude/settings.json）
+`.claude/settings.json` でプロジェクト固有の権限と動作を設定できます。
+
+**設定例:**
+```json
+{
+  "permissions": {
+    "allow": ["Bash(git:*)", "Read(**)", "Bash(cat:*)"],
+    "deny": ["Read(./.env)", "Bash(rm -rf:*)"],
+    "defaultMode": "default"
+  },
+  "enableAllProjectMcpServers": true,
+  "env": {
+    "MAX_THINKING_TOKENS": "10000",
+    "BASH_DEFAULT_TIMEOUT_MS": "30000"
+  }
+}
+```
+
+### カスタムスラッシュコマンド
+`.claude/commands/` に Markdown ファイルを作成すると、カスタムスラッシュコマンドが利用可能になります。
+
+**このプロジェクトで利用可能なコマンド:**
+- `/plan` - 実行可能なプランを作成
+- `/review-plan` - 既存のプランをレビュー
+- `/commit` - 変更をコミット（コミットメッセージ自動生成）
+- `/doc` - ドキュメントを作成・更新
+- `/suggest-claude-md` - CLAUDE.mdの更新提案を生成
+
+**コマンドファイルの例（commit.md）:**
+```markdown
+---
+name: commit
+description: 変更をコミットする
+---
+
+## タスク
+変更内容を確認し、適切なコミットメッセージを生成してコミットを実行
+```
+
+### カスタムサブエージェント
+`.claude/agents/` に Markdown ファイルを作成すると、専門的なサブエージェントが利用可能になります。
+
+**このプロジェクトで利用可能なサブエージェント:**
+- `plan-creator` - プラン作成の専門家
+- `doc-writer` - ドキュメント作成の専門家
+- `pr-reviewer` - PRレビューの専門家
+
+### Hooks
+`.claude/hooks/` でセッション開始時やツール使用時の自動処理を設定できます。
+
+**設定されているフック:**
+- `session-start.sh` - セッション開始時の環境初期化
+- `auto-approve-docs.sh` - ドキュメントファイル読み取りの自動承認
+
 ### 環境変数
 `.bashrc` または `.zshrc` に以下の環境変数が設定されています：
 

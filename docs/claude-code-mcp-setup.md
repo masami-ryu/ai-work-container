@@ -1,95 +1,20 @@
 # Claude Code & MCP セットアップガイド
 
-## 概要
-このドキュメントでは、devcontainer環境でのClaude CodeとMCP (Model Context Protocol)のセットアップ手順とトラブルシューティング方法を説明します。
+> **最終更新日:** 2025-12-04
 
-## セットアップ手順
+## 目次
+- [概要](#概要)
+- [セットアップ手順](#セットアップ手順)
+  - [Phase 1: 環境確認](#phase-1-環境確認)
+  - [Phase 2: Claude Code CLI初期セットアップ](#phase-2-claude-code-cli初期セットアップ)
+  - [Phase 3: GitHub PAT設定](#phase-3-github-pat設定)
+  - [Phase 4: MCPセットアップスクリプトの実行](#phase-4-mcpセットアップスクリプトの実行)
+  - [Phase 5: MCP統合動作確認](#phase-5-mcp統合動作確認)
+- [トラブルシューティング](#トラブルシューティング)
+- [よくある質問（FAQ）](#よくある質問faq)
+- [参考資料](#参考資料)
 
-### 前提条件
-- Dev Container環境が起動していること
-- インターネット接続が利用可能であること
-
-### Phase 1: 環境確認
-
-コンテナ起動後、以下のコマンドで環境を確認します：
-
-```bash
-# Node.jsバージョン確認
-node --version
-
-# Claude Code CLIの確認
-claude --version
-
-# MCPサーバー一覧確認
-claude mcp list
-```
-
-**期待される結果:**
-- Node.js: v22.x以降
-- Claude Code CLI: v2.0.x以降
-- MCPサーバー: msdocs, context7, github-mcp-server の3つ
-
-### Phase 2: Claude Code CLI初期セットアップ
-
-#### 認証
-
-初めてClaude Codeを使用する際は、認証が必要です。
-
-```bash
-claude whoami
-```
-
-まだ認証していない場合、ブラウザが開いてAnthropicアカウントでのログインが求められます。
-
-**トラブルシューティング:**
-- ブラウザが開かない場合: 表示されたURLを手動でブラウザにコピー&ペースト
-- 認証エラーが発生する場合: `claude logout` してから再度 `claude whoami` を実行
-
-#### 動作確認
-
-簡単なプロンプトで動作を確認します：
-
-```bash
-claude -p "Hello, Claude!"
-```
-
-応答が返ってくれば正常に動作しています。
-
-### Phase 3: GitHub PAT設定
-
-GitHub MCP サーバーを使用するには、Personal Access Token (PAT)が必要です。
-
-#### 3.1 GitHub PATの取得
-
-1. GitHubにログイン
-2. Settings → Developer settings → Personal access tokens → Tokens (classic) に移動
-3. "Generate new token (classic)" をクリック
-4. 以下のスコープを選択：
-   - `repo:status` - リポジトリステータスへのアクセス
-   - `public_repo` - 公開リポジトリへのアクセス
-   - `read:org` - 組織情報の読み取り
-   - `read:user` - ユーザー情報の読み取り
-
-5. "Generate token" をクリック
-6. 表示されたトークンをコピー（この画面を離れると二度と表示されません）
-
-#### 3.2 環境変数に設定
-
-```bash
-# .bashrcに追加（永続化）
-echo 'export GITHUB_MCP_PAT=ghp_your_token_here' >> ~/.bashrc
-source ~/.bashrc
-
-# 確認
-echo $GITHUB_MCP_PAT
-```
-
-**⚠️ セキュリティ注意:**
-- トークンは秘密情報として扱ってください
-- `.env` ファイルに保存する場合は、`.gitignore` に含まれていることを確認
-- リポジトリにコミットしないでください
-
-# Claude Code & MCP セットアップガイド
+---
 
 ## 概要
 このドキュメントでは、devcontainer環境でのClaude CodeとMCP (Model Context Protocol)のセットアップ手順とトラブルシューティング方法を説明します。
@@ -174,11 +99,6 @@ source ~/.bashrc
 # 確認
 echo $GITHUB_MCP_PAT
 ```
-
-**⚠️ セキュリティ注意:**
-- トークンは秘密情報として扱ってください
-- `.env` ファイルに保存する場合は、`.gitignore` に含まれていることを確認
-- リポジトリにコミットしないでください
 
 ### Phase 4: MCPセットアップスクリプトの実行
 
