@@ -176,7 +176,7 @@ description: 変更をコミットする
 **このプロジェクトで利用可能なサブエージェント:**
 - `plan-creator` - プラン作成の専門家
 - `doc-writer` - ドキュメント作成の専門家
-- `code-reviewer` - コードレビューの専門家
+- `pr-reviewer` - PRレビューの専門家
 
 ### Hooks
 `.claude/hooks/` でセッション開始時やツール使用時の自動処理を設定できます。
