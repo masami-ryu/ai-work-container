@@ -1,0 +1,24 @@
+---
+name: plan
+description: 実行可能なプランを作成する
+allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
+---
+
+## コンテキスト
+- プロジェクト: @CLAUDE.md
+- テンプレート: @ai/templates/plan-template.md
+- 既存プラン: @ai/plans/
+
+## タスク
+以下のステップでプランを作成してください:
+
+1. **目的の明確化**: ユーザーの要求を確認し、達成すべき目標を定義
+2. **情報収集**: 必要に応じてコードベース、ドキュメント、外部リソースを調査
+3. **MCPツール活用**: 最新情報が必要な場合はMCPツール（msdocs, context7等）を使用
+4. **プラン策定**: 具体的なステップに分解し、実行可能なプランを作成
+5. **保存**: `ai/plans/YYMMDD_[タスク概要].md` に保存
+
+## 出力形式
+- テンプレート: @ai/templates/plan-template.md に準拠
+- 日本語で記述
+- 具体的なタスクとチェックリストを含める
