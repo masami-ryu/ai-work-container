@@ -133,21 +133,110 @@ list_issues owner:masami-ryu repo:ai-work-container
 ### プロジェクト設定（.claude/settings.json）
 `.claude/settings.json` でプロジェクト固有の権限と動作を設定できます。
 
-**設定例:**
+**設定例（このプロジェクトの実際の設定）:**
 ```json
 {
   "permissions": {
-    "allow": ["Bash(git:*)", "Read(**)", "Bash(cat:*)"],
-    "deny": ["Read(./.env)", "Bash(rm -rf:*)"],
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(python:*)",
+      "Bash(claude mcp:*)",
+      "Read(**)",
+      "Grep",
+      "Glob",
+      "Write",
+      "Edit",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "TodoWrite",
+      "mcp__context7",
+      "mcp__msdocs"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(**/.git/config)",
+      "Bash(rm -rf:*)",
+      "Bash(chmod 777:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(docker:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)"
+    ],
     "defaultMode": "default"
   },
   "enableAllProjectMcpServers": true,
   "env": {
-    "MAX_THINKING_TOKENS": "10000",
-    "BASH_DEFAULT_TIMEOUT_MS": "30000"
+    "MAX_THINKING_TOKENS": "16000",
+    "BASH_DEFAULT_TIMEOUT_MS": "60000",
+    "MCP_TIMEOUT": "60000",
+    "MCP_TOOL_TIMEOUT": "120000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16000"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/auto-approve-docs.sh"
+          }
+        ]
+      }
+    ]
   }
 }
 ```
+
+#### パーミッション設定のベストプラクティス
+
+**最小権限の原則**に基づき、パーミッションを適切に設定することでセキュリティとユーザビリティのバランスを取ります。
+
+**allow（確認なし実行）:**
+- 読み取り専用コマンド（`git status`, `git log`, `ls`, `cat`等）
+- スクリプト実行（`npm run`, `npm test`, `node`, `python`）
+- 開発ツール（`npx`, `claude mcp`）
+- Claude Codeツール（`Read`, `Grep`, `Glob`, `Write`, `Edit`, `Task`等）
+- MCPツール（`mcp__context7`, `mcp__msdocs`）
+
+**ask（確認が必要）:**
+- パッケージインストール（`npm install`, `pip install`） - 意図しない依存関係追加を防ぐ
+- リモート操作（`git push`, `git commit`） - 誤ったコミット/プッシュを防ぐ
+- コンテナ操作（`docker`） - リソース消費の大きい操作
+
+**deny（実行禁止）:**
+- 機密情報（`.env`, `secrets/**`, `.git/config`）
+- 危険なコマンド（`rm -rf`, `chmod 777`）
+
+**環境変数の推奨値:**
+- `MAX_THINKING_TOKENS`: `16000` - 複雑な問題の思考に十分なトークン
+- `BASH_DEFAULT_TIMEOUT_MS`: `60000` - 長時間実行コマンドに対応
+- `MCP_TIMEOUT`: `60000` - MCPサーバー接続タイムアウト
+- `MCP_TOOL_TIMEOUT`: `120000` - MCPツール実行タイムアウト
+- `CLAUDE_CODE_MAX_OUTPUT_TOKENS`: `16000` - 長い応答を可能に
 
 ### カスタムスラッシュコマンド
 `.claude/commands/` に Markdown ファイルを作成すると、カスタムスラッシュコマンドが利用可能になります。
@@ -174,16 +263,94 @@ description: 変更をコミットする
 `.claude/agents/` に Markdown ファイルを作成すると、専門的なサブエージェントが利用可能になります。
 
 **このプロジェクトで利用可能なサブエージェント:**
-- `plan-creator` - プラン作成の専門家
-- `doc-writer` - ドキュメント作成の専門家
-- `pr-reviewer` - PRレビューの専門家
+- `plan-creator` - プラン作成の専門家（model: haiku, MCPツール統合）
+- `doc-writer` - ドキュメント作成の専門家（model: haiku, MCPツール統合）
+- `pr-reviewer` - PRレビューの専門家（model: haiku, MCPツール統合）
+
+**サブエージェントのパフォーマンス最適化:**
+- すべてのサブエージェントは `model: haiku` を使用してコストとレイテンシを最適化
+- MCPツール（`mcp__context7`, `mcp__msdocs`）を直接利用可能
+- 専門タスクに必要なツールのみを権限付与
+
+**エージェント定義例:**
+```markdown
+---
+name: plan-creator
+description: 実行可能なプランを作成する専門エージェント
+tools: Read, Grep, Glob, Bash, WebFetch, mcp__context7, mcp__msdocs
+model: haiku
+---
+```
 
 ### Hooks
 `.claude/hooks/` でセッション開始時やツール使用時の自動処理を設定できます。
 
 **設定されているフック:**
-- `session-start.sh` - セッション開始時の環境初期化
+- `session-start.sh` - セッション開始時の軽量な環境初期化（パフォーマンス最適化済み）
 - `auto-approve-docs.sh` - ドキュメントファイル読み取りの自動承認
+
+**SessionStart フックの最適化:**
+最新の `session-start.sh` は、セッション開始を高速化するため以下の最適化を実施：
+- 不要な MCP 状態確認を削除
+- 最小限の環境変数設定とステータス出力のみ
+- エラーが発生してもセッションを妨げない設計
+
+### パフォーマンス最適化ガイド
+
+Claude Codeのパフォーマンスを最大限引き出すための設定とベストプラクティス。
+
+#### 環境変数の最適化
+
+**推奨設定（このプロジェクトの値）:**
+```json
+{
+  "env": {
+    "MAX_THINKING_TOKENS": "16000",
+    "BASH_DEFAULT_TIMEOUT_MS": "60000",
+    "MCP_TIMEOUT": "60000",
+    "MCP_TOOL_TIMEOUT": "120000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16000"
+  }
+}
+```
+
+**各変数の説明:**
+- `MAX_THINKING_TOKENS`: 思考に使用できる最大トークン数。複雑な問題には `16000` を推奨
+- `BASH_DEFAULT_TIMEOUT_MS`: Bashコマンドのデフォルトタイムアウト（ミリ秒）。ビルド等の長時間実行には `60000` 以上を推奨
+- `MCP_TIMEOUT`: MCPサーバー接続タイムアウト。安定した接続には `60000` を推奨
+- `MCP_TOOL_TIMEOUT`: MCPツール実行タイムアウト。外部API呼び出しには `120000` を推奨
+- `CLAUDE_CODE_MAX_OUTPUT_TOKENS`: 応答の最大トークン数。長い応答には `16000` を推奨
+
+#### サブエージェントのモデル選択
+
+**Haiku vs Sonnet:**
+
+| モデル | 用途 | コスト | レイテンシ | 推奨用途 |
+|--------|------|--------|-----------|---------|
+| haiku  | 軽量タスク | 低 | 高速 | プラン作成、ドキュメント作成、PRレビュー |
+| sonnet | 複雑タスク | 高 | 中速 | 複雑なコード生成、アーキテクチャ設計 |
+
+**このプロジェクトの選択:**
+すべてのサブエージェント（plan-creator, doc-writer, pr-reviewer）は `haiku` を使用。
+理由：専門化されたタスクは明確な指示で十分な品質を達成でき、コストとレイテンシの最適化を優先。
+
+#### パーミッション最適化
+
+**パフォーマンスへの影響:**
+- `allow` リストを適切に設定することで、確認ダイアログを削減し、ワークフローを高速化
+- 頻繁に使用する読み取り専用コマンドとツールは `allow` に含める
+- パッケージインストール等の破壊的操作は `ask` で安全性を確保
+
+**セキュリティとパフォーマンスのバランス:**
+```
+高速 ← allow (確認なし) | ask (確認あり) | deny (禁止) → 安全
+```
+
+適切なバランス：
+- 読み取り専用 → `allow`
+- 書き込み（可逆） → `allow`
+- 書き込み（不可逆） → `ask`
+- 危険な操作 → `deny`
 
 ### 環境変数
 `.bashrc` または `.zshrc` に以下の環境変数が設定されています：

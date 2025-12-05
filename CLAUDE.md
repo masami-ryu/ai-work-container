@@ -35,6 +35,25 @@ claude -p "質問内容"
 - 日本語で記述
 - ファイル命名: `YYMMDD_[概要].md`
 
+## パフォーマンス最適化
+
+このプロジェクトは以下の最適化設定を使用：
+
+### 環境変数
+- `MAX_THINKING_TOKENS: 16000` - 複雑な問題に対応
+- `BASH_DEFAULT_TIMEOUT_MS: 60000` - 長時間実行に対応
+- `CLAUDE_CODE_MAX_OUTPUT_TOKENS: 16000` - 長い応答を可能に
+
+### サブエージェント
+すべてのエージェント（plan-creator, doc-writer, pr-reviewer）は `model: haiku` を使用してコストとレイテンシを最適化。
+
+### パーミッション
+- 開発コマンド（npm run, node, python）は確認なしで実行可能
+- パッケージインストール（npm install, pip install）は確認が必要
+- 危険な操作（rm -rf, chmod 777）は禁止
+
+詳細は @docs/claude-code-usage.md#パフォーマンス最適化ガイド を参照。
+
 ## IMPORTANT
 - プランは必ず `ai/plans/` に保存
 - レビュー結果は `ai/reviews/` に保存
