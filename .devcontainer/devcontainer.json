@@ -32,7 +32,10 @@
   
   // コンテナ作成後に実行するコマンド
   "postCreateCommand": "/usr/local/bin/devcontainer-post-create.sh",
-  
+
+  // コンテナ更新時に実行するコマンド（git worktree用の権限調整）
+  "updateContentCommand": "bash /workspaces/ai-work-container/.devcontainer/fix-workspaces-permission.sh",
+
   // コンテナ内で使用するユーザー
   "remoteUser": "vscode",
 
