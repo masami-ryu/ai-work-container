@@ -1,6 +1,6 @@
 ---
 name: plan-creator
-description: 実行可能なプランを作成する専門エージェント。タスク分析・設計・プラン策定を担当。
+description: プランを作成する専門エージェント。タスク分析・設計・プラン策定を担当。
 tools: Read, Grep, Glob, Bash, WebFetch, mcp__context7, mcp__msdocs
 model: opus
 ---

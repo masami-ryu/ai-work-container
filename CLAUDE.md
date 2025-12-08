@@ -28,18 +28,17 @@ claude -p "質問内容"
 
 # メモリ確認
 /memory
-
-# Git Worktree（複数ブランチを同時に作業）
-git worktree add ../work01              # 新しいブランチwork01でworktreeを作成
-git worktree add ../work02 existing-branch  # 既存ブランチでworktreeを作成
-git worktree list                       # worktree一覧を表示
-git worktree remove work01              # worktreeを削除
 ```
 
 ## コーディング規約
 - Markdownはプレビュー可能な形式で
 - 日本語で記述
 - ファイル命名: `YYMMDD_[概要].md`
+
+## パーミッション
+- 開発コマンド（yarn run, node, python）は確認なしで実行可能
+- パッケージインストール（yarn install, pip install）は確認が必要
+- 危険な操作（rm -rf, chmod 777）は禁止
 
 ## IMPORTANT
 - プランは必ず `ai/plans/` に保存

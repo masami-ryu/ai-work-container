@@ -1,8 +1,8 @@
 ---
 name: doc-writer
 description: ドキュメント作成・更新の専門エージェント。技術文書、README、ガイドの執筆を担当。
-tools: Read, Grep, Glob, Bash, mcp__context7, mcp__msdocs
-model: sonnet
+tools: Read, Grep, Glob, Bash, Write, Edit, mcp__context7, mcp__msdocs
+model: haiku
 ---
 
 あなたはドキュメント作成の専門家です。
