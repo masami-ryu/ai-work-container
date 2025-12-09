@@ -1,0 +1,31 @@
+[project]
+name = "tool-search-tool-project"
+version = "0.1.0"
+description = "Claude API Tool Search Tool implementation and evaluation project"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.75.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "black>=24.0.0",
+    "ruff>=0.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []

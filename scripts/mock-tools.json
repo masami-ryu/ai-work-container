@@ -1,0 +1,934 @@
+{
+  "tools": [
+    {
+      "name": "get_user_info",
+      "description": "Retrieve user information by user ID",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "The unique identifier for the user"
+          }
+        },
+        "required": ["user_id"]
+      }
+    },
+    {
+      "name": "search_documents",
+      "description": "Search documents in the database using keywords",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query string"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results",
+            "default": 10
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "list_items",
+      "description": "List all items with optional filtering",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Filter criteria"
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number",
+            "default": 1
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "fetch_user_profile",
+      "description": "Fetch detailed user profile information",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "User identifier"
+          }
+        },
+        "required": ["user_id"]
+      }
+    },
+    {
+      "name": "create_user",
+      "description": "Create a new user account",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "Username"
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address"
+          },
+          "password": {
+            "type": "string",
+            "description": "Password"
+          }
+        },
+        "required": ["username", "email", "password"]
+      }
+    },
+    {
+      "name": "update_user",
+      "description": "Update user information",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "User ID"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update"
+          }
+        },
+        "required": ["user_id", "updates"]
+      }
+    },
+    {
+      "name": "delete_user",
+      "description": "Delete a user account",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "User ID to delete"
+          }
+        },
+        "required": ["user_id"]
+      }
+    },
+    {
+      "name": "get_weather",
+      "description": "Get current weather information for a location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City name or location"
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["celsius", "fahrenheit"],
+            "description": "Temperature unit",
+            "default": "celsius"
+          }
+        },
+        "required": ["location"]
+      }
+    },
+    {
+      "name": "send_email",
+      "description": "Send an email to a recipient",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient email address"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject"
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body content"
+          }
+        },
+        "required": ["to", "subject", "body"]
+      }
+    },
+    {
+      "name": "schedule_meeting",
+      "description": "Schedule a meeting with participants",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Meeting title"
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of participant email addresses"
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Meeting start time (ISO 8601)"
+          },
+          "duration_minutes": {
+            "type": "integer",
+            "description": "Meeting duration in minutes"
+          }
+        },
+        "required": ["title", "participants", "start_time", "duration_minutes"]
+      }
+    },
+    {
+      "name": "query_database",
+      "description": "Execute a database query",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "SQL query string"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Query parameters"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "upload_file",
+      "description": "Upload a file to storage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Local file path"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Destination path in storage"
+          }
+        },
+        "required": ["file_path", "destination"]
+      }
+    },
+    {
+      "name": "download_file",
+      "description": "Download a file from storage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "File path in storage"
+          },
+          "local_destination": {
+            "type": "string",
+            "description": "Local destination path"
+          }
+        },
+        "required": ["file_path", "local_destination"]
+      }
+    },
+    {
+      "name": "list_files",
+      "description": "List files in a directory",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "Directory path"
+          },
+          "recursive": {
+            "type": "boolean",
+            "description": "List files recursively",
+            "default": false
+          }
+        },
+        "required": ["directory"]
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete a file from storage",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to file to delete"
+          }
+        },
+        "required": ["file_path"]
+      }
+    },
+    {
+      "name": "create_ticket",
+      "description": "Create a support ticket",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Ticket title"
+          },
+          "description": {
+            "type": "string",
+            "description": "Ticket description"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"],
+            "description": "Ticket priority"
+          }
+        },
+        "required": ["title", "description", "priority"]
+      }
+    },
+    {
+      "name": "update_ticket",
+      "description": "Update an existing support ticket",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string",
+            "description": "Ticket ID"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update"
+          }
+        },
+        "required": ["ticket_id", "updates"]
+      }
+    },
+    {
+      "name": "close_ticket",
+      "description": "Close a support ticket",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string",
+            "description": "Ticket ID to close"
+          },
+          "resolution": {
+            "type": "string",
+            "description": "Resolution notes"
+          }
+        },
+        "required": ["ticket_id", "resolution"]
+      }
+    },
+    {
+      "name": "get_analytics",
+      "description": "Retrieve analytics data for a specified period",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "description": "Start date (ISO 8601)"
+          },
+          "end_date": {
+            "type": "string",
+            "description": "End date (ISO 8601)"
+          },
+          "metric": {
+            "type": "string",
+            "description": "Metric to retrieve"
+          }
+        },
+        "required": ["start_date", "end_date", "metric"]
+      }
+    },
+    {
+      "name": "generate_report",
+      "description": "Generate a report based on specified parameters",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "report_type": {
+            "type": "string",
+            "description": "Type of report"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Report parameters"
+          }
+        },
+        "required": ["report_type", "parameters"]
+      }
+    },
+    {
+      "name": "send_notification",
+      "description": "Send a notification to users",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "user_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of user IDs"
+          },
+          "message": {
+            "type": "string",
+            "description": "Notification message"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["info", "warning", "error", "success"],
+            "description": "Notification type"
+          }
+        },
+        "required": ["user_ids", "message", "type"]
+      }
+    },
+    {
+      "name": "get_system_status",
+      "description": "Get current system status and health metrics",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "System component to check"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "restart_service",
+      "description": "Restart a system service",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "service_name": {
+            "type": "string",
+            "description": "Name of the service to restart"
+          }
+        },
+        "required": ["service_name"]
+      }
+    },
+    {
+      "name": "configure_settings",
+      "description": "Configure system settings",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "description": "Settings to configure"
+          }
+        },
+        "required": ["settings"]
+      }
+    },
+    {
+      "name": "backup_data",
+      "description": "Backup system data",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "backup_type": {
+            "type": "string",
+            "enum": ["full", "incremental", "differential"],
+            "description": "Type of backup"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Backup destination"
+          }
+        },
+        "required": ["backup_type", "destination"]
+      }
+    },
+    {
+      "name": "restore_data",
+      "description": "Restore data from backup",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "backup_id": {
+            "type": "string",
+            "description": "Backup ID to restore from"
+          },
+          "target_location": {
+            "type": "string",
+            "description": "Target location for restore"
+          }
+        },
+        "required": ["backup_id", "target_location"]
+      }
+    },
+    {
+      "name": "calculate_metrics",
+      "description": "Calculate performance metrics",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "metric_type": {
+            "type": "string",
+            "description": "Type of metric to calculate"
+          },
+          "data_source": {
+            "type": "string",
+            "description": "Data source for calculation"
+          }
+        },
+        "required": ["metric_type", "data_source"]
+      }
+    },
+    {
+      "name": "export_data",
+      "description": "Export data in specified format",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": ["json", "csv", "xml", "excel"],
+            "description": "Export format"
+          },
+          "query": {
+            "type": "string",
+            "description": "Data query"
+          }
+        },
+        "required": ["format", "query"]
+      }
+    },
+    {
+      "name": "import_data",
+      "description": "Import data from external source",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Data source"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["json", "csv", "xml", "excel"],
+            "description": "Import format"
+          }
+        },
+        "required": ["source", "format"]
+      }
+    },
+    {
+      "name": "validate_data",
+      "description": "Validate data against schema",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Data to validate"
+          },
+          "schema": {
+            "type": "object",
+            "description": "Validation schema"
+          }
+        },
+        "required": ["data", "schema"]
+      }
+    },
+    {
+      "name": "transform_data",
+      "description": "Transform data using specified rules",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "description": "Data to transform"
+          },
+          "transformation_rules": {
+            "type": "object",
+            "description": "Transformation rules"
+          }
+        },
+        "required": ["data", "transformation_rules"]
+      }
+    },
+    {
+      "name": "aggregate_data",
+      "description": "Aggregate data based on criteria",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_source": {
+            "type": "string",
+            "description": "Source of data"
+          },
+          "aggregation_type": {
+            "type": "string",
+            "enum": ["sum", "average", "count", "min", "max"],
+            "description": "Type of aggregation"
+          },
+          "group_by": {
+            "type": "string",
+            "description": "Field to group by"
+          }
+        },
+        "required": ["data_source", "aggregation_type"]
+      }
+    },
+    {
+      "name": "filter_data",
+      "description": "Filter data based on conditions",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_source": {
+            "type": "string",
+            "description": "Source of data"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Filter conditions"
+          }
+        },
+        "required": ["data_source", "conditions"]
+      }
+    },
+    {
+      "name": "sort_data",
+      "description": "Sort data by specified field",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_source": {
+            "type": "string",
+            "description": "Source of data"
+          },
+          "sort_field": {
+            "type": "string",
+            "description": "Field to sort by"
+          },
+          "order": {
+            "type": "string",
+            "enum": ["asc", "desc"],
+            "description": "Sort order",
+            "default": "asc"
+          }
+        },
+        "required": ["data_source", "sort_field"]
+      }
+    },
+    {
+      "name": "join_data",
+      "description": "Join two data sources",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "left_source": {
+            "type": "string",
+            "description": "Left data source"
+          },
+          "right_source": {
+            "type": "string",
+            "description": "Right data source"
+          },
+          "join_type": {
+            "type": "string",
+            "enum": ["inner", "left", "right", "full"],
+            "description": "Type of join"
+          },
+          "on_field": {
+            "type": "string",
+            "description": "Field to join on"
+          }
+        },
+        "required": ["left_source", "right_source", "join_type", "on_field"]
+      }
+    },
+    {
+      "name": "cache_data",
+      "description": "Cache data for faster access",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Cache key"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value to cache"
+          },
+          "ttl": {
+            "type": "integer",
+            "description": "Time to live in seconds"
+          }
+        },
+        "required": ["key", "value"]
+      }
+    },
+    {
+      "name": "clear_cache",
+      "description": "Clear cached data",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Cache key to clear (empty for all)"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "get_cached_data",
+      "description": "Retrieve data from cache",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Cache key"
+          }
+        },
+        "required": ["key"]
+      }
+    },
+    {
+      "name": "log_event",
+      "description": "Log an event to the system",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "description": "Type of event"
+          },
+          "message": {
+            "type": "string",
+            "description": "Event message"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["debug", "info", "warning", "error", "critical"],
+            "description": "Log level",
+            "default": "info"
+          }
+        },
+        "required": ["event_type", "message"]
+      }
+    },
+    {
+      "name": "query_logs",
+      "description": "Query system logs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "start_time": {
+            "type": "string",
+            "description": "Start time (ISO 8601)"
+          },
+          "end_time": {
+            "type": "string",
+            "description": "End time (ISO 8601)"
+          },
+          "level": {
+            "type": "string",
+            "enum": ["debug", "info", "warning", "error", "critical"],
+            "description": "Log level filter"
+          }
+        },
+        "required": ["start_time", "end_time"]
+      }
+    },
+    {
+      "name": "monitor_performance",
+      "description": "Monitor system performance metrics",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "Component to monitor"
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "description": "Monitoring duration"
+          }
+        },
+        "required": ["component", "duration_seconds"]
+      }
+    },
+    {
+      "name": "alert_on_threshold",
+      "description": "Create alert when threshold is exceeded",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string",
+            "description": "Metric to monitor"
+          },
+          "threshold": {
+            "type": "number",
+            "description": "Threshold value"
+          },
+          "alert_channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Alert channels"
+          }
+        },
+        "required": ["metric", "threshold", "alert_channels"]
+      }
+    },
+    {
+      "name": "create_dashboard",
+      "description": "Create a monitoring dashboard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Dashboard name"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Dashboard widgets"
+          }
+        },
+        "required": ["name", "widgets"]
+      }
+    },
+    {
+      "name": "update_dashboard",
+      "description": "Update an existing dashboard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "dashboard_id": {
+            "type": "string",
+            "description": "Dashboard ID"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Dashboard updates"
+          }
+        },
+        "required": ["dashboard_id", "updates"]
+      }
+    },
+    {
+      "name": "delete_dashboard",
+      "description": "Delete a dashboard",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "dashboard_id": {
+            "type": "string",
+            "description": "Dashboard ID to delete"
+          }
+        },
+        "required": ["dashboard_id"]
+      }
+    },
+    {
+      "name": "schedule_task",
+      "description": "Schedule a task for execution",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_name": {
+            "type": "string",
+            "description": "Name of the task"
+          },
+          "schedule": {
+            "type": "string",
+            "description": "Cron schedule expression"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Task parameters"
+          }
+        },
+        "required": ["task_name", "schedule"]
+      }
+    },
+    {
+      "name": "cancel_task",
+      "description": "Cancel a scheduled task",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task ID to cancel"
+          }
+        },
+        "required": ["task_id"]
+      }
+    },
+    {
+      "name": "get_task_status",
+      "description": "Get status of a scheduled task",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task ID"
+          }
+        },
+        "required": ["task_id"]
+      }
+    },
+    {
+      "name": "list_tasks",
+      "description": "List all scheduled tasks",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed"],
+            "description": "Filter by status"
+          }
+        },
+        "required": []
+      }
+    }
+  ]
+}

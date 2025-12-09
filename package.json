@@ -1,0 +1,31 @@
+{
+  "name": "tool-search-tool-project",
+  "version": "0.1.0",
+  "description": "Claude API Tool Search Tool implementation and evaluation project",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "keywords": [
+    "claude",
+    "anthropic",
+    "tool-search",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.67.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "prettier": "^3.3.0",
+    "eslint": "^9.0.0"
+  }
+}
