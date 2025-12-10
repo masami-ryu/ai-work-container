@@ -2,7 +2,9 @@
 # post-review.sh
 # レビュー完了後の自動保存フック
 
-set -e
+set -e          # Exit on error
+set -u          # Exit on undefined variable
+set -o pipefail # Exit on pipe failure
 
 REVIEW_OUTPUT_DIR="ai/reviews"
 METRICS_OUTPUT_DIR="ai/review-metrics"
