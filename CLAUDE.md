@@ -35,6 +35,11 @@ claude -p "質問内容"
 - 日本語で記述
 - ファイル命名: `YYMMDD_[概要].md`
 
+## パーミッション
+- 開発コマンド（yarn run, node, python）は確認なしで実行可能
+- パッケージインストール（yarn install, pip install）は確認が必要
+- 危険な操作（rm -rf, chmod 777）は禁止
+
 ## IMPORTANT
 - プランは必ず `ai/plans/` に保存
 - レビュー結果は `ai/reviews/` に保存
