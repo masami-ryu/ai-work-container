@@ -1,0 +1,48 @@
+{
+  "pr_number": 18,
+  "pr_url": "https://github.com/masami-ryu/ai-work-container/pull/18",
+  "review_date": "2025-12-10T23:39:16Z",
+  "pr_size": "large",
+  "workflow": "deep",
+  "changed_files": 15,
+  "diff_lines": 2587,
+  "review_duration_sec": 600,
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "code_quality",
+      "has_evidence": true,
+      "evidence_url": "https://learn.microsoft.com/en-us/cli/azure/use-azure-cli-successfully-bash#error-handling"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "has_evidence": true,
+      "evidence_url": "https://context7.com/typeddevs/bashunit"
+    },
+    {
+      "severity": "low",
+      "category": "performance",
+      "has_evidence": false,
+      "evidence_url": null
+    }
+  ],
+  "metrics": {
+    "total_findings": 3,
+    "findings_with_evidence": 2,
+    "evidence_ratio": 0.67,
+    "mcp_calls": {
+      "serena": 0,
+      "msdocs": 1,
+      "context7": 2,
+      "github": 5
+    },
+    "timeouts": {
+      "serena_ms": 30000,
+      "msdocs_ms": 20000,
+      "context7_ms": 20000,
+      "github_ms": 30000
+    },
+    "errors": []
+  }
+}
