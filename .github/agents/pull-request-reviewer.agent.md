@@ -7,28 +7,25 @@ target: vscode
 tools: [
   # 情報収集・検索系
   'search',
-  'usages',
-  'problems',
-  'changes',
-  'fetch',
-  'githubRepo',
-  'runSubagent',
+  'read',
+  'web',
+  'agent',
   # タスク管理
-  'todos',
+  'todo',
   # MCP: ドキュメント参照
   'context7/*',
   'msdocs/*',
   # MCP: GitHub情報取得（読み取り系）
-  'github-mcp-server/pull_request_read',
-  'github-mcp-server/get_file_contents',
-  'github-mcp-server/list_commits',
-  'github-mcp-server/list_pull_requests',
-  'github-mcp-server/issue_read',
-  'github-mcp-server/search_code',
-  'github-mcp-server/get_commit',
+  'github/pull_request_read',
+  'github/get_file_contents',
+  'github/list_commits',
+  'github/list_pull_requests',
+  'github/issue_read',
+  'github/search_code',
+  'github/get_commit',
   # MCP: GitHub操作（書き込み系）
-  'github-mcp-server/pull_request_review_write',
-  'github-mcp-server/add_comment_to_pending_review',
+  'github/pull_request_review_write',
+  'github/add_comment_to_pending_review',
   # MCP: コード分析
   'serena/*'
 ]
