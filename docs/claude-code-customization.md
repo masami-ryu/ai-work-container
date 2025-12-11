@@ -14,10 +14,10 @@ Hooks、コマンド、エージェントのカスタマイズ方法を説明し
 │   ├── plan-creator.md
 │   └── pr-reviewer.md
 ├── commands/      # スラッシュコマンド
-│   ├── commit.md
 │   ├── doc.md
 │   ├── plan.md
-│   └── review-plan.md
+│   ├── review.md
+│   └── suggest-claude-md.md
 ├── hooks/         # フックスクリプト
 │   ├── session-start.sh
 │   ├── auto-approve-docs.sh
@@ -57,21 +57,23 @@ allowed-tools: Read, Grep, Write, mcp__context7
 3. ステップ3の説明
 ```
 
-### 例: /commit コマンド
+### 例: /plan コマンド
 
 ```markdown
 ---
-name: commit
-description: 変更をコミットする
-allowed-tools: Bash
+name: plan
+description: 実行可能なプランを作成する
+allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
+model: opus
 ---
 
 ## コンテキスト
-- 現在の変更: !`git diff HEAD`
-- ステータス: !`git status`
+- プロジェクト: @CLAUDE.md
+- テンプレート: @ai/templates/plan-template.md
 
 ## タスク
-適切なコミットメッセージを作成し、コミットを実行。
+タスク規模を評価し、適切なワークフローを選択してプランを作成。
+保存先: `ai/plans/YYMMDD_[タスク概要].md`
 ```
 
 ## カスタムエージェントの作成
