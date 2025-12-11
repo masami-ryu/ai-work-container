@@ -154,20 +154,28 @@ list_issues owner:masami-ryu repo:ai-work-container
 
 **このプロジェクトで利用可能なコマンド:**
 - `/plan` - 実行可能なプランを作成
-- `/review-plan` - 既存のプランをレビュー
-- `/commit` - 変更をコミット（コミットメッセージ自動生成）
+- `/review` - PRレビューを実行
 - `/doc` - ドキュメントを作成・更新
 - `/suggest-claude-md` - CLAUDE.mdの更新提案を生成
 
-**コマンドファイルの例（commit.md）:**
+**コマンドファイルの例（plan.md）:**
 ```markdown
 ---
-name: commit
-description: 変更をコミットする
+name: plan
+description: 実行可能なプランを作成する
+argument-hint: タスクの概要または目的を入力してください
 ---
 
+## コンテキスト
+- プロジェクト: @CLAUDE.md
+- テンプレート: @ai/templates/plan-template.md
+
 ## タスク
-変更内容を確認し、適切なコミットメッセージを生成してコミットを実行
+以下のステップでプランを作成してください:
+1. 目的の明確化
+2. 情報収集
+3. プラン策定
+4. 保存: `ai/plans/YYMMDD_[タスク概要].md` に保存
 ```
 
 ### カスタムサブエージェント
