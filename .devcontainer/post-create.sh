@@ -444,3 +444,21 @@ if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
   echo "export DISABLE_AUTOUPDATER=0" >> ~/.bashrc
   echo "Claude Code 環境変数を .bashrc に追加しました"
 fi
+
+# マルチルートワークスペース案内メッセージ
+cat << 'EOF'
+
+================================
+マルチルートワークスペースを使用する場合:
+
+方法1: コマンドパレットから開く（推奨）
+  1. F1 キーを押す
+  2. "Dev Containers: Open Workspace in Container..." を選択
+  3. "ai-work-container.code-workspace" を選択
+
+方法2: コンテナ接続後に開く
+  1. File > Open Workspace from File...
+  2. "/workspaces/ai-work-container/ai-work-container.code-workspace" を選択
+================================
+
+EOF

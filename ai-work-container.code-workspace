@@ -1,0 +1,20 @@
+{
+  "folders": [
+    {
+      "name": "ai-work-container (root)",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/node_modules": true,
+      ".node_modules_cache": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "anthropic.claude-code",
+      "eamodio.gitlens"
+    ]
+  }
+}

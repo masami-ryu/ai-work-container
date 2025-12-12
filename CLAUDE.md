@@ -14,6 +14,8 @@ AI開発作業用のDevContainer環境。Claude CodeとMCPを活用した効率�
 - `docs/` - ドキュメント
 - `.claude/` - Claude Code設定
 - `.vscode/mcp.json` - MCP設定
+- `repo/` - マルチルートワークスペース用プロジェクト配置ディレクトリ
+- `.node_modules_cache/` - node_modules実体（ボリュームマウント）
 
 ## 頻繁に使用するコマンド
 ```bash
@@ -46,9 +48,33 @@ claude -p "質問内容"
 - MCPツールを活用してベストプラクティスを参照すること
 - 設定変更前に必ずバックアップを作成
 
+## マルチルートワークスペース
+`repo/` 配下に複数のプロジェクトを配置して、共通設定を継承しながら開発できます。
+
+### プロジェクトの追加
+```bash
+cd /workspaces/ai-work-container/repo
+git clone https://github.com/your-org/your-project.git
+cd ..
+bash .devcontainer/setup-repo-project.sh your-project
+```
+
+### プロジェクトの削除
+```bash
+bash .devcontainer/remove-repo-project.sh your-project
+```
+
+### 設定の継承
+- `.claude/` のコマンド・エージェント・hooksは自動的に継承されます
+- カスタムコマンド: `/plan`, `/review`, `/doc`, `/suggest-claude-md`
+- サブエージェント: `plan-creator`, `doc-writer`, `pr-reviewer`
+
+詳細は @docs/multiroot-workspace-usage.md を参照。
+
 ## 重要なドキュメント
 - @docs/claude-code-usage.md
 - @docs/claude-code-mcp-setup.md
+- @docs/multiroot-workspace-usage.md
 - @ai/templates/plan-template.md
 - @.github/copilot-instructions.md
 

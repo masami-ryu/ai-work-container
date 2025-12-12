@@ -44,6 +44,7 @@
   
   // node_modules のマウント除外設定（パフォーマンス向上）
   "mounts": [
-    "type=volume,source=ai-work-container-node_modules,target=/workspaces/ai-work-container/node_modules"
+    "type=volume,source=ai-work-container-node_modules,target=/workspaces/ai-work-container/node_modules",
+    "type=volume,source=ai-work-node-modules-cache,target=/workspaces/ai-work-container/.node_modules_cache"
   ]
 }
