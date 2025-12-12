@@ -2,7 +2,7 @@
 name: review
 description: PRをレビューする（PR番号またはURLを指定）
 allowed-tools: Read, Grep, Glob, Write, Bash, mcp__context7, mcp__msdocs, mcp__github-mcp-server, mcp__serena
-model: opus
+model: sonnet
 argument-hint: PR番号またはURL（例: "#123" または "https://github.com/owner/repo/pull/123"）
 ---
 
