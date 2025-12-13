@@ -165,11 +165,11 @@ devcontainer open /workspaces/ai-work-container/repo/my-project
 ## 共通設定の利用
 
 ### Claude Code設定
-- 認証情報: `~/.config/claude-code/` （全プロジェクトで共有）
-- MCP設定: `~/.claude.json` （全プロジェクトで共有）
+- 認証情報: `~/.config/claude-code/` （コンテナ内ディレクトリ、全プロジェクトで共有）
+- MCP設定: `~/.claude.json` （コンテナ内ファイル、全プロジェクトで共有）
 - プロジェクト固有設定: `repo/my-project/.claude/` （シンボリックリンク経由）
 
-一度認証すれば、すべてのプロジェクトで Claude Code CLI が使用可能です。
+**重要**: コンテナ再作成時には再認証が必要です。初回起動後に `claude login` を実行してください。一度認証すれば、同一コンテナ内のすべてのプロジェクトで Claude Code CLI が使用可能です。
 
 ### GitHub設定
 - Workflows: `repo/my-project/.github/workflows/` （シンボリックリンク経由）
@@ -201,13 +201,11 @@ echo "20.11.0" > repo/my-project/.node-version
 |------|-------------|-----|
 | メインプロジェクト | `ai-work-container-node_modules` | - |
 | 子プロジェクト | `${project-name}-node_modules` | `my-app-node_modules` |
-| Claude認証 | `claude-config` | - |
-| Claude MCP設定 | `claude-json` | - |
 
 ### ボリューム一覧の確認
 ```bash
 # ホストマシンで実行
-docker volume ls | grep -E "(ai-work-container|-node_modules|claude-)"
+docker volume ls | grep -E "(ai-work-container|-node_modules)"
 ```
 
 ### 不要なボリュームの削除

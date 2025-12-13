@@ -55,9 +55,9 @@ else
     # 方法1: sed（順序依存だが簡潔）
     # トップレベルvolumesセクションに追加
     sed -i "/^volumes:/a\\  ${VOLUME_NAME}:" "$COMPOSE_FILE"
-    # servicesのvolumesに追加（サービス内の - claude-json: 行に限定）
+    # servicesのvolumesに追加（メインプロジェクトのnode_modules行の後に挿入）
     MOUNT_LINE="      - ${VOLUME_NAME}:/workspaces/ai-work-container/repo/${PROJECT_NAME}/node_modules"
-    sed -i "/^[[:space:]]*-[[:space:]]*claude-json:.*\\/home/a\\${MOUNT_LINE}" "$COMPOSE_FILE"
+    sed -i "/ai-work-container-node_modules:.*\\/node_modules/a\\${MOUNT_LINE}" "$COMPOSE_FILE"
 
     # 方法2（より安定）: yqツールを使用（要インストール: apt-get install yq）
     # yq -i ".volumes.${VOLUME_NAME} = {}" "$COMPOSE_FILE"

@@ -76,10 +76,12 @@ VS Code: Ctrl+Shift+P → 'Dev Containers: Rebuild Container'
 ```
 
 ### 共通設定の利用
-- **Claude Code認証**: `~/.config/claude-code/` で全プロジェクト共有
-- **MCP設定**: `~/.claude.json` で全プロジェクト共有
+- **Claude Code認証**: コンテナ内で初回のみ認証（`claude login`）、同一コンテナ内の全プロジェクトで共有
+- **MCP設定**: `~/.claude.json` で全プロジェクト共有（コンテナ内ファイル）
 - **GitHub設定**: `.github/` へのシンボリックリンクで継承
 - **Claude設定**: `.claude/` へのシンボリックリンクで継承
+
+**注意**: コンテナ再作成時にはClaude Code CLIの再認証が必要です。
 
 詳細は @docs/multi-project-setup.md を参照。
 
