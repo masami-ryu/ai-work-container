@@ -10,10 +10,14 @@ AI開発作業用のDevContainer環境。Claude CodeとMCPを活用した効率�
 
 ## ディレクトリ構造
 - `ai/plans/` - 実行プラン
-- `ai/templates/` - テンプレート
+- `ai/templates/` - テンプレート（プロジェクト用devcontainer.json、CLAUDE.md等）
 - `docs/` - ドキュメント
-- `.claude/` - Claude Code設定
+- `.claude/` - Claude Code設定（共通設定、子プロジェクトからシンボリックリンク）
+- `.github/` - GitHub設定（共通設定、子プロジェクトからシンボリックリンク）
 - `.vscode/mcp.json` - MCP設定
+- `repo/` - マルチプロジェクト格納ディレクトリ
+  - `project-a/` - 子プロジェクト（別ウィンドウで開ける）
+  - `project-b/` - 子プロジェクト（別ウィンドウで開ける）
 
 ## 頻繁に使用するコマンド
 ```bash
@@ -46,11 +50,46 @@ claude -p "質問内容"
 - MCPツールを活用してベストプラクティスを参照すること
 - 設定変更前に必ずバックアップを作成
 
+## マルチプロジェクト環境
+
+このプロジェクトは**単一コンテナ・マルチプロジェクト環境**をサポートしています。
+
+### 新規プロジェクトの追加
+```bash
+# 空のプロジェクトを作成
+.devcontainer/init-project.sh my-new-project
+
+# Git リポジトリをクローン
+.devcontainer/init-project.sh my-new-project https://github.com/user/repo.git
+```
+
+**重要**: プロジェクト追加後は、コンテナを再ビルドしてください：
+```
+VS Code: Ctrl+Shift+P → 'Dev Containers: Rebuild Container'
+```
+
+### 子プロジェクトを別ウィンドウで開く
+```
+1. F1 → 'Dev Containers: Open Folder in Container...'
+2. /workspaces/ai-work-container/repo/my-project を選択
+3. 既存コンテナにattachして新しいウィンドウが開く
+```
+
+### 共通設定の利用
+- **Claude Code認証**: `~/.config/claude-code/` で全プロジェクト共有
+- **MCP設定**: `~/.claude.json` で全プロジェクト共有
+- **GitHub設定**: `.github/` へのシンボリックリンクで継承
+- **Claude設定**: `.claude/` へのシンボリックリンクで継承
+
+詳細は @docs/multi-project-setup.md を参照。
+
 ## 重要なドキュメント
 - @docs/claude-code-usage.md
 - @docs/claude-code-mcp-setup.md
+- @docs/multi-project-setup.md
 - @ai/templates/plan-template.md
 - @.github/copilot-instructions.md
 
 ## トラブルシューティング
 MCPやCLI関連の問題は @docs/claude-code-mcp-setup.md#トラブルシューティング を参照。
+マルチプロジェクト環境の問題は @docs/multi-project-setup.md#トラブルシューティング を参照。
