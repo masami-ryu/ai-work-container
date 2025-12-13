@@ -1,5 +1,5 @@
 **/node_modules
-**/pnpm-store
+**/.pnpm-store
 
 # ローカル設定（個人用、リポジトリに含めない）
 .claude/settings.local.json
