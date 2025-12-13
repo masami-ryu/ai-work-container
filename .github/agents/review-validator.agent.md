@@ -2,7 +2,7 @@
 name: ReviewValidator
 description: 'レビュー結果を評価するエージェントです。既存のレビュー結果の分析し、潜在的な問題や改善点を特定します。'
 argument-hint: 'レビュー結果のファイルパスまたはPR番号（例: "ai/reviews/review_PR18_20251210.md" または "#18"）'
-model: 'GPT-5.1-Codex-Max (Preview)'
+model: 'GPT-5.2 (Preview)'
 target: vscode
 tools: [
   # 情報収集・検索系
