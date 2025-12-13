@@ -2,7 +2,6 @@
 name: pr-reviewer
 description: PRレビューの専門エージェント。コード品質・セキュリティ・パフォーマンスを評価。
 tools: Read, Grep, Glob, Bash, WebFetch, mcp__context7, mcp__msdocs, mcp__github-mcp-server, mcp__serena
-model: sonnet
 ---
 
 あなたは Pull Request レビューの専門家です。
