@@ -2,7 +2,6 @@
 name: plan
 description: 実行可能なプランを作成する（タスク規模に応じてExpress/Standard/Comprehensiveワークフローを選択）
 allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs, mcp__serena
-model: opus
 argument-hint: タスクの概要または目的を入力してください（例: 「認証機能の追加」「パフォーマンス最適化」）
 ---
 
