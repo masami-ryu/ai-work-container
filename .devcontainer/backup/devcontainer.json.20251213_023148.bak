@@ -1,12 +1,12 @@
 {
   // コンテナ名: anyenv + nodenv を使用した開発環境
   "name": "Dev Container (anyenv + nodenv)",
-
-  // Docker Compose設定
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "devcontainer",
-  "workspaceFolder": "/workspaces/ai-work-container",
-  "shutdownAction": "none",
+  
+  // ビルド設定
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
   
   // VS Code カスタマイズ
   "customizations": {
@@ -40,5 +40,10 @@
   "remoteUser": "vscode",
 
   // コンテナ起動時に使用するユーザー
-  "containerUser": "vscode"
+  "containerUser": "vscode",
+  
+  // node_modules のマウント除外設定（パフォーマンス向上）
+  "mounts": [
+    "type=volume,source=ai-work-container-node_modules,target=/workspaces/ai-work-container/node_modules"
+  ]
 }

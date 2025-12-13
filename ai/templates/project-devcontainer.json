@@ -1,0 +1,16 @@
+{
+  "name": "Project: ${PROJECT_NAME}",
+  "dockerComposeFile": [
+    "../../../.devcontainer/docker-compose.yml"
+  ],
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/ai-work-container/repo/${PROJECT_NAME}",
+  "shutdownAction": "none",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "git.autofetch": true
+      }
+    }
+  }
+}

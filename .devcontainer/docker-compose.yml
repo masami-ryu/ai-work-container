@@ -1,0 +1,29 @@
+services:
+  devcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # ワークスペース全体をマウント
+      - ..:/workspaces/ai-work-container:cached
+      # メインプロジェクトのnode_modules
+      - ai-work-container-node_modules:/workspaces/ai-work-container/node_modules
+      # Claude設定を永続化
+      - claude-config:/home/vscode/.config/claude-code
+      - claude-json:/home/vscode/.claude.json
+    # コンテナを起動し続ける
+    command: sleep infinity
+    # ネットワーク設定
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
+
+volumes:
+  ai-work-container-node_modules:
+  claude-config:
+  claude-json:
+  # 追加プロジェクト用ボリュームはinit-project.shで動的に追加
+  # 命名規則: ${project-name}-node_modules
