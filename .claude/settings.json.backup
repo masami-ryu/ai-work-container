@@ -50,7 +50,7 @@
       "Bash(pip install:*)",
       "Bash(pip3 install:*)"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "default"
   },
   "enableAllProjectMcpServers": true,
   "env": {

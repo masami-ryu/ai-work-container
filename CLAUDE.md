@@ -40,9 +40,47 @@ claude -p "質問内容"
 - ファイル命名: `YYMMDD_[概要].md`
 
 ## パーミッション
+
+### 基本ルール
 - 開発コマンド（yarn run, node, python）は確認なしで実行可能
 - パッケージインストール（yarn install, pip install）は確認が必要
 - 危険な操作（rm -rf, chmod 777）は禁止
+
+### Claude Code実行時の重要な注意事項
+
+**⚠️ 実行ディレクトリの重要性:**
+- Claude Codeは**必ずプロジェクトルート**（`/workspaces/ai-work-container`）から実行してください
+- サブディレクトリ（`node_modules/`等）から実行すると、permissions設定が意図通りに動作しない場合があります
+- 理由: 「Yes, don't ask again」の設定は**プロジェクトディレクトリ単位**で保存されるため、実行場所が異なると同じコマンドでも再度プロンプトされます
+
+**正しい実行方法:**
+```bash
+cd /workspaces/ai-work-container  # プロジェクトルートに移動
+claude                             # ここから実行
+```
+
+### Permissions設定の記法
+
+`.claude/settings.json`のpermissionsは以下の記法に従います:
+
+**Bash()パターン:**
+- `Bash(git status:*)` - `git status`で始まる任意のコマンド（オプション・引数含む）
+- `Bash(git:*)` - `git`で始まる全コマンド
+- `Bash(git status)` - 完全一致のみ（オプションなし）
+- `:*`は末尾のみ使用可能（プリフィックスマッチ）
+- 正規表現やグロブパターンは不可
+
+**Read/Editパターン:**
+- `Read(**)` - 全ファイル読み取り許可
+- `Read(./.env)` - 特定ファイルの拒否
+- パス解釈: `//`=絶対パス, `~`=ホーム, `/`=設定ファイル相対, `./`=CWD相対
+
+**defaultMode設定:**
+- `"default"` - 毎回確認（デフォルト）
+- `"acceptEdits"` - ファイル編集（Read/Write/Edit）を自動承認（推奨）
+- `"acceptAll"` - 全操作を自動承認（非推奨）
+
+詳細は `.claude/settings.json` および @docs/claude-code-usage.md を参照。
 
 ## IMPORTANT
 - プランは必ず `ai/plans/` に保存

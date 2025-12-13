@@ -248,6 +248,60 @@ claude mcp list
 cat ~/.cache/claude-install-logs/install-$(date +%Y%m%d).log
 ```
 
+#### Permissions設定が適用されない / 毎回プロンプトされる
+
+**症状:** `.claude/settings.json`の`allow`リストにコマンドを追加しても、毎回許可を求められる
+
+**原因と解決方法:**
+
+1. **実行ディレクトリの問題（最も一般的）**
+   - **原因:** Claude Codeをサブディレクトリ（`node_modules/`等）から実行している
+   - **理由:** 「Yes, don't ask again」の設定は**プロジェクトディレクトリ単位**で保存されるため、実行場所が異なると再プロンプトされる
+   - **解決方法:**
+     ```bash
+     cd /workspaces/ai-work-container  # プロジェクトルートに移動
+     claude                             # ここから実行
+     ```
+
+2. **Bash()パターンの記法ミス**
+   - **問題例:** `Bash(git status)` - 完全一致のみ（オプション付きは許可されない）
+   - **正しい記法:** `Bash(git status:*)` - オプション・引数を含む
+   - `:*`はプリフィックスマッチを意味し、末尾にのみ使用可能
+   - 正規表現やグロブパターンは使用不可
+
+3. **上位の設定ファイルで上書きされている**
+   - 設定ファイルの優先順位（高→低）:
+     1. `/etc/claude-code/managed-settings.json` (管理ポリシー)
+     2. CLI引数
+     3. `.claude/settings.local.json` (プロジェクトローカル)
+     4. `.claude/settings.json` (プロジェクト共有)
+     5. `~/.claude/settings.json` (ユーザーグローバル)
+   - **確認方法:** Claude Codeセッション内で `/permissions` コマンドを実行
+
+4. **defaultModeの最適化**
+   - ファイル編集を自動承認したい場合:
+     ```json
+     {
+       "permissions": {
+         "defaultMode": "acceptEdits"
+       }
+     }
+     ```
+   - `"acceptEdits"`: Read/Write/Editを自動承認（推奨）
+   - `"default"`: 毎回確認（デフォルト）
+   - `"acceptAll"`: 全操作を自動承認（非推奨）
+
+**バックアップと復元:**
+```bash
+# バックアップ作成
+cp .claude/settings.json .claude/settings.json.backup
+
+# 復元
+cp .claude/settings.json.backup .claude/settings.json
+```
+
+詳細は `CLAUDE.md`の「パーミッション」セクションを参照。
+
 ## 参考資料
 - [Claude Code 公式ドキュメント](https://docs.anthropic.com/claude-code)
 - [MCP仕様](https://modelcontextprotocol.io/)
