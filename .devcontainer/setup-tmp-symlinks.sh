@@ -415,7 +415,7 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
   log_info "パターン '$PATTERN' を検索中..."
 
   # 除外するディレクトリのリスト（現在のPATTERNは除外しない - TASK-002, TASK-003）
-  local -a prune_list=()
+  prune_list=()
   for dir in "${PRUNE_DIRS[@]}"; do
     if [ "$dir" != "$PATTERN" ]; then
       prune_list+=("$dir")
@@ -529,8 +529,8 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
     # PRUNE_DIRSからPATTERNを除外したディレクトリを-pruneで除外
     if [ ${#prune_list[@]} -gt 0 ]; then
       # prune条件の構築
-      local -a prune_cond=()
-      local first=true
+      prune_cond=()
+      first=true
       for dir in "${prune_list[@]}"; do
         if [ "$first" = true ]; then
           prune_cond=(-name "$dir")
