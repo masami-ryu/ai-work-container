@@ -10,6 +10,8 @@ tools: [
   'read',
   'web',
   'agent',
+  # Markdown編集系（レビュー結果保存）
+  'edit',
   # タスク管理
   'todo',
   # MCP: ドキュメント参照（再検証用）
