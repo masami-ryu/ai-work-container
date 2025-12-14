@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 LOG_FILE="/tmp/worktree-permission.log"
 TARGET_DIR="/workspaces/ai-work-container"
@@ -58,6 +58,14 @@ if sudo -n true 2>/dev/null; then
 else
     echo "[$(date)] ⚠ WARNING: sudo not available, skipping permission change" | tee -a "$LOG_FILE"
     echo "[$(date)] Worktree operations may fail without proper permissions" | tee -a "$LOG_FILE"
+fi
+
+# works/ 配下のシンボリックリンク自動化
+if [ -f "/workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh" ]; then
+  echo "[$(date)] ================================================" | tee -a "$LOG_FILE"
+  echo "[$(date)] Setting up symlinks for temporary directories" | tee -a "$LOG_FILE"
+  echo "[$(date)] ================================================" | tee -a "$LOG_FILE"
+  bash /workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh 2>&1 | tee -a "$LOG_FILE"
 fi
 
 echo "[$(date)] ================================================" | tee -a "$LOG_FILE"
