@@ -29,6 +29,12 @@ on_error() {
 }
 trap on_error ERR
 
+# /workspaces/tmp の権限設定（anyenv セットアップの前）
+if [ -f "/workspaces/ai-work-container/.devcontainer/init-tmp-volume.sh" ]; then
+  echo "==== /workspaces/tmp 権限設定開始: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ===="
+  bash /workspaces/ai-work-container/.devcontainer/init-tmp-volume.sh
+fi
+
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
 chown -R vscode:vscode "$HOME_DIR" || true
@@ -443,4 +449,10 @@ if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
   echo "export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0" >> ~/.bashrc
   echo "export DISABLE_AUTOUPDATER=0" >> ~/.bashrc
   echo "Claude Code 環境変数を .bashrc に追加しました"
+fi
+
+# works/ 配下のシンボリックリンク自動化（anyenv セットアップの後）
+if [ -f "/workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh" ]; then
+  echo "==== works/ シンボリックリンク自動化開始: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ===="
+  bash /workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh
 fi
