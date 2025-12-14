@@ -205,6 +205,7 @@ find_project_directories() {
   # .git ディレクトリまたはファイルを検出してプロジェクトルートを特定
   # 注意1: Git worktree/submodule では .git がファイルの場合がある（レビュー指摘対応）
   # 注意2: .git ディレクトリ配下は巨大になりやすいため -prune で探索を停止（第3回レビュー指摘対応）
+  local project_dir
   while IFS= read -r -d '' git_path; do
     if [ -d "$git_path" ]; then
       # .git がディレクトリの場合
@@ -258,7 +259,74 @@ detect_project_types() {
   printf '%s\n' "${detected_types[@]}"
 }
 
-# 予防的シンボリックリンク作成
+# 対象ディレクトリを検出（TASK-007: 関数分割）
+detect_target_directories() {
+  local -a types=("$@")
+
+  local -a target_dirs=()
+  for type in "${types[@]}"; do
+    # 連想配列にキーが存在するか確認
+    if [[ -v TYPE_TARGET_DIRS[$type] ]]; then
+      local dirs="${TYPE_TARGET_DIRS[$type]}"
+      for dir in $dirs; do
+        if [[ ! " ${target_dirs[*]} " =~ " ${dir} " ]]; then
+          target_dirs+=("$dir")
+        fi
+      done
+    else
+      log_verbose "  未知のプロジェクトタイプ: $type（スキップ）"
+    fi
+  done
+
+  printf '%s\n' "${target_dirs[@]}"
+}
+
+# シンボリックリンクを作成（TASK-007: 関数分割）
+create_symlink_with_target() {
+  local target_path="$1"
+  local link_target="$2"
+
+  # 既存チェック
+  if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+    log_verbose "  スキップ（既存）: $(basename "$target_path")"
+    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+    return
+  fi
+
+  # リンク先の親ディレクトリを作成
+  local link_target_dir
+  link_target_dir=$(dirname "$link_target")
+  if [ ! -d "$link_target_dir" ]; then
+    log_verbose "  リンク先の親ディレクトリを作成: $link_target_dir"
+    if [ "$DRY_RUN" = false ]; then
+      mkdir -p "$link_target_dir"
+    fi
+  fi
+
+  # リンク先ディレクトリを作成
+  if [ ! -d "$link_target" ]; then
+    log_verbose "  リンク先ディレクトリを作成: $link_target"
+    if [ "$DRY_RUN" = false ]; then
+      mkdir -p "$link_target"
+    fi
+  fi
+
+  # シンボリックリンクを作成
+  log_info "予防的シンボリックリンクを作成: $target_path -> $link_target"
+  if [ "$DRY_RUN" = false ]; then
+    if ln -s -- "$link_target" "$target_path"; then
+      log_success "作成成功: $target_path"
+      PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+    else
+      log_error "作成失敗: $target_path"
+      ERROR_COUNT=$((ERROR_COUNT + 1))
+    fi
+  else
+    PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+  fi
+}
+
+# 予防的シンボリックリンク作成（メイン処理 - TASK-007: 関数分割）
 create_preventive_symlinks() {
   local project_dir="$1"
   local rel_path="${project_dir#$WORKS_DIR/}"
@@ -276,64 +344,15 @@ create_preventive_symlinks() {
 
   log_verbose "  検出されたタイプ: ${types[*]}"
 
-  # タイプごとの対象ディレクトリを取得
-  local -a target_dirs=()
-  for type in "${types[@]}"; do
-    # 連想配列にキーが存在するか確認
-    if [[ -v TYPE_TARGET_DIRS[$type] ]]; then
-      local dirs="${TYPE_TARGET_DIRS[$type]}"
-      for dir in $dirs; do
-        if [[ ! " ${target_dirs[*]} " =~ " ${dir} " ]]; then
-          target_dirs+=("$dir")
-        fi
-      done
-    else
-      log_verbose "  未知のプロジェクトタイプ: $type（スキップ）"
-    fi
-  done
+  # 対象ディレクトリを検出
+  local -a target_dirs
+  mapfile -t target_dirs < <(detect_target_directories "${types[@]}")
 
   # 各対象ディレクトリについてシンボリックリンクを作成
   for dir_name in "${target_dirs[@]}"; do
     local target_path="$project_dir/$dir_name"
     local link_target="$TMP_WORKS_DIR/$rel_path/$dir_name"
-
-    # 既存チェック（TASK-203、GUD-005）
-    if [ -e "$target_path" ] || [ -L "$target_path" ]; then
-      log_verbose "  スキップ（既存）: $dir_name"
-      SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-      continue
-    fi
-
-    # リンク先の親ディレクトリを作成
-    local link_target_dir=$(dirname "$link_target")
-    if [ ! -d "$link_target_dir" ]; then
-      log_verbose "  リンク先の親ディレクトリを作成: $link_target_dir"
-      if [ "$DRY_RUN" = false ]; then
-        mkdir -p "$link_target_dir"
-      fi
-    fi
-
-    # リンク先ディレクトリを作成
-    if [ ! -d "$link_target" ]; then
-      log_verbose "  リンク先ディレクトリを作成: $link_target"
-      if [ "$DRY_RUN" = false ]; then
-        mkdir -p "$link_target"
-      fi
-    fi
-
-    # シンボリックリンクを作成
-    log_info "予防的シンボリックリンクを作成: $target_path -> $link_target"
-    if [ "$DRY_RUN" = false ]; then
-      if ln -s "$link_target" "$target_path"; then
-        log_success "作成成功: $target_path"
-        PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-      else
-        log_error "作成失敗: $target_path"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-      fi
-    else
-      PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-    fi
+    create_symlink_with_target "$target_path" "$link_target"
   done
 }
 
@@ -395,9 +414,17 @@ fi
 for PATTERN in "${TARGET_PATTERNS[@]}"; do
   log_info "パターン '$PATTERN' を検索中..."
 
-  # find で検出（-prune で node_modules 配下を探索しない - REQ-012）
-  # works/ 直下の node_modules は検出するが、その配下は探索しない
-  # -type d -o -type l でディレクトリとシンボリックリンクの両方を検出
+  # 除外するディレクトリのリスト（現在のPATTERNは除外しない - TASK-002, TASK-003）
+  local -a prune_list=()
+  for dir in "${PRUNE_DIRS[@]}"; do
+    if [ "$dir" != "$PATTERN" ]; then
+      prune_list+=("$dir")
+    fi
+  done
+
+  # find で検出（grep 依存を撤廃 - TASK-002, TASK-003）
+  # PRUNE_DIRS配下を探索せず、PATTERNにマッチするディレクトリ/シンボリックリンクを検出
+  # -name "$PATTERN" は完全一致なので、誤検出（例: .next で anext）を防止
   # パイプラインのエラーを一時的に無視するため set +e を使用
   set +e
   while IFS= read -r -d '' DIR_PATH; do
@@ -455,7 +482,7 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
         # 削除モード（REQ-009）
         log_info "  既存ディレクトリを削除します"
         if [ "$DRY_RUN" = false ]; then
-          rm -rf "$DIR_PATH"
+          rm -rf -- "$DIR_PATH"
           log_success "  削除しました: $DIR_PATH"
         fi
       else
@@ -464,7 +491,7 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
         BACKUP_PATH="${DIR_PATH}.bak-${TIMESTAMP}"
         log_info "  既存ディレクトリを退避します: $BACKUP_PATH"
         if [ "$DRY_RUN" = false ]; then
-          mv "$DIR_PATH" "$BACKUP_PATH"
+          mv -- "$DIR_PATH" "$BACKUP_PATH"
           log_success "  退避しました: $DIR_PATH -> $BACKUP_PATH"
         fi
       fi
@@ -487,7 +514,7 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
     # シンボリックリンクを作成
     log_info "シンボリックリンクを作成: $DIR_PATH -> $LINK_TARGET"
     if [ "$DRY_RUN" = false ]; then
-      if ln -s "$LINK_TARGET" "$DIR_PATH"; then
+      if ln -s -- "$LINK_TARGET" "$DIR_PATH"; then
         log_success "作成成功: $DIR_PATH"
         PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
       else
@@ -498,7 +525,28 @@ for PATTERN in "${TARGET_PATTERNS[@]}"; do
       PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
     fi
 
-  done < <(find "$WORKS_DIR" \( -type d -o -type l \) \( -name "$PATTERN" -o -name node_modules -prune \) -print0 2>/dev/null | grep -z "/$PATTERN$" || true)
+  done < <(
+    # PRUNE_DIRSからPATTERNを除外したディレクトリを-pruneで除外
+    if [ ${#prune_list[@]} -gt 0 ]; then
+      # prune条件の構築
+      local -a prune_cond=()
+      local first=true
+      for dir in "${prune_list[@]}"; do
+        if [ "$first" = true ]; then
+          prune_cond=(-name "$dir")
+          first=false
+        else
+          prune_cond+=(-o -name "$dir")
+        fi
+      done
+      # find実行: 除外ディレクトリを-pruneし、PATTERNにマッチするものを検出
+      # 検出後は-pruneでその配下を探索しない
+      find "$WORKS_DIR" \( "${prune_cond[@]}" \) -prune -o \( -type d -o -type l \) -name "$PATTERN" -print0 -prune 2>/dev/null || true
+    else
+      # 除外対象がない場合（通常は発生しない）
+      find "$WORKS_DIR" \( -type d -o -type l \) -name "$PATTERN" -print0 -prune 2>/dev/null || true
+    fi
+  )
   set -e
 done
 
