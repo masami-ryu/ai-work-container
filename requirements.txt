@@ -1,0 +1,7 @@
+# Claude API Tool Search Tool Project Dependencies
+# Python >= 3.10 required
+
+# Core dependencies
+anthropic>=0.75.0
+
+# Development dependencies (install with: pip install -r requirements-dev.txt)

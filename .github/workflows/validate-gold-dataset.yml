@@ -1,0 +1,85 @@
+name: Validate Gold Dataset
+
+on:
+  pull_request:
+    paths:
+      - 'data/tool-search-gold.jsonl'
+      - 'scripts/mock-tools.json'
+      - 'scripts/validate-gold-dataset.py'
+      - '.github/workflows/validate-gold-dataset.yml'
+  push:
+    branches:
+      - main
+      - feature/**
+    paths:
+      - 'data/tool-search-gold.jsonl'
+      - 'scripts/mock-tools.json'
+      - 'scripts/validate-gold-dataset.py'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # No external dependencies needed for validation script
+
+      - name: Validate JSON Schema
+        run: |
+          echo "::group::Schema Validation"
+          python scripts/validate-gold-dataset.py --schema
+          echo "::endgroup::"
+
+      - name: Check Duplicate IDs
+        run: |
+          echo "::group::Duplicate ID Check"
+          python scripts/validate-gold-dataset.py --duplicates
+          echo "::endgroup::"
+
+      - name: Verify Expected Tools Exist
+        run: |
+          echo "::group::Tool Verification"
+          python scripts/validate-gold-dataset.py --tools
+          echo "::endgroup::"
+
+      - name: Check Test Case Balance
+        run: |
+          echo "::group::Balance Check"
+          python scripts/validate-gold-dataset.py --balance || true
+          echo "::endgroup::"
+        continue-on-error: true  # Warnings don't block merge
+
+      - name: Run All Validations
+        run: |
+          echo "::group::Complete Validation Report"
+          python scripts/validate-gold-dataset.py --all
+          echo "::endgroup::"
+
+  validate-quick:
+    name: Quick Validation (All Checks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run all validations
+        run: |
+          python scripts/validate-gold-dataset.py --all
