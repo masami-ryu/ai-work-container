@@ -54,6 +54,8 @@ List pull requests in a repository.
 - `base`: Filter by base branch
 - `sort`: Sort by (created, updated, popularity, long-running)
 - `direction`: Sort direction (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
 
 #### pull_request_read
 Get PR details, diff, status, files, comments, or reviews.
@@ -139,6 +141,8 @@ Get commit details including diff.
 - `repo` (required): Repository name
 - `sha` (required): Commit SHA
 - `include_diff`: Include file diffs (default: true)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
 
 ### Files
 
@@ -193,6 +197,9 @@ Search for repositories.
 - `query` (required): Search query
 - `sort`: Sort by (stars, forks, help-wanted-issues, updated)
 - `order`: Sort order (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
+- `minimal_output`: Return minimal repository information (default: true)
 
 #### search_code
 Search for code across all repositories.
@@ -201,6 +208,8 @@ Search for code across all repositories.
 - `query` (required): Search query
 - `sort`: Sort by (indexed)
 - `order`: Sort order (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
 
 #### search_issues
 Search for issues.
@@ -209,8 +218,10 @@ Search for issues.
 - `query` (required): Search query
 - `owner`: Repository owner (optional)
 - `repo`: Repository name (optional)
-- `sort`: Sort by (comments, reactions, created, updated)
+- `sort`: Sort by (comments, reactions, reactions-+1, reactions--1, reactions-smile, reactions-thinking_face, reactions-heart, reactions-tada, interactions, created, updated)
 - `order`: Sort order (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
 
 #### search_pull_requests
 Search for pull requests.
@@ -219,8 +230,20 @@ Search for pull requests.
 - `query` (required): Search query
 - `owner`: Repository owner (optional)
 - `repo`: Repository name (optional)
-- `sort`: Sort by (comments, reactions, created, updated)
+- `sort`: Sort by (comments, reactions, reactions-+1, reactions--1, reactions-smile, reactions-thinking_face, reactions-heart, reactions-tada, interactions, created, updated)
 - `order`: Sort order (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
+
+#### search_users
+Search for GitHub users.
+
+**Parameters:**
+- `query` (required): User search query (e.g., "john smith", "location:seattle", "followers:>100")
+- `sort`: Sort by (followers, repositories, joined)
+- `order`: Sort order (asc, desc)
+- `page`: Page number for pagination (min 1)
+- `perPage`: Results per page (min 1, max 100)
 
 ### Reviews
 
