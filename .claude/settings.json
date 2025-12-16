@@ -32,7 +32,9 @@
       "NotebookEdit",
       "TodoWrite",
       "mcp__context7",
-      "mcp__msdocs"
+      "mcp__msdocs",
+      "mcp__github-mcp-server",
+      "mcp__serena"
     ],
     "deny": [
       "Read(./.env)",
