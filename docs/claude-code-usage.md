@@ -223,6 +223,149 @@ claude mcp remove <server-name>
 bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
 ```
 
+## Claude Code Skills
+
+### Skillsとは
+
+Claude Code Skillsは、プロジェクト固有の専門知識をカプセル化する機能です。MCPツールやワークフローをSkillsとしてラップすることで、以下のメリットがあります：
+
+- **トークン削減**: セッション開始時に全MCPツール定義を読み込む代わりに、Skillsメタデータのみを読み込み（約60%削減）
+- **自動検出**: ユーザーの質問内容からClaude が自動的に適切なSkillを選択
+- **段階的読み込み**: 必要な時のみ詳細情報（SKILL.md本文、REFERENCE.md）を読み込み
+
+### 利用可能なSkills
+
+このプロジェクトでは、以下の7つのSkillsが利用可能です：
+
+#### MCPラッパーSkills
+
+1. **microsoft-docs-search**
+   - Microsoft公式ドキュメントの検索
+   - キーワード: "Microsoft", "Azure", "公式ドキュメント"
+   - 場所: `.claude/skills/microsoft-docs-search/`
+
+2. **code-examples-search**
+   - コード例とスニペットの検索
+   - キーワード: "コード例", "実装例", "サンプル"
+   - 場所: `.claude/skills/code-examples-search/`
+
+3. **github-operations**
+   - GitHub操作（Issue、PR、コミットなど）
+   - キーワード: "GitHub", "Issue", "PR", "コミット"
+   - 場所: `.claude/skills/github-operations/`
+
+4. **semantic-code-analysis**
+   - セマンティックコード分析（シンボル検索、リファクタリング）
+   - キーワード: "シンボル", "参照", "リファクタリング"
+   - 場所: `.claude/skills/semantic-code-analysis/`
+
+#### ワークフローSkills
+
+5. **planning-workflow**
+   - 実行可能なプラン作成
+   - キーワード: "プラン", "計画", "タスク分解"
+   - 場所: `.claude/skills/planning-workflow/`
+
+6. **document-workflow**
+   - ドキュメント作成・更新
+   - キーワード: "ドキュメント", "README", "説明書"
+   - 場所: `.claude/skills/document-workflow/`
+
+7. **review-workflow**
+   - PRレビュー実施
+   - キーワード: "レビュー", "PR", "コードレビュー"
+   - 場所: `.claude/skills/review-workflow/`
+
+### 使用方法
+
+Skillsは自動的に検出され使用されます。明示的に呼び出す必要はありません：
+
+```bash
+# 自動的にmicrosoft-docs-search Skillが使用される
+claude -p "Azure Functionsのベストプラクティスを教えて"
+
+# 自動的にplanning-workflow Skillが使用される
+claude -p "認証機能追加のプランを作成して"
+
+# 自動的にreview-workflow Skillが使用される
+claude -p "PR #123 をレビューして"
+```
+
+### Skillsのカスタマイズ
+
+プロジェクト固有のSkillを追加するには：
+
+1. `.claude/skills/[skill-name]/` ディレクトリを作成
+2. `SKILL.md` を作成し、YAML frontmatterで設定：
+   ```yaml
+   ---
+   name: my-skill
+   description: What this skill does and when to use it
+   ---
+   ```
+3. 必要に応じて `REFERENCE.md` で詳細情報を提供
+
+### トークン削減効果
+
+Skillsを使用することで、セッション開始時のトークン消費を大幅に削減できます：
+
+| 項目 | Skills導入前 | Skills導入後 | 削減効果 |
+|------|------------|------------|---------|
+| セッション開始時 | ~1,700トークン | ~700トークン | 約60%削減 |
+| MCPツール定義 | 全65+ツール | メタデータのみ | - |
+| 詳細読み込み | 常時 | 必要時のみ | - |
+
+### enableAllProjectMcpServers設定
+
+`.claude/settings.json` の `enableAllProjectMcpServers` 設定は、プロジェクト固有のMCPサーバーの自動承認を制御します。
+
+#### 推奨設定
+
+このプロジェクトでは **`true`** を推奨します。
+
+```json
+{
+  "enableAllProjectMcpServers": true
+}
+```
+
+#### 採用理由
+
+1. **利便性**: `.mcp.json` に定義された全MCPサーバー（context7, msdocs, github-mcp-server, serena, ide）がセッション開始時に自動的に利用可能になり、承認プロンプトの繰り返しが不要
+2. **Skillsとの相乗効果**: このプロジェクトではSkillsが導入済みのため、MCPツールは段階的に読み込まれ、初期トークン消費の増加が最小限に抑えられる
+3. **ワークフロー効率**: 開発作業中に頻繁にMCPツールを使用するため、即座に利用可能な状態が望ましい
+
+#### トレードオフ
+
+| 観点 | `true` (推奨) | `false` (デフォルト) |
+|------|--------------|---------------------|
+| **利便性** | ✅ 全MCPサーバーが即座に利用可能 | ❌ 使用前に毎回承認が必要 |
+| **初期トークン消費** | ⚠️ やや増加（Skills未導入時: +1,000トークン） | ✅ 最小限 |
+| **Skills導入時の消費** | ✅ 約700トークン（60%削減済み） | ✅ 初期は最小、必要時に増加 |
+| **セキュリティ** | ⚠️ 自動承認（信頼できるプロジェクトのみ） | ✅ 明示的承認 |
+| **ワークフロー** | ✅ スムーズ | ⚠️ 中断あり |
+
+#### 設定の動作
+
+**`true` の場合:**
+- セッション開始時に `.mcp.json` の全サーバーが自動的に読み込まれる
+- ユーザーへの承認プロンプトは表示されない
+- MCPツール定義がセッションコンテキストに含まれる（Skills導入時は最小化）
+
+**`false` の場合:**
+- MCPサーバーは初回使用時にのみ承認プロンプトが表示される
+- 承認されたサーバーのみが読み込まれる
+- 初期トークン消費は最小だが、対話が必要
+
+#### Skills導入の効果
+
+Skills導入により、`enableAllProjectMcpServers: true` でも初期トークン消費が大幅に削減されます：
+
+- **未導入**: セッション開始時に全MCPツール定義（65+ツール）を読み込み → ~1,700トークン
+- **導入済み**: Skillsメタデータのみを読み込み、詳細は必要時のみ → ~700トークン
+
+このため、利便性とトークン効率の両立が可能です。
+
 ## トラブルシューティング
 
 詳細なトラブルシューティング情報は [claude-code-mcp-setup.md](./claude-code-mcp-setup.md) を参照してください。
