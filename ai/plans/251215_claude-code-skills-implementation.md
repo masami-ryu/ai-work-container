@@ -106,6 +106,8 @@ Claude Code Skillsを導入し、MCPツールの段階的読み込みによっ�
 | TEST-009 | 回帰 | 既存slash commandsの動作確認 | /plan, /review, /docが引き続き動作 |
 | TEST-010 | 回帰 | 既存agentsの動作確認 | plan-creator, pr-reviewer, doc-writerが引き続き動作 |
 | TEST-011 | 回帰 | 意図しない自動起動の防止 | "GitHub Actions"などの言及でgithub-operations Skillが誤って起動しない |
+| TEST-012 | 静的 | Skillsリンク整合性チェック | `.claude/skills/**/SKILL.md` 内の `REFERENCE.md` リンクが全て有効（同ディレクトリにファイルが存在） |
+| TEST-013 | 静的 | Skills frontmatter検証 | 全 `SKILL.md` に有効な frontmatter（name, description）が存在する |
 
 ## 5. 成功基準
 
