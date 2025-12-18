@@ -1,5 +1,57 @@
 {
+    // GitHub Copilot Chat - ターミナルコマンド自動承認設定
+    // 最小許可の原則: 読み取り専用コマンドのみ自動承認
     "chat.tools.terminal.autoApprove": {
-        "/.*/": true
-    }
+        // Git コマンド（読み取り専用のみ）
+        "/^git\\s+(status|diff|log|show|branch|remote)\\b/": true,
+
+        // 安全な情報表示コマンド
+        "/^(ls|cat|head|tail|grep|pwd)\\b/": true,
+
+        // 危険なコマンドは手動承認必須
+        "/^rm\\b/": false,
+        "/^rm\\s+-rf\\b/": false,
+        "/^rmdir\\b/": false,
+        "/^del\\b/": false,
+        "/^curl\\b/": false,
+        "/^wget\\b/": false,
+        "/^chmod\\s+777\\b/": false,
+        "/^chmod\\s+-R\\b/": false,
+        "/^sudo\\b/": false,
+
+        // Git の変更操作は手動承認必須
+        "/^git\\s+(push|commit|reset|rebase|merge|add)\\b/": false,
+
+        // パッケージインストールも手動承認必須
+        "/^npm\\s+install\\b/": false,
+        "/^pip3?\\s+install\\b/": false,
+        "/^yarn\\s+install\\b/": false
+    },
+
+    // GitHub Copilot Chat - URL取得の自動承認設定
+    "chat.tools.urls.autoApprove": {
+        // 信頼できる公式ドキュメント
+        "https://docs.github.com/**": true,
+        "https://code.visualstudio.com/**": true,
+        "https://learn.microsoft.com/**": true,
+        "https://developer.mozilla.org/**": true,
+        "https://www.typescriptlang.org/**": true,
+        "https://nodejs.org/**": true,
+        "https://reactjs.org/**": true,
+        "https://react.dev/**": true,
+
+        // Stack Overflow
+        "https://stackoverflow.com/**": true,
+
+        // npm パッケージ情報
+        "https://www.npmjs.com/**": true,
+        "https://registry.npmjs.org/**": true
+    },
+
+    // GitHub Copilot Chat - グローバル自動承認は無効
+    "chat.tools.global.autoApprove": false,
+
+    // ターミナル自動承認機能の有効化
+    "chat.tools.terminal.enableAutoApprove": true,
+    "chat.tools.terminal.ignoreDefaultAutoApproveRules": false
 }
