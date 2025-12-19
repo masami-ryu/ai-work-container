@@ -1,7 +1,7 @@
 ---
 name: plan
 description: 実行可能なプランを作成する（タスク規模に応じてExpress/Standard/Comprehensiveワークフローを選択）
-allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs, mcp__serena
+allowed-tools: Read, Grep, Glob, Write
 argument-hint: タスクの概要または目的を入力してください（例: 「認証機能の追加」「パフォーマンス最適化」）
 ---
 
@@ -26,19 +26,14 @@ argument-hint: タスクの概要または目的を入力してください（�
    - 既存パターンの把握
    - 依存関係の理解
 
-4. **MCPツール活用**: 最新情報が必要な場合はMCPツールを使用
-   - msdocs: Microsoft/Azure公式ドキュメント
-   - context7: コード例・スニペット
-   - serena: セマンティックコード分析
+4. **プラン策定**: 具体的なステップに分解し、実行可能なプランを作成
 
-5. **プラン策定**: 具体的なステップに分解し、実行可能なプランを作成
-
-6. **品質検証**: 出力前に以下を確認
+5. **品質検証**: 出力前に以下を確認
    - 完全性: すべての要件が反映されているか
    - アクション可能性: 具体的なアクション動詞で始まっているか
    - 測定可能性: 完了条件は客観的に判断可能か
 
-7. **保存**: `ai/plans/YYMMDD_[タスク概要].md` に保存
+6. **保存**: `ai/plans/YYMMDD_[タスク概要].md` に保存
 
 ## 出力形式
 - テンプレート: @ai/templates/plan-template.md に準拠
