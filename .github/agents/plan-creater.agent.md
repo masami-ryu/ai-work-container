@@ -2,7 +2,7 @@
 name: PlanCreator
 description: 'プラン作成エージェント - タスク分析とベストプラクティスに基づく実行可能なプランを生成'
 argument-hint: 'タスクの目的や要件を入力してください（例: "新機能Xの実装計画を作成して"）'
-model: 'GPT-5.2 (Preview)'
+model: 'GPT-5.2'
 target: vscode
 tools: [
   # 情報収集・検索系
