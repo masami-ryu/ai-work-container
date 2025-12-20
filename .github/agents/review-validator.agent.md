@@ -2,7 +2,7 @@
 name: ReviewValidator
 description: 'レビュー結果を評価するエージェントです。既存のレビュー結果の分析し、潜在的な問題や改善点を特定します。'
 argument-hint: 'レビュー結果のファイルパスまたはPR番号（例: "ai/reviews/review_PR18_20251210.md" または "#18"）'
-model: 'GPT-5.2 (Preview)'
+model: 'GPT-5.2'
 target: vscode
 tools: [
   # 情報収集・検索系
@@ -16,17 +16,7 @@ tools: [
   'todo',
   # MCP: ドキュメント参照（再検証用）
   'context7/*',
-  'msdocs/*',
-  # MCP: GitHub情報取得
-  'github/pull_request_read',
-  'github/get_file_contents',
-  'github/list_commits',
-  'github/list_pull_requests',
-  'github/issue_read',
-  'github/search_code',
-  'github/get_commit',
-  # MCP: コード分析
-  'serena/*'
+  'msdocs/*'
 ]
 ---
 # Review Validator
