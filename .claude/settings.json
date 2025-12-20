@@ -52,7 +52,7 @@
     ],
     "defaultMode": "acceptEdits"
   },
-  "enableAllProjectMcpServers": true,
+  "enableAllProjectMcpServers": false,
   "env": {
     "MAX_THINKING_TOKENS": "30000",
     "BASH_DEFAULT_TIMEOUT_MS": "60000",
