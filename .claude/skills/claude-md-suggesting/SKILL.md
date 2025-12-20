@@ -1,6 +1,6 @@
 ---
 name: claude-md-suggesting
-description: CLAUDE.mdの更新提案を生成する。セッションで得られた新しい知見に基づいてCLAUDE.mdを更新すべき点を提案する。
+description: CLAUDE.mdの更新提案を生成する。セッション終了時やプロジェクト変更後、CLAUDE.mdやプロジェクトドキュメントの更新提案が必要な際に使用する。
 allowed-tools: [Read, Grep]
 ---
 
@@ -108,4 +108,5 @@ Assistant:
 
 ## Version History
 
+- **1.0.1** (2025-12-20): Description改善（具体的なトリガーを追加）
 - **1.0.0** (2025-12-20): 初版リリース
