@@ -16,20 +16,7 @@ tools: [
   'todo',
   # MCP: ドキュメント参照
   'context7/*',
-  'msdocs/*',
-  # MCP: GitHub情報取得（読み取り専用のみ）
-  'github/search_code',
-  'github/search_issues',
-  'github/search_pull_requests',
-  'github/search_repositories',
-  'github/list_commits',
-  'github/list_issues',
-  'github/list_pull_requests',
-  'github/get_file_contents',
-  'github/issue_read',
-  'github/pull_request_read',
-  # MCP: コード分析
-  'serena/*'
+  'msdocs/*'
 ]
 ---
 # Plan Creator
