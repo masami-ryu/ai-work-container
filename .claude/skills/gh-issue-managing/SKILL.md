@@ -6,6 +6,14 @@ allowed-tools: [Bash, Read]
 
 # GitHub Issue Managing
 
+## Contents
+- [概要](#概要)
+- [主要機能](#主要機能)
+- [使用方法](#使用方法)
+- [Examples](#examples)
+- [Guidelines](#guidelines)
+- [Limitations](#limitations)
+
 ## 概要
 
 このスキルはGitHub CLIを使用してIssuesの管理を支援する。Issue一覧の表示、詳細情報の取得、新規Issue作成、既存Issueの更新が可能。
@@ -48,6 +56,15 @@ gh issue view https://github.com/owner/repo/issues/123
 ```
 
 ### Issueの作成
+
+**作成前の検証**:
+1. タイトルが明確で具体的か確認
+2. 本文に必要な情報（再現手順、期待動作、実際の動作）が含まれているか確認
+3. 適切なラベルが選択されているか確認
+
+**検証に問題がある場合**: 内容を修正してから作成
+
+**検証通過後**:
 ```bash
 # 基本的な作成
 gh issue create --title "タイトル" --body "本文"
@@ -73,28 +90,81 @@ gh issue close <Issue番号>
 
 ## Examples
 
-**例1: 現在のリポジトリのオープンIssueを一覧表示**
+**例1: Issue一覧の表示**
+
+入力:
 ```
-User: "オープンしているIssueを教えて"
-Assistant: gh issue list を実行してIssue一覧を表示
+"オープンしているIssueを教えて"
 ```
 
-**例2: 特定のIssueの詳細を確認**
-```
-User: "Issue #15の内容を教えて"
-Assistant: gh issue view 15 を実行してIssue詳細を表示
-```
-
-**例3: 新しいバグIssueを作成**
-```
-User: "ログイン機能のバグを報告するIssueを作成して"
-Assistant: gh issue create --title "ログイン機能のバグ" --body "詳細な説明" --label bug を実行
+実行:
+```bash
+gh issue list
 ```
 
-**例4: Issueにラベルを追加**
+出力:
 ```
-User: "Issue #15に高優先度ラベルを追加して"
-Assistant: gh issue edit 15 --add-label "priority:high" を実行
+#15  Login page not responsive  bug           Open
+#14  Add dark mode feature      enhancement   Open
+```
+
+**例2: Issue詳細の確認**
+
+入力:
+```
+"Issue #15の内容を教えて"
+```
+
+実行:
+```bash
+gh issue view 15
+```
+
+出力:
+```
+Login page not responsive #15
+Open • user123 opened 3 days ago • 2 comments
+
+  ログインページがモバイルで正しく表示されません。
+
+  Labels: bug
+  Assignees: developer1
+```
+
+**例3: 新規Issue作成**
+
+入力:
+```
+"ログイン機能のバグを報告するIssueを作成して"
+```
+
+実行:
+```bash
+gh issue create --title "ログイン機能のバグ" --body "詳細な説明" --label bug
+```
+
+出力:
+```
+Creating issue in owner/repo
+
+https://github.com/owner/repo/issues/16
+```
+
+**例4: Issueラベル追加**
+
+入力:
+```
+"Issue #15に高優先度ラベルを追加して"
+```
+
+実行:
+```bash
+gh issue edit 15 --add-label "priority:high"
+```
+
+出力:
+```
+✓ Edited issue #15
 ```
 
 ## Guidelines

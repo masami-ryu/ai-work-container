@@ -6,6 +6,14 @@ allowed-tools: [Bash, Read]
 
 # GitHub PR Viewing
 
+## Contents
+- [概要](#概要)
+- [主要機能](#主要機能)
+- [使用方法](#使用方法)
+- [Examples](#examples)
+- [Guidelines](#guidelines)
+- [Limitations](#limitations)
+
 ## 概要
 
 このスキルはGitHub CLIを使用してPull Requestsの情報を参照し、レビューを支援する。PR一覧の表示、詳細情報の取得、コード差分の確認が可能。
@@ -54,22 +62,69 @@ gh pr diff <PR番号> --repo owner/repo
 
 ## Examples
 
-**例1: 現在のリポジトリのオープンPRを一覧表示**
+**例1: PR一覧の表示**
+
+入力:
 ```
-User: "オープンしているPRを教えて"
-Assistant: gh pr list を実行してPR一覧を表示
+"Show me all open pull requests"
 ```
 
-**例2: 特定のPRの詳細を確認**
-```
-User: "PR #42の内容を教えて"
-Assistant: gh pr view 42 を実行してPR詳細を表示
+実行:
+```bash
+gh pr list
 ```
 
-**例3: PRの変更内容を確認**
+出力:
 ```
-User: "PR #42のコード変更を見せて"
-Assistant: gh pr diff 42 を実行して差分を表示
+#42  Fix authentication bug  feature-auth  2 days ago
+#41  Update README          docs-update   1 week ago
+```
+
+**例2: PR詳細の確認**
+
+入力:
+```
+"PR #42の内容を教えて"
+```
+
+実行:
+```bash
+gh pr view 42
+```
+
+出力:
+```
+Fix authentication bug #42
+Open • feature-auth wants to merge 3 commits into main
+
+  認証処理のバグを修正しました。
+
+  +-----------------+
+  | 3 files changed |
+  | +45 -12         |
+  +-----------------+
+```
+
+**例3: PR差分の確認**
+
+入力:
+```
+"PR #42のコード変更を見せて"
+```
+
+実行:
+```bash
+gh pr diff 42
+```
+
+出力:
+```diff
+diff --git a/src/auth.js b/src/auth.js
+@@ -10,7 +10,7 @@
+-  if (user == null) {
++  if (!user) {
+     throw new Error("Unauthorized");
+   }
 ```
 
 ## Guidelines
