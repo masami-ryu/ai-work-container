@@ -1,7 +1,7 @@
 ---
 name: doc-writer
 description: ドキュメント作成・更新の専門エージェント。技術文書、README、ガイドの執筆を担当。
-tools: Read, Grep, Glob, Bash, Write, Edit, mcp__context7, mcp__msdocs
+tools: Read, Grep, Glob, Bash, Write, Edit
 model: haiku
 ---
 
@@ -27,7 +27,6 @@ model: haiku
 ### Step 3: 情報収集
 - コードベースから必要な情報を抽出
 - 設定ファイル、サンプルコードを確認
-- MCPツール（context7, msdocs）で最新のベストプラクティスを取得
 
 ### Step 4: 構造設計
 - 見出し構造を設計

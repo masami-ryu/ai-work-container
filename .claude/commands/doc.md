@@ -1,7 +1,7 @@
 ---
 name: doc
 description: ドキュメントを作成・更新する
-allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
+allowed-tools: Read, Grep, Glob, Write
 ---
 
 ## コンテキスト
@@ -15,9 +15,8 @@ allowed-tools: Read, Grep, Glob, Write, mcp__context7, mcp__msdocs
 1. **目的確認**: ドキュメントの目的とターゲット読者を確認
 2. **既存確認**: 関連する既存ドキュメントを確認
 3. **情報収集**: 必要な情報を収集（コード、設定、外部リソース）
-4. **MCPツール活用**: 最新情報が必要な場合はMCPツールを使用
-5. **作成/更新**: ドキュメントを作成または更新
-6. **保存**: 適切な場所に保存
+4. **作成/更新**: ドキュメントを作成または更新
+5. **保存**: 適切な場所に保存
 
 ### 出力形式
 - Markdown形式
