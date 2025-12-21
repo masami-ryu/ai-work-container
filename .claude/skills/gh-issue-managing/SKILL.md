@@ -6,17 +6,18 @@ allowed-tools: [Bash, Read]
 
 # GitHub Issue Managing
 
-## Contents
-- [概要](#概要)
-- [主要機能](#主要機能)
-- [使用方法](#使用方法)
-- [Examples](#examples)
-- [Guidelines](#guidelines)
-- [Limitations](#limitations)
+## 参照ガイド
+
+このスキルには以下の詳細ガイドラインが用意されています。必要に応じて参照してください:
+
+- [Issue作成・更新のベストプラクティス](guidelines/issue-best-practices.md): Issue作成・更新の詳細ガイド、チェックリスト、トラブルシューティング
+- [良い例・悪い例](examples/good-bad-examples.md): 具体的な実装例と判定基準
+
+---
 
 ## 概要
 
-このスキルはGitHub CLIを使用してIssuesの管理を支援する。Issue一覧の表示、詳細情報の取得、新規Issue作成、既存Issueの更新が可能。
+このスキルはGitHub CLIを使用してIssuesの管理を支援します。Issue一覧の表示、詳細情報の取得、新規Issue作成、既存Issueの更新が可能です。
 
 ## 主要機能
 
@@ -26,9 +27,12 @@ allowed-tools: [Bash, Read]
 - 既存Issueの更新（ラベル追加、アサイン変更）
 - Issue番号またはURL形式での指定サポート
 
-## 使用方法
+---
+
+## 基本的な使用方法
 
 ### Issue一覧の表示
+
 ```bash
 # デフォルト（現在のリポジトリのオープンIssue）
 gh issue list
@@ -44,6 +48,7 @@ gh issue list --label bug,enhancement
 ```
 
 ### Issue詳細の表示
+
 ```bash
 # Issue番号で指定
 gh issue view <Issue番号>
@@ -57,12 +62,15 @@ gh issue view https://github.com/owner/repo/issues/123
 
 ### Issueの作成
 
-**作成前の検証**:
-1. タイトルが明確で具体的か確認
-2. 本文に必要な情報（再現手順、期待動作、実際の動作）が含まれているか確認
-3. 適切なラベルが選択されているか確認
-
-**検証に問題がある場合**: 内容を修正してから作成
+**作成前の検証（必須）**:
+```
+Issue作成前チェックリスト:
+- [ ] タイトルが明確で具体的（50文字以内が推奨）
+- [ ] 種別が明記されている（Bug/Feature/Enhancement など）
+- [ ] 本文に必要な情報が含まれている
+- [ ] 適切なラベルが選択されている
+- [ ] 重複するIssueが存在しないことを確認済み
+```
 
 **検証通過後**:
 ```bash
@@ -72,116 +80,75 @@ gh issue create --title "タイトル" --body "本文"
 # ラベルとアサインを指定
 gh issue create --title "タイトル" --body "本文" --label bug --assignee username
 
-# 特定のリポジトリに作成
-gh issue create --title "タイトル" --body "本文" --repo owner/repo
+# HEREDOCで長い本文を指定
+gh issue create --title "タイトル" --body "$(cat <<'EOF'
+本文の内容
+複数行可能
+EOF
+)"
 ```
 
+詳細なベストプラクティスは [guidelines/issue-best-practices.md](guidelines/issue-best-practices.md) を参照してください。
+
 ### Issueの更新
+
 ```bash
 # ラベル追加
 gh issue edit <Issue番号> --add-label "priority:high"
 
+# ラベル削除
+gh issue edit <Issue番号> --remove-label "status:investigating"
+
 # アサイン変更
 gh issue edit <Issue番号> --add-assignee username
 
-# クローズ
+# クローズ（コメント推奨）
+gh issue comment <Issue番号> --body "クローズ理由"
 gh issue close <Issue番号>
 ```
 
-## Examples
+---
 
-**例1: Issue一覧の表示**
+## クイックリファレンス
 
-入力:
-```
-"オープンしているIssueを教えて"
-```
+### 推奨ラベル体系
 
-実行:
-```bash
-gh issue list
-```
+**種別ラベル**: `bug`, `feature`, `enhancement`, `documentation`, `question`
 
-出力:
-```
-#15  Login page not responsive  bug           Open
-#14  Add dark mode feature      enhancement   Open
-```
+**優先度ラベル**: `priority:critical`, `priority:high`, `priority:medium`, `priority:low`
 
-**例2: Issue詳細の確認**
+**ステータスラベル**: `status:investigating`, `status:in-progress`, `status:blocked`, `status:needs-review`
 
-入力:
-```
-"Issue #15の内容を教えて"
-```
+詳細なラベル運用ガイドラインは [guidelines/issue-best-practices.md#ラベル運用ガイドライン](guidelines/issue-best-practices.md#ラベル運用ガイドライン) を参照してください。
 
-実行:
-```bash
-gh issue view 15
-```
+---
 
-出力:
-```
-Login page not responsive #15
-Open • user123 opened 3 days ago • 2 comments
+## 重要なガイドライン
 
-  ログインページがモバイルで正しく表示されません。
+1. **検証優先**: Issue作成・更新前に必ずチェックリストで検証
+2. **具体性**: タイトル、本文、ラベルはすべて具体的に記述
+3. **コミュニケーション**: 更新時は必ずコメントで理由を記録
+4. **デフォルトリポジトリ**: 引数なしの場合は現在のリポジトリを使用
+5. **確認**: Issue作成・更新前にユーザーに確認を取る
 
-  Labels: bug
-  Assignees: developer1
-```
+---
 
-**例3: 新規Issue作成**
-
-入力:
-```
-"ログイン機能のバグを報告するIssueを作成して"
-```
-
-実行:
-```bash
-gh issue create --title "ログイン機能のバグ" --body "詳細な説明" --label bug
-```
-
-出力:
-```
-Creating issue in owner/repo
-
-https://github.com/owner/repo/issues/16
-```
-
-**例4: Issueラベル追加**
-
-入力:
-```
-"Issue #15に高優先度ラベルを追加して"
-```
-
-実行:
-```bash
-gh issue edit 15 --add-label "priority:high"
-```
-
-出力:
-```
-✓ Edited issue #15
-```
-
-## Guidelines
-
-- **デフォルトリポジトリ**: 引数なしの場合は現在のリポジトリを使用
-- **Issue番号とURL**: 両方の形式をサポート（柔軟性のため）
-- **状態フィルタ**: `--state` オプションでオープン、クローズ、全てを切り替え可能
-- **ラベルとアサイン**: 複数のラベル・アサインをカンマ区切りで指定可能
-- **確認**: Issueの作成・更新前にユーザーに確認を取る
-
-## Limitations
+## 制限事項
 
 - GitHub CLIが認証済みである必要がある（`gh auth status`で確認）
 - プライベートリポジトリにアクセスするには適切な権限が必要
 - Issue作成・更新には書き込み権限が必要
 - 大量のIssueを一度に操作すると時間がかかる場合がある
 
+---
+
+## トラブルシューティング
+
+一般的な問題と解決方法については [guidelines/issue-best-practices.md#トラブルシューティング](guidelines/issue-best-practices.md#トラブルシューティング) を参照してください。
+
+---
+
 ## Version History
 
+- **1.1.0** (2025-12-20): Progressive Disclosure適用、ベストプラクティスと例示を分離
 - **1.0.0** (2025-12-19): 初版リリース

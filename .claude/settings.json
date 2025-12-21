@@ -21,6 +21,7 @@
       "Bash(python:*)",
       "Bash(python3:*)",
       "Bash(claude mcp:*)",
+      "Bash(mkdir:*)",
       "Read(**)",
       "Grep",
       "Glob",
