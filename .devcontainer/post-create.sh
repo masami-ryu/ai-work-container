@@ -153,7 +153,11 @@ echo "  export PATH=\"$ANYENV_DIR/bin:\$PATH\""
 echo "  eval \"\$(anyenv init -)\"" 
 echo "  [ -d $NODENV_DIR ] && export NODENV_ROOT=\"$NODENV_DIR\" && export PATH=\"$NODENV_DIR/bin:\$PATH\" && command -v nodenv >/dev/null 2>&1 && eval \"\$(nodenv init -)\""
 echo ""
-echo "使用例: nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
+echo "使用例:"
+echo "  nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
+echo ""
+echo "重要: npm install -g でグローバルパッケージをインストールした後は、"
+echo "      必ず 'nodenv rehash' を実行してください。"
 echo ""
 
 # Node.js バージョンの自動検出とインストール
@@ -261,7 +265,7 @@ else
   echo "[警告] nodenv がインストールされていません。Node.js のセットアップをスキップします。"
 fi
 
-# Claude Code CLI のネイティブインストール
+# Claude Code CLI のnpmパッケージインストール
 echo "Claude Code CLI をインストール中..."
 
 # インストール済みチェック(冪等性確保)
@@ -275,35 +279,27 @@ else
   mkdir -p "$LOG_DIR"
   LOGFILE_CLAUDE="${LOG_DIR}/install-$(date '+%Y%m%d').log"
   touch "$LOGFILE_CLAUDE"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Claude Code CLI インストール開始" | tee -a "$LOGFILE_CLAUDE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Claude Code CLI (npm) インストール開始" | tee -a "$LOGFILE_CLAUDE"
 
   # 古いログファイルのクリーンアップ(7日以上前のログを削除)
   find "$LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
 
-  # アーキテクチャとOSの検出
-  ARCH=$(uname -m)
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  # Node.js のバージョン確認
+  NODE_VERSION=$(node -v 2>/dev/null || echo "none")
+  echo "Node.js バージョン: $NODE_VERSION" | tee -a "$LOGFILE_CLAUDE"
 
-  # アーキテクチャの正規化
-  case "$ARCH" in
-    x86_64|amd64)
-      ARCH="x64"
-      ;;
-    aarch64|arm64)
-      ARCH="arm64"
-      ;;
-    *)
-      echo "[エラー] サポートされていないアーキテクチャ: $ARCH" | tee -a "$LOGFILE_CLAUDE"
-      ;;
-  esac
+  # Node.js 18+ の確認
+  if ! node -v >/dev/null 2>&1; then
+    echo "[エラー] Node.js が見つかりません。Claude Code のインストールには Node.js 18+ が必要です。" | tee -a "$LOGFILE_CLAUDE"
+    exit 1
+  fi
 
-  # インストールスクリプトのダウンロードと実行
-  INSTALL_URL="https://claude.ai/install.sh"
+  # npm グローバルインストール
   MAX_RETRIES=3
   RETRY_COUNT=0
 
   while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -fsSL "$INSTALL_URL" 2>&1 | tee -a "$LOGFILE_CLAUDE" | bash; then
+    if npm install -g @anthropic-ai/claude-code 2>&1 | tee -a "$LOGFILE_CLAUDE"; then
       echo "Claude Code CLI のインストールに成功しました。" | tee -a "$LOGFILE_CLAUDE"
       break
     else
@@ -317,24 +313,23 @@ else
     fi
   done
 
-  # インストール先の確認とPATH設定
-  CLAUDE_INSTALL_DIR="$HOME/.local/bin"
-  if [ ! -d "$CLAUDE_INSTALL_DIR" ]; then
-    CLAUDE_INSTALL_DIR="/usr/local/bin"
-  fi
+  # npm global bin ディレクトリの確認
+  NPM_BIN_DIR=$(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")
+  echo "npm global bin ディレクトリ: $NPM_BIN_DIR" | tee -a "$LOGFILE_CLAUDE"
 
   # PATH への追加(存在しない場合のみ)
-  if [ -d "$CLAUDE_INSTALL_DIR" ]; then
-    export PATH="$CLAUDE_INSTALL_DIR:$PATH"
-    
+  if [ -d "$NPM_BIN_DIR" ]; then
+    export PATH="$NPM_BIN_DIR:$PATH"
+
     # 各シェル設定ファイルへの PATH 追加(bash / zsh 対応)
     for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
       if [ -f "$SHELL_RC" ]; then
-        if ! grep -q "# Claude Code CLI" "$SHELL_RC"; then
+        if ! grep -q "# Claude Code CLI (npm)" "$SHELL_RC"; then
           echo "" >> "$SHELL_RC"
-          echo "# Claude Code CLI" >> "$SHELL_RC"
-          echo "export PATH=\"$CLAUDE_INSTALL_DIR:\$PATH\"" >> "$SHELL_RC"
-          echo "$(basename $SHELL_RC) に Claude Code CLI の PATH を追加しました" | tee -a "$LOGFILE_CLAUDE"
+          echo "# Claude Code CLI (npm)" >> "$SHELL_RC"
+          echo "NPM_BIN_DIR=\$(npm bin -g 2>/dev/null || echo \"\$HOME/.npm-global/bin\")" >> "$SHELL_RC"
+          echo "export PATH=\"\$NPM_BIN_DIR:\$PATH\"" >> "$SHELL_RC"
+          echo "$(basename $SHELL_RC) に Claude Code CLI (npm) の PATH を追加しました" | tee -a "$LOGFILE_CLAUDE"
         fi
       fi
     done

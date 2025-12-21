@@ -230,13 +230,79 @@ bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
 ### よくある問題
 
 #### Claude CLIが見つからない
+
+Claude Code CLIはnpmパッケージとしてインストールされています。
+
+##### ステップ1: nodenv rehashを実行（最重要）
+
+`npm install -g` でグローバルパッケージをインストールした後は、**必ず** `nodenv rehash` を実行してください。
+
+```bash
+# nodenv rehash を実行
+nodenv rehash
+
+# 確認
+claude --version
+which claude
+```
+
+**これで解決する場合がほとんどです。** 以下のケースでは必ずrehashが必要です:
+
+- `npm install -g @anthropic-ai/claude-code` を実行した後
+- `npm uninstall -g <package>` を実行した後
+- `npm update -g <package>` を実行した後
+- `npm link` を実行した後
+
+##### ステップ2: PATHを確認（rehashで解決しない場合）
+
 ```bash
 # PATHを確認
-echo $PATH | grep -o "$HOME/.local/bin"
+NPM_BIN_DIR=$(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")
+echo $PATH | grep -o "$NPM_BIN_DIR"
 
 # 見つからない場合は追加
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$NPM_BIN_DIR:$PATH"
 source ~/.bashrc
+
+# インストール状況を確認
+npm list -g @anthropic-ai/claude-code
+```
+
+##### ステップ3: shimの確認
+
+```bash
+# nodenvのshimが生成されているか確認
+ls -la ~/.nodenv/shims/claude
+
+# shimが存在しない場合は再度rehash
+nodenv rehash
+```
+
+#### Node.jsのバージョン問題
+
+Claude Code CLI には Node.js 18+ が必要です。
+
+```bash
+# バージョン確認
+node -v
+
+# Node.js 18+ のインストール
+nodenv install 18.20.1
+nodenv global 18.20.1
+nodenv rehash
+```
+
+#### npmインストールの失敗
+
+```bash
+# キャッシュをクリア
+npm cache clean --force
+
+# 再インストール
+npm install -g @anthropic-ai/claude-code
+
+# ログを確認
+cat ~/.cache/claude-install-logs/install-$(date +%Y%m%d).log
 ```
 
 #### MCPサーバーが接続できない

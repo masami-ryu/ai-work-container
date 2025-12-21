@@ -98,9 +98,56 @@ claude
 ## トラブルシューティング
 
 ### Claude CLIが見つからない
+
+Claude Code CLIはnpmパッケージとしてインストールされています。
+
+#### 原因1: nodenv rehashが必要
+
+**最も一般的な原因**: `npm install -g` でグローバルパッケージをインストールした後、nodenvのshimを更新していない。
+
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+# nodenv rehash を実行
+nodenv rehash
+
+# 確認
+claude --version
+```
+
+**重要**: `npm install -g`、`npm uninstall -g`、`npm update -g` などのグローバルパッケージ操作の後は、必ず `nodenv rehash` を実行してください。
+
+#### 原因2: PATHが正しく設定されていない
+
+```bash
+# npm global bin ディレクトリをPATHに追加
+NPM_BIN_DIR=$(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")
+export PATH="$NPM_BIN_DIR:$PATH"
 source ~/.bashrc
+
+# インストール状況を確認
+npm list -g @anthropic-ai/claude-code
+```
+
+### Node.jsのバージョンが古い
+
+Claude Code CLI には Node.js 18+ が必要です。
+
+```bash
+# 現在のバージョンを確認
+node -v
+
+# Node.js 18+ をインストール（必要に応じて）
+nodenv install 18.20.1
+nodenv global 18.20.1
+nodenv rehash
+```
+
+### npmのキャッシュをクリア
+
+インストールに失敗する場合は、npmのキャッシュをクリアしてください。
+
+```bash
+npm cache clean --force
+npm install -g @anthropic-ai/claude-code
 ```
 
 ### MCPサーバーの確認
