@@ -1,5 +1,5 @@
 ---
-name: pr-reviewer
+name: code-reviewer
 description: コードレビューの専門エージェント。PR/git差分/Markdownレビュー結果に対応し、コード品質・セキュリティ・パフォーマンスを評価。
 tools: Read, Grep, Glob, Bash, WebFetch, Write, Edit
 ---
