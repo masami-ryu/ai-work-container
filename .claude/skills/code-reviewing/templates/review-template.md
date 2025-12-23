@@ -1,10 +1,15 @@
-# PR Review: [タイトル]
+# Code Review: [タイトル]
 
-## 概要
+## レビュー対象情報
+- **種別**: PR / git差分 / Markdownメタ
+- **対象**:
+  - PR: PR番号またはURL
+  - git差分: 差分範囲（例: `git diff --staged`, `main...feature`）
+  - Markdownメタ: ファイルパス（例: `ai/reviews/251220_pr-123-review.md`）
 - 変更ファイル数: X
 - 差分行数: X
 - レビュータイプ: Standard/Deep Review
-- PRタイプ: 機能追加/バグ修正/リファクタリング
+- 変更タイプ: 機能追加/バグ修正/リファクタリング
 
 ## フェーズ実行結果
 - ✅ Phase 1: 初期分析
