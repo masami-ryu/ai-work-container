@@ -10,87 +10,32 @@ tools: Read, Grep, Glob, Bash, WebFetch, Write, Edit
 
 ## ワークフロー
 
-### 1. 入力形式の判定
+### 1. review-input-handler skillの呼び出し
 
-ユーザー入力を以下の優先順位で判定します:
+ユーザー入力を `review-input-handler` skill に渡して、入力形式の判定と情報取得を実施します。
 
-#### 1.1 PR番号またはURL（最優先）
-
-以下のいずれかに該当する場合、PRレビューとして処理:
-
-- `#` で始まる（例: `#123`）→ PR番号を抽出
-- `github.com/` を含むURL（例: `https://github.com/owner/repo/pull/123`）→ owner, repo, PR番号を抽出
-- 数字のみ（例: `123`）→ PR番号として使用
-
-#### 1.2 git差分コマンド
-
-`git diff` で始まる場合、git差分レビューとして処理:
-
-- `git diff --staged` - ステージング済み変更
-- `git diff main...feature` - ブランチ間差分
-- `git diff HEAD~3..HEAD` - コミット範囲
-
-**重要**: `diff --git a/...` 形式の差分テキスト貼り付けは非対応。コマンド文字列のみ受理。
-
-#### 1.3 Markdownファイルパス
-
-`.md` で終わる場合、メタレビューとして処理:
-
-- `ai/reviews/251220_pr-123-review.md` - 既存レビュー結果のメタレビュー
-
-#### 1.4 判定不能時
-
-上記のいずれにも該当しない場合、エラーメッセージで受け付ける形式を提示:
-
+**呼び出し例**:
 ```
-受け付ける形式:
-- PR URL: https://github.com/owner/repo/pull/123
-- PR番号: #123
-- git diffコマンド: git diff --staged
-- Markdownパス: ai/reviews/251220_pr-123-review.md
+Skill: review-input-handler
+
+入力: <ユーザー入力>
+
+構造化データを取得してください。
 ```
 
-### 2. 情報取得
+**受け取るデータ**:
+- `review_target_type`: `"pr"` | `"diff"` | `"meta"`
+- `review_context`:
+  - `repo`: (PR時のみ) リポジトリ名（例: `"anthropics/claude-code"`）
+  - `pr_number`: (PR時のみ) PR番号
+  - `diff_text`: (必須) 差分テキストまたはレビュー結果
+  - `changed_files`: (PR/diff時) 変更ファイル一覧
+  - `original_input`: 元の入力（ログ用）
 
-判定された入力形式に応じて情報を取得します。
+**エラー時の対応**:
+`review-input-handler` skill からエラーが返された場合、そのエラーメッセージをユーザーに伝えて処理を中断します。
 
-#### 2.1 PR情報取得
-
-```bash
-# PR詳細取得（タイトル、説明、作成者など）
-gh pr view <PR番号> [--repo owner/repo]
-
-# PR差分取得
-gh pr diff <PR番号> [--repo owner/repo]
-
-# 変更ファイル一覧取得
-gh pr view <PR番号> --json files [--repo owner/repo]
-```
-
-**外部リポジトリの場合**: URL から抽出した `owner/repo` を `--repo` オプションに指定
-
-#### 2.2 git差分取得
-
-```bash
-# ユーザー指定のgit diffコマンドを実行
-<user-provided-git-diff-command>
-
-# 変更ファイル一覧取得
-git diff --name-status <同じ引数>
-```
-
-**変更ファイルの内容確認**:
-1. `git diff --name-status` で変更ファイル一覧を取得
-2. 各ファイルに対して `Read` で内容を確認
-
-#### 2.3 Markdownファイル読み込み
-
-```bash
-# Readツールでメタレビュー対象のMarkdownファイルを読み込み
-Read <markdownファイルパス>
-```
-
-### 3. code-reviewing skillの呼び出し
+### 2. code-reviewing skillの呼び出し
 
 取得した情報を `code-reviewing` skill に渡してレビューを実施します。
 
@@ -118,11 +63,11 @@ Skill: code-reviewing
 レビューを実施してください。
 ```
 
-### 4. レビュー結果の保存
+### 3. レビュー結果の保存
 
 `code-reviewing` skill から受け取ったレビュー結果を `ai/reviews/` に保存します。
 
-#### 4.1 保存ファイル命名規則
+#### 3.1 保存ファイル命名規則
 
 **形式**: `YYMMDD_HHmm_[概要].md`
 
@@ -148,7 +93,7 @@ Skill: code-reviewing
    - 例: `ai/reviews/251220_pr-123-review.md` のメタレビュー
    - → `251224_1430_meta_251220_pr-123-review_review.md`
 
-#### 4.2 保存処理
+#### 3.2 保存処理
 
 ```bash
 # 現在時刻の取得（YYMMdd_HHmm形式）
@@ -163,7 +108,7 @@ Write ai/reviews/<生成したファイル名>
 
 **衝突回避**: 同じファイル名が既に存在する場合（同じ分内に複数レビュー）、エラーメッセージで通知し、数分後に再実行するようユーザーに伝える。
 
-### 5. ユーザーへの報告
+### 4. ユーザーへの報告
 
 レビュー完了後、以下の情報をユーザーに報告します:
 
