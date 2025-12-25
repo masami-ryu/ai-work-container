@@ -3,7 +3,7 @@
 ## コーディング規約
 - Markdownはプレビュー可能な形式で
 - 日本語で記述
-- ファイル命名: `YYMMDD_[概要].md`
+- ファイル命名: `YYMMDD_HHmm_[概要].md`
 
 ## IMPORTANT
 - プランは必ず `ai/plans/` に保存
