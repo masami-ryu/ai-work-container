@@ -1,28 +1,11 @@
 ---
 name: code-reviewing
-description: コードレビューの専門スキル。5段階レビュープロセス（初期分析→詳細分析→ベストプラクティス参照→統合評価→品質検証）でコード品質・セキュリティ・パフォーマンスを評価。
-allowed-tools: [Read, Grep, Glob, WebFetch]
+description: コードレビューの専門スキル。5段階レビュープロセス（初期分析→詳細分析→ベストプラクティス参照→統合評価→品質検証）でコード品質・セキュリティ・パフォーマンスを評価。(1) PR番号やURLを指定したPRレビュー、(2) git差分（staged, main...feature等）のレビュー、(3) 既存レビューファイルのメタレビュー、のいずれかが必要な場合に使用。
 ---
 
 # Code Reviewing
 
-## Contents
-- [概要](#概要)
-- [主要機能](#主要機能)
-- [5段階レビュープロセス](#5段階レビュープロセス)
-- [Guidelines](#guidelines)
-- [Limitations](#limitations)
-
-## 概要
-
-このスキルはコード品質、セキュリティ、パフォーマンス、テスト、設計を総合的に評価し、エビデンスベースのフィードバックを提供します。
-
-## 主要機能
-
-- 5段階レビュープロセスによる体系的な評価
-- レビュー観点別評価（品質/セキュリティ/パフォーマンス/テスト/設計）
-- エビデンスベースのフィードバック（目標80%以上）
-- Markdownレビュー結果のメタレビュー対応
+コード品質・セキュリティ・パフォーマンス・テスト・設計を5段階プロセスで体系的に評価し、80%以上のエビデンス付きフィードバックを提供する。
 
 ## 5段階レビュープロセス
 
@@ -34,26 +17,9 @@ allowed-tools: [Read, Grep, Glob, WebFetch]
 | **4. 統合評価** | レビュー観点別に評価 | Phase 1-3の情報を統合、エビデンス付与（80%以上） |
 | **5. 品質検証** | レビュー結果を検証 | チェックリスト実行、評価結果をコマンドに返却 |
 
-## Guidelines
+## リファレンス
 
-### レビュー観点
-
-各観点の詳細ガイドラインは以下を参照:
-
-- **コード品質**: [guidelines/code-quality.md](guidelines/code-quality.md)
-- **セキュリティ**: [guidelines/security.md](guidelines/security.md)
-- **パフォーマンス**: [guidelines/performance.md](guidelines/performance.md)
-- **テスト**: [guidelines/testing.md](guidelines/testing.md)
-- **設計**: [guidelines/design.md](guidelines/design.md)
-
-### エビデンスベースのフィードバック
-
-全指摘の80%以上にエビデンス（公式ドキュメント、コード例、影響範囲）を付与。詳細は [guidelines/feedback-format.md](guidelines/feedback-format.md) を参照。
-
-### 出力フォーマット
-
-レビュー結果のテンプレートは [templates/review-template.md](templates/review-template.md) を参照。レビュー結果は構造化されたMarkdown形式でコマンドに返却します。
-
-### 自己検証チェックリスト
-
-レビュー完了前に [guidelines/checklist.md](guidelines/checklist.md) のチェックリストを実行（目標: 全項目クリア）。
+- **レビュー観点詳細**: [references/review-guidelines.md](references/review-guidelines.md) - 品質/セキュリティ/パフォーマンス/テスト/設計の評価基準
+- **フィードバック形式**: [references/feedback-format.md](references/feedback-format.md) - エビデンスベースの指摘形式
+- **出力テンプレート**: [references/review-template.md](references/review-template.md) - レビュー結果の構造化形式
+- **自己検証チェックリスト**: [references/checklist.md](references/checklist.md) - レビュー完了前の確認項目
