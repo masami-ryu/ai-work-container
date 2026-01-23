@@ -54,36 +54,7 @@
     ],
     "defaultMode": "acceptEdits"
   },
-  "enableAllProjectMcpServers": false,
   "env": {
-    "MAX_THINKING_TOKENS": "30000",
-    "BASH_DEFAULT_TIMEOUT_MS": "60000",
-    "MCP_TIMEOUT": "60000",
-    "MCP_TOOL_TIMEOUT": "120000",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16000"
-  },
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/session-start.sh"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/auto-approve-docs.sh"
-          }
-        ]
-      }
-    ]
+    "ENABLE_TOOL_SEARCH": "true"
   }
 }
