@@ -46,7 +46,7 @@ Expressワークフローでは、プラン作成直後に1回のみ検証:
 ```markdown
 # README更新プラン
 
-作成日: 2025年12月20日
+作成日: YYYY年MM月DD日
 作成者: Plan Creator
 ステータス: Draft
 
