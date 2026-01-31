@@ -1,5 +1,11 @@
 # Standard ワークフロー（標準プラン）
 
+## Contents
+- [適用条件](#適用条件)
+- [適用例](#適用例)
+- [プロセス](#プロセス)
+- [出力](#出力)
+
 ## 適用条件
 
 - 中程度の複雑さ
@@ -21,13 +27,7 @@
 - スコープと期待される成果を定義
 - 前提条件を確認
 
-**`AskUserQuestion`で確認すべき状況**:
-
-| 状況 | 質問例 |
-|------|--------|
-| スコープが曖昧 | 「〇〇機能も対象に含めますか？」 |
-| 複数要件に優先度がない | 「要件の優先順位を教えてください」 |
-| 破壊的変更の可能性 | 「既存APIの互換性をどこまで維持しますか？」 |
+スコープや優先度が曖昧な場合は`AskUserQuestion`で確認（SKILL.md参照）。
 
 ### 2. 情報収集
 
@@ -49,22 +49,7 @@
 - ベストプラクティスを確認
 - 複数の実装案を比較
 
-**`AskUserQuestion`で選択を促す状況**:
-
-複数の妥当なアプローチが存在する場合、ユーザーに選択を促す。
-
-```yaml
-# 例: データ取得戦略
-question: "データ取得のアプローチを選択してください"
-header: "Data Fetch"
-options:
-  - label: "REST API（推奨）"
-    description: "既存パターンと整合、実装コスト低"
-  - label: "GraphQL"
-    description: "柔軟なクエリ、オーバーフェッチ防止"
-  - label: "gRPC"
-    description: "高パフォーマンス、型安全"
-```
+複数の妥当なアプローチが存在する場合は`AskUserQuestion`で選択を促す（SKILL.md参照）。
 
 ### 4. プラン作成
 
@@ -87,5 +72,6 @@ SKILL.mdの「品質チェックリスト」を実行。重大リスク検出時
 
 ### 6. 出力
 
-- `ai/plans/YYMMDD_[概要].md`に保存
+- テンプレート [assets/plan-template.md](../assets/plan-template.md) を使用
+- `ai/plans/YYMMDD_HHmm_[概要].md`に保存
 - ステータス: Ready for Implementation

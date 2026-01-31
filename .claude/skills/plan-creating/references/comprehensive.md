@@ -30,6 +30,8 @@
 - 制約条件を確認
 - ステークホルダーの特定
 
+スコープや優先度が曖昧な場合は`AskUserQuestion`で確認（SKILL.md参照）。
+
 ### 2. 詳細調査
 
 - `Grep`/`Glob`でコードベース全体を検索
@@ -69,6 +71,8 @@
 - [ ] 互換性リスク
 - [ ] スケジュールリスク
 
+重大リスク検出時は`AskUserQuestion`でリスク許容度を確認。
+
 ### 5. プラン作成
 
 - 詳細なPhase別ステップを作成
@@ -97,6 +101,7 @@ SKILL.mdの「品質チェックリスト」を実行。
 
 ### 7. 出力
 
-- `ai/plans/YYMMDD_[概要].md`に保存
+- テンプレート [assets/plan-template.md](../assets/plan-template.md) を使用（全セクション必須）
+- `ai/plans/YYMMDD_HHmm_[概要].md`に保存
 - ステータス: Ready for Implementation
 - 必要に応じてレビュー依頼

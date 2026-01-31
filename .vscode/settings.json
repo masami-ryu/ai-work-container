@@ -50,4 +50,7 @@
 
     // ターミナル自動承認機能の有効化
     "chat.tools.terminal.enableAutoApprove": true,
+
+    // エージェントスキルの有効化
+    "chat.useAgentSkills": true,
 }
