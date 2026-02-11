@@ -31,10 +31,7 @@
 
 ### 2. 情報収集
 
-- `Grep`/`Glob`でコードベースを検索
-- 関連ファイルと既存パターンを把握
-- 依存関係を分析
-- 技術的制約を確認
+- 情報収集の一般手順は SKILL.md の「共通プロセス」を参照（Standardでは依存関係/技術的制約まで含めて確認）
 
 **完了条件**:
 - [ ] 対象ファイルの特定完了
@@ -44,9 +41,9 @@
 
 ### 3. 設計検討
 
-- `WebFetch`で最新情報を取得
-- 業界標準の設計パターンを参照
-- ベストプラクティスを確認
+- コードベース内の既存パターン・規約を優先的に参照
+- 補助的に`WebFetch`で最新情報を取得
+- 業界標準の設計パターンとベストプラクティスを確認
 - 複数の実装案を比較
 
 複数の妥当なアプローチが存在する場合は`AskUserQuestion`で選択を促す（SKILL.md参照）。
@@ -73,5 +70,7 @@ SKILL.mdの「品質チェックリスト」を実行。重大リスク検出時
 ### 6. 出力
 
 - テンプレート [assets/plan-template.md](../assets/plan-template.md) を使用
-- `ai/plans/YYMMDD_HHmm_[概要].md`に保存
-- ステータス: Ready for Implementation
+- `ai/plans/YYMMDD_HHmm_[概要].md`に保存（`HHmm` はJST/UTC+9）
+- ステータス: Draft
+- 各タスクの実装指示が必要な場合、[assets/task-template.md](../assets/task-template.md) で個別指示書を作成
+- プラン保存後、`/code-reviewing ai/plans/[作成したプラン].md` でレビュー実行を推奨

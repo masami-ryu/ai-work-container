@@ -7,8 +7,9 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 
 タスクを分析し、実行可能なプランを作成。
 
-- **出力先**: `ai/plans/YYMMDD_HHmm_[概要].md`
-- **テンプレート**: [assets/plan-template.md](assets/plan-template.md)
+- **出力先**: `ai/plans/YYMMDD_HHmm_[概要].md`（`HHmm` はJST/UTC+9。取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`）
+- **プランテンプレート**: [assets/plan-template.md](assets/plan-template.md)
+- **タスク実装指示書テンプレート**: [assets/task-template.md](assets/task-template.md) — プラン内の各タスクを実装者に引き渡す際に使用
 - **制限**: ソースコード直接編集は行わない
 
 ## ワークフロー選択
@@ -19,14 +20,16 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 | Standard | 3-10ファイル、中程度の複雑さ | [references/standard.md](references/standard.md) |
 | Comprehensive | 10ファイル以上、アーキテクチャ変更 | [references/comprehensive.md](references/comprehensive.md) |
 
+迷った場合は上位のワークフローを選択（例: Express/Standard間で迷えばStandard）。ファイル数が少なくても論理的複雑さや影響範囲が大きい場合は上位を選択。
+
 ## 共通プロセス
 
 1. **目的明確化** → 曖昧さは`AskUserQuestion`で確認
 2. **情報収集** → `Grep`/`Glob`で検索、依存関係分析
-3. **設計検討** → `WebFetch`で調査（必要時）
+3. **設計検討** → コードベース内の既存パターンを優先、補助的に`WebFetch`で調査
 4. **ステップ分解** → アクションアイテム化、Phase分割
 5. **品質検証** → チェックリスト実行
-6. **出力** → `ai/plans/YYMMDD_HHmm_[概要].md`に保存
+6. **出力** → `ai/plans/YYMMDD_HHmm_[概要].md`に保存（`HHmm` はJST/UTC+9）
 
 各ワークフローの詳細プロセスは参照ファイルを確認。
 
@@ -38,8 +41,6 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 | 設計検討 | 複数の妥当なアプローチあり | 最適解が1つ |
 | リスク判断 | 破壊的変更/高コスト | 軽微なリスク |
 
-**ベストプラクティス**: 関連質問をまとめる（最大4問）、推奨オプションを先頭に`（推奨）`付与、各オプションに説明追加
-
 **質問例**:
 
 | 状況 | 質問例 |
@@ -49,25 +50,9 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 | 破壊的変更の可能性 | 「既存APIの互換性をどこまで維持しますか？」 |
 | 複数の実装アプローチ | 「データ取得のアプローチを選択してください」 |
 
-**選択肢提示フォーマット例**:
-
-```yaml
-# 例: データ取得戦略
-question: "データ取得のアプローチを選択してください"
-header: "Data Fetch"
-options:
-  - label: "REST API（推奨）"
-    description: "既存パターンと整合、実装コスト低"
-  - label: "GraphQL"
-    description: "柔軟なクエリ、オーバーフェッチ防止"
-  - label: "gRPC"
-    description: "高パフォーマンス、型安全"
-```
-
 ## プランレビュー/修正
 
-- **レビュー**: プラン読込 → 妥当性評価 → 改善点特定 → `ai/reviews/`に保存
-- **修正**: 修正箇所特定 → 再調査 → 修正実施 → 再検証
+詳細は [references/plan-revision.md](references/plan-revision.md) を参照。
 
 ## 品質チェックリスト
 
