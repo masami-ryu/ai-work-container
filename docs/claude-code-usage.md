@@ -175,7 +175,7 @@ argument-hint: タスクの概要または目的を入力してください
 1. 目的の明確化
 2. 情報収集
 3. プラン策定
-4. 保存: `ai/plans/YYMMDD_[タスク概要].md` に保存
+4. 保存: `ai/plans/YYMMDD_HHmm_[概要].md` に保存（HHmmはJST/UTC+9）
 ```
 
 ### カスタムサブエージェント

@@ -73,7 +73,7 @@ model: opus
 
 ## タスク
 タスク規模を評価し、適切なワークフローを選択してプランを作成。
-保存先: `ai/plans/YYMMDD_[タスク概要].md`
+保存先: `ai/plans/YYMMDD_HHmm_[概要].md`（HHmmはJST/UTC+9）
 ```
 
 ## カスタムエージェントの作成
