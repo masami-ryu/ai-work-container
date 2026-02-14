@@ -1,10 +1,12 @@
 # プロジェクト: ai-work-container
 
-## コーディング規約
-- Markdownはプレビュー可能な形式で
-- 日本語で記述
-- ファイル命名: `YYMMDD_HHmm_[概要].md`
+## 共通規約
 
-## IMPORTANT
-- プランは必ず `ai/plans/` に保存
-- レビュー結果は `ai/reviews/` に保存
+- 日本語で記述
+- Markdownは正しい構文で記述（見出しレベルの順守、リスト前後の空行）
+- 成果物ファイルの命名: `YYMMDD_HHmm_[概要].md`（`HHmm` はJST / UTC+9）
+  - 取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`
+
+## サブプロジェクト
+
+`works*` は独立したリポジトリ。プロジェクト固有のルールは `works*/CLAUDE.md` を参照。
