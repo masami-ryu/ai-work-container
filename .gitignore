@@ -5,3 +5,16 @@
 .claude/settings.local.json
 
 works*
+
+# 環境変数ファイル
+.env
+
+# Python のキャッシュファイルや仮想環境、ビルド成果物など
+.pytest_cache/
+__pycache__/
+.venv/
+*.egg-info/
+
+# slack-bridge のローカル生成物（コミットしない）
+slack-bridge/audit.db
+
