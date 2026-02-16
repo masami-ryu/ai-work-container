@@ -1,4 +1,4 @@
-"""RequestBridge のユニットテスト (TEST-001, 002, 011, 012)"""
+"""RequestBridge のユニットテスト"""
 
 from __future__ import annotations
 
@@ -105,17 +105,3 @@ async def test_confirm_selections():
     }
     assert req.event.is_set()
     assert not bridge.has_pending(cid)
-
-
-# スレッド相関: register_thread / get_correlation_for_thread
-def test_thread_correlation():
-    bridge = RequestBridge()
-
-    bridge.register_thread("ts1", "cid1", 0)
-    bridge.register_thread("ts2", "cid1", 1)
-    bridge.register_thread("ts3", "cid2", 0)
-
-    assert bridge.get_correlation_for_thread("ts1") == ("cid1", 0)
-    assert bridge.get_correlation_for_thread("ts2") == ("cid1", 1)
-    assert bridge.get_correlation_for_thread("ts3") == ("cid2", 0)
-    assert bridge.get_correlation_for_thread("ts_unknown") is None

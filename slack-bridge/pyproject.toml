@@ -20,6 +20,7 @@ dev = [
 ]
 
 [project.scripts]
+sb = "src.runner:main"
 slack-bridge = "src.runner:main"
 
 [tool.setuptools.packages.find]

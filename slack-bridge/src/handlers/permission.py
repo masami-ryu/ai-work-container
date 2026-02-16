@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# タイムアウト後のボタンクリック時の ephemeral メッセージ
+_TIMED_OUT_EPHEMERAL = "⏰ This permission request has already timed out. Your response was not recorded."
+
 
 async def handle_permission(
     tool_name: str,
@@ -29,8 +32,12 @@ async def handle_permission(
     bot: Any,
     config: Config,
     audit: AuditLog,
+    thread_ts: str | None = None,
 ) -> dict:
-    """権限確認を Slack に投稿し、応答を待つ。"""
+    """権限確認を Slack に投稿し、応答を待つ。
+
+    TASK-104: 認可系 Slack API 失敗時は fail-close（deny を返す）。
+    """
     req = bridge.create_request("permission")
     cid = req.correlation_id
 
@@ -40,7 +47,24 @@ async def handle_permission(
         correlation_id=cid,
         timeout_sec=config.permission_timeout_sec,
     )
-    resp = await bot.post_message(blocks=blocks, text=f"Permission: {tool_name}")
+
+    # 認可系 API 失敗時は fail-close: deny を返す
+    try:
+        resp = await bot.post_message(
+            blocks=blocks, text=f"Permission: {tool_name}", thread_ts=thread_ts
+        )
+    except Exception as e:
+        logger.error("Failed to post permission message for %s: %s", tool_name, e)
+        # pending を解消
+        bridge.resolve(cid, {"decision": "deny", "reason": "slack_api_error"})
+        audit.record(
+            correlation_id=cid,
+            request_type="permission",
+            tool_name=tool_name,
+            decision="deny",
+            summary=f"slack_api_error: {e}",
+        )
+        return {"decision": "deny", "reason": "slack_api_error"}
     req.message_ts = resp["ts"]
 
     start = time.time()
@@ -48,8 +72,9 @@ async def handle_permission(
     elapsed = time.time() - start
 
     decision = result.get("decision", "deny")
+    reason = result.get("reason", "")
 
-    if decision == "timeout" or result.get("reason") == "timeout":
+    if decision == "timeout" or reason == "timeout":
         await bot.update_message(
             ts=req.message_ts,
             blocks=permission_timeout_blocks(tool_name),
@@ -59,6 +84,21 @@ async def handle_permission(
             request_type="permission",
             tool_name=tool_name,
             decision="timeout",
+            response_time_sec=elapsed,
+            slack_message_ts=req.message_ts,
+        )
+    elif reason == "not_found":
+        # TASK-105: not_found もタイムアウトと同様にメッセージ更新
+        await bot.update_message(
+            ts=req.message_ts,
+            blocks=permission_timeout_blocks(tool_name),
+        )
+        audit.record(
+            correlation_id=cid,
+            request_type="permission",
+            tool_name=tool_name,
+            decision="deny",
+            summary="not_found",
             response_time_sec=elapsed,
             slack_message_ts=req.message_ts,
         )
@@ -101,19 +141,29 @@ def register_permission_handlers(
             return
 
         if not bridge.has_pending(value):
+            # タイムアウト後のボタンクリック: ephemeral メッセージで通知
+            channel = body["channel"]["id"]
+            try:
+                await client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    text=_TIMED_OUT_EPHEMERAL,
+                )
+            except Exception:
+                logger.warning("Failed to send ephemeral for timed-out permission %s", value)
             return
 
         bridge.resolve(value, {"decision": "allow", "user_id": user_id})
 
-        # ボタンを確定テキストに置換
+        # ボタンを確定テキストに置換（TASK-404: コマンドサマリも残す）
         msg_ts = body["message"]["ts"]
         channel = body["channel"]["id"]
-        # tool_name はメッセージから取得
         tool_name = _extract_tool_name(body)
+        summary_text = _extract_command_summary(body)
         await client.chat_update(
             channel=channel,
             ts=msg_ts,
-            blocks=permission_resolved_blocks(tool_name, "allow", user_id),
+            blocks=permission_resolved_blocks(tool_name, "allow", user_id, summary_text),
             text=f"{tool_name} → ALLOW",
         )
 
@@ -134,6 +184,16 @@ def register_permission_handlers(
             return
 
         if not bridge.has_pending(value):
+            # タイムアウト後のボタンクリック: ephemeral メッセージで通知
+            channel = body["channel"]["id"]
+            try:
+                await client.chat_postEphemeral(
+                    channel=channel,
+                    user=user_id,
+                    text=_TIMED_OUT_EPHEMERAL,
+                )
+            except Exception:
+                logger.warning("Failed to send ephemeral for timed-out permission %s", value)
             return
 
         bridge.resolve(value, {"decision": "deny", "user_id": user_id})
@@ -141,10 +201,11 @@ def register_permission_handlers(
         msg_ts = body["message"]["ts"]
         channel = body["channel"]["id"]
         tool_name = _extract_tool_name(body)
+        summary_text = _extract_command_summary(body)
         await client.chat_update(
             channel=channel,
             ts=msg_ts,
-            blocks=permission_resolved_blocks(tool_name, "deny", user_id),
+            blocks=permission_resolved_blocks(tool_name, "deny", user_id, summary_text),
             text=f"{tool_name} → DENY",
         )
 
@@ -162,3 +223,22 @@ def _extract_tool_name(body: dict) -> str:
     except (KeyError, IndexError):
         pass
     return "Unknown"
+
+
+def _extract_command_summary(body: dict) -> str | None:
+    """TASK-404: メッセージの blocks からコマンドサマリを抽出する。"""
+    try:
+        blocks = body["message"]["blocks"]
+        for block in blocks:
+            if block.get("type") == "section":
+                text = block.get("text", {}).get("text", "")
+                # コードブロック内のテキストを抽出
+                if text.startswith("```\n") and "```" in text[4:]:
+                    # ```\n...\n``` の中身を取得
+                    inner = text[4:]
+                    end_idx = inner.rfind("```")
+                    if end_idx > 0:
+                        return inner[:end_idx].rstrip()
+    except (KeyError, IndexError):
+        pass
+    return None

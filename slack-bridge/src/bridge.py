@@ -25,8 +25,6 @@ class RequestBridge:
 
     def __init__(self) -> None:
         self._pending: dict[str, PendingRequest] = {}
-        # message_ts -> (correlation_id, question_index)
-        self._thread_to_correlation: dict[str, tuple[str, int]] = {}
 
     def create_request(
         self, request_type: Literal["permission", "ask_question"]
@@ -63,18 +61,6 @@ class RequestBridge:
             return {"decision": "deny", "reason": "timeout"}
         return req.result or {"decision": "deny", "reason": "empty"}
 
-    # --- スレッド相関 ---
-
-    def register_thread(
-        self, message_ts: str, correlation_id: str, question_index: int
-    ) -> None:
-        self._thread_to_correlation[message_ts] = (correlation_id, question_index)
-
-    def get_correlation_for_thread(
-        self, thread_ts: str
-    ) -> tuple[str, int] | None:
-        return self._thread_to_correlation.get(thread_ts)
-
     # --- multiSelect トグル/確定 ---
 
     def toggle_selection(
@@ -108,4 +94,3 @@ class RequestBridge:
             req.result = {"decision": "deny", "reason": "shutdown"}
             req.event.set()
         self._pending.clear()
-        self._thread_to_correlation.clear()

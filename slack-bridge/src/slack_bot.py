@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,15 @@ if TYPE_CHECKING:
     from .config import Config
 
 logger = logging.getLogger(__name__)
+
+# リトライ設定
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # 秒
+
+
+class SlackAPIError(Exception):
+    """Slack API 呼び出しが全リトライ後も失敗した場合のエラー。"""
+    pass
 
 
 class SlackBot:
@@ -62,21 +72,66 @@ class SlackBot:
             logger.info("Slack Socket Mode disconnected")
 
     async def post_message(
-        self, *, blocks: list[dict], text: str = ""
+        self, *, blocks: list[dict], text: str = "", thread_ts: str | None = None
     ) -> dict:
-        resp = await self.app.client.chat_postMessage(
-            channel=self.config.slack_channel,
-            blocks=blocks,
-            text=text or "Approval required",
-        )
+        kwargs: dict = {
+            "channel": self.config.slack_channel,
+            "blocks": blocks,
+            "text": text or "Approval required",
+        }
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        resp = await self._retry_api_call(self.app.client.chat_postMessage, **kwargs)
         return resp
 
     async def update_message(
         self, *, ts: str, blocks: list[dict], text: str = ""
     ) -> None:
-        await self.app.client.chat_update(
+        await self._retry_api_call(
+            self.app.client.chat_update,
             channel=self.config.slack_channel,
             ts=ts,
             blocks=blocks,
             text=text or "Updated",
         )
+
+    async def post_ephemeral(
+        self, *, channel: str, user: str, text: str, thread_ts: str | None = None
+    ) -> None:
+        """Ephemeral メッセージを投稿する。"""
+        kwargs: dict = {
+            "channel": channel,
+            "user": user,
+            "text": text,
+        }
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        await self._retry_api_call(self.app.client.chat_postEphemeral, **kwargs)
+
+    async def _retry_api_call(self, api_method, **kwargs):
+        """Slack API 呼び出しをリトライ付きで実行する。
+
+        最大 MAX_RETRIES 回リトライし、指数バックオフで待機する。
+        全リトライ失敗時は SlackAPIError を送出する。
+        """
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                return await api_method(**kwargs)
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "Slack API call failed (attempt %d/%d): %s. Retrying in %.1fs",
+                        attempt + 1, MAX_RETRIES, e, delay,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        "Slack API call failed after %d attempts: %s",
+                        MAX_RETRIES, e,
+                    )
+        raise SlackAPIError(
+            f"Slack API call failed after {MAX_RETRIES} retries: {last_error}"
+        ) from last_error

@@ -1,7 +1,8 @@
-"""AskUserQuestion ハンドラ: 選択式ボタン + Other スレッド返信"""
+"""AskUserQuestion ハンドラ: 選択式ボタン + Other modal 方式"""
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -29,8 +30,12 @@ async def handle_ask_question(
     bot: Any,
     config: Config,
     audit: AuditLog,
+    thread_ts: str | None = None,
 ) -> dict:
-    """AskUserQuestion を Slack に投稿し、全質問の回答を待つ。"""
+    """AskUserQuestion を Slack に投稿し、全質問の回答を待つ。
+
+    TASK-104: 認可系 Slack API 失敗時は fail-close（deny を返す）。
+    """
     questions = input_data.get("questions", [])
     if not questions:
         return {"decision": "deny", "reason": "no_questions"}
@@ -46,32 +51,44 @@ async def handle_ask_question(
     # 各質問を個別メッセージとして投稿
     question_keys: list[str] = []  # question_text のリスト（answers のキー）
     message_ts_list: list[str] = []  # 各質問の message_ts
-    for qi, q in enumerate(questions):
-        q_text = q.get("question", "")
-        header = q.get("header", "")
-        options = q.get("options", [])
-        multi_select = q.get("multiSelect", False)
-        question_keys.append(q_text)
+    try:
+        for qi, q in enumerate(questions):
+            q_text = q.get("question", "")
+            header = q.get("header", "")
+            options = q.get("options", [])
+            multi_select = q.get("multiSelect", False)
+            question_keys.append(q_text)
 
-        blocks = ask_question_blocks(
-            question_text=q_text,
-            header=header,
-            options=options,
+            blocks = ask_question_blocks(
+                question_text=q_text,
+                header=header,
+                options=options,
+                correlation_id=cid,
+                question_index=qi,
+                multi_select=multi_select,
+                timeout_sec=config.ask_question_timeout_sec,
+            )
+            resp = await bot.post_message(
+                blocks=blocks,
+                text=f"Question: {q_text}",
+                thread_ts=thread_ts,
+            )
+            msg_ts = resp["ts"]
+            message_ts_list.append(msg_ts)
+            if qi == 0:
+                req.message_ts = msg_ts
+    except Exception as e:
+        # TASK-104: 認可系 API 失敗時は fail-close
+        logger.error("Failed to post ask_question message: %s", e)
+        bridge.resolve(cid, {"decision": "deny", "reason": "slack_api_error"})
+        audit.record(
             correlation_id=cid,
-            question_index=qi,
-            multi_select=multi_select,
-            timeout_sec=config.ask_question_timeout_sec,
+            request_type="ask_question",
+            tool_name="AskUserQuestion",
+            decision="deny",
+            summary=f"slack_api_error: {e}",
         )
-        resp = await bot.post_message(
-            blocks=blocks,
-            text=f"Question: {q_text}",
-        )
-        msg_ts = resp["ts"]
-        message_ts_list.append(msg_ts)
-        if qi == 0:
-            req.message_ts = msg_ts
-        # スレッド相関登録（Other 自由入力用）
-        bridge.register_thread(msg_ts, cid, qi)
+        return {"decision": "deny", "reason": "slack_api_error"}
 
     # _question_meta を bridge に保存（action ハンドラから参照）
     meta: dict[str, Any] = {
@@ -88,7 +105,38 @@ async def handle_ask_question(
     elapsed = time.time() - start
 
     decision = result.get("decision", "deny")
-    if decision == "timeout" or result.get("reason") == "timeout":
+    reason = result.get("reason", "")
+
+    if decision == "timeout" or reason == "timeout":
+        # TASK-103: タイムアウト時に回答済み分を保存して返す
+        partial_answers = dict(meta.get("answers", {}))
+        for qi, q_text in enumerate(question_keys):
+            if q_text not in partial_answers:
+                try:
+                    await bot.update_message(
+                        ts=message_ts_list[qi],
+                        blocks=ask_timeout_blocks(q_text),
+                    )
+                except Exception:
+                    pass
+        audit.record(
+            correlation_id=cid,
+            request_type="ask_question",
+            tool_name="AskUserQuestion",
+            decision="timeout",
+            summary=f"partial_answers={partial_answers}" if partial_answers else None,
+            response_time_sec=elapsed,
+        )
+        # 部分回答がある場合はそれを含めて返す
+        if partial_answers:
+            return {
+                "decision": "answered",
+                "answers": partial_answers,
+                "partial": True,
+                "user_id": meta.get("last_user_id"),
+            }
+    elif reason == "not_found":
+        # TASK-105: not_found もタイムアウトと同様にメッセージ更新
         for qi, q_text in enumerate(question_keys):
             if q_text not in meta.get("answers", {}):
                 try:
@@ -102,7 +150,8 @@ async def handle_ask_question(
             correlation_id=cid,
             request_type="ask_question",
             tool_name="AskUserQuestion",
-            decision="timeout",
+            decision="deny",
+            summary="not_found",
             response_time_sec=elapsed,
         )
     else:
@@ -146,7 +195,7 @@ def register_ask_handlers(
     audit: AuditLog,
     config: Config,
 ) -> None:
-    """Slack action/event ハンドラを登録する。"""
+    """Slack action/view ハンドラを登録する。"""
 
     # --- 単一選択ボタン (ask_choice_*) ---
 
@@ -341,44 +390,101 @@ def register_ask_handlers(
 
         _try_resolve_all_answered(bridge, cid)
 
-    # --- Other スレッド返信 ---
+    # --- Other 回答ボタン (ask_other_*) → modal 表示 ---
 
-    @app.event("message")
-    async def on_message(event, client):
-        # スレッド返信のみ処理
-        thread_ts = event.get("thread_ts")
-        if not thread_ts:
-            return
+    @app.action(re.compile(r"^ask_other_\d+$"))
+    async def on_other_button(ack, body, client):
+        await ack()
+        user_id = body["user"]["id"]
+        action = body["actions"][0]
+        value = action["value"]  # "correlation_id|question_index"
 
-        # Bot 自身のメッセージは無視
-        if event.get("bot_id"):
+        parts = value.split("|")
+        if len(parts) != 2:
             return
-
-        user_id = event.get("user", "")
-        text = event.get("text", "").strip()
-        if not text:
-            return
+        cid, qi_str = parts
 
         if user_id != config.slack_approver_user_id:
-            correlation = bridge.get_correlation_for_thread(thread_ts)
             audit.record(
-                correlation_id=correlation[0] if correlation else "unknown",
+                correlation_id=cid,
                 request_type="ask_question",
                 decision="rejected_user",
                 responder_user_id=user_id,
-                summary=f"thread reply ignored: {text[:100]}",
+                summary="ask_other button rejected",
             )
-            logger.warning("Ignored thread reply from unauthorized user %s", user_id)
+            logger.warning("Rejected ask_other from unauthorized user %s", user_id)
             return
-
-        correlation = bridge.get_correlation_for_thread(thread_ts)
-        if correlation is None:
-            return
-
-        cid, qi = correlation
 
         if not bridge.has_pending(cid):
             return
+
+        trigger_id = body["trigger_id"]
+        private_metadata = json.dumps({
+            "correlation_id": cid,
+            "question_index": int(qi_str),
+        })
+
+        await client.views_open(
+            trigger_id=trigger_id,
+            view={
+                "type": "modal",
+                "callback_id": "ask_other_submit",
+                "private_metadata": private_metadata,
+                "title": {"type": "plain_text", "text": "Other Answer"},
+                "submit": {"type": "plain_text", "text": "Submit"},
+                "close": {"type": "plain_text", "text": "Cancel"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "answer_block",
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "answer_input",
+                            "multiline": True,
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Enter your answer...",
+                            },
+                        },
+                        "label": {"type": "plain_text", "text": "Your answer"},
+                    }
+                ],
+            },
+        )
+
+    # --- Other modal submission ---
+
+    @app.view("ask_other_submit")
+    async def on_other_submit(ack, body, client):
+        user_id = body["user"]["id"]
+
+        private_metadata = json.loads(body["view"]["private_metadata"])
+        cid = private_metadata["correlation_id"]
+        qi = private_metadata["question_index"]
+
+        # TASK-102: タイムアウト後の modal submission にはエラーレスポンスを返す
+        if not bridge.has_pending(cid):
+            await ack(
+                response_action="errors",
+                errors={"answer_block": "This question has already timed out. Your answer was not recorded."},
+            )
+            return
+
+        if user_id != config.slack_approver_user_id:
+            await ack()
+            audit.record(
+                correlation_id=cid,
+                request_type="ask_question",
+                decision="rejected_user",
+                responder_user_id=user_id,
+                summary="ask_other modal submission rejected",
+            )
+            logger.warning(
+                "Rejected ask_other submission from unauthorized user %s", user_id
+            )
+            return
+
+        await ack()
 
         req = bridge._pending.get(cid)
         if req is None:
@@ -389,7 +495,7 @@ def register_ask_handlers(
 
         q_text = meta["question_keys"][qi]
 
-        # multiSelect の場合: スレッド返信で途中選択を破棄し即時 resolve
+        # multiSelect の場合: 途中選択を破棄
         q = meta["questions"][qi]
         if q.get("multiSelect", False) and req.partial_selections:
             req.partial_selections.pop(q_text, None)
@@ -398,18 +504,17 @@ def register_ask_handlers(
         if q_text in meta["answers"]:
             return
 
-        meta["answers"][q_text] = text  # ユーザーの実テキスト
+        # modal の入力値を取得
+        text = (
+            body["view"]["state"]["values"]["answer_block"]["answer_input"]["value"]
+            or ""
+        ).strip()
+        if not text:
+            return
+
+        meta["answers"][q_text] = text
         meta["answered_count"] += 1
         meta["last_user_id"] = user_id
-
-        # 元メッセージを確定テキストに更新
-        channel = event.get("channel", config.slack_channel)
-        await client.chat_update(
-            channel=channel,
-            ts=thread_ts,
-            blocks=ask_resolved_blocks(q_text, text, user_id),
-            text=f"{q_text} → {text}",
-        )
 
         audit.record(
             correlation_id=cid,
