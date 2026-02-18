@@ -29,6 +29,7 @@ class Config:
     slack_approver_user_id: str
     permission_timeout_sec: int = 300
     ask_question_timeout_sec: int = 300
+    default_cwd: str = "."
 
     def __post_init__(self) -> None:
         """TASK-602: 設定値のバリデーション。"""
@@ -111,6 +112,7 @@ def load_config() -> Config:
         slack_approver_user_id=_require_env("SLACK_APPROVER_USER_ID"),
         permission_timeout_sec=int(os.environ.get("PERMISSION_TIMEOUT_SEC", "300")),
         ask_question_timeout_sec=int(os.environ.get("ASK_QUESTION_TIMEOUT_SEC", "300")),
+        default_cwd=os.environ.get("DEFAULT_CWD", "."),
     )
 
 

@@ -376,3 +376,150 @@ async def test_unauthorized_other_button_rejected():
     assert row is not None
     assert row[0] == "rejected_user"
     assert row[1] == "U_INTRUDER"
+
+
+# --- Phase 1 テスト ---
+
+
+def _make_bot():
+    """テスト用のモック SlackBot を作成する。"""
+    bot = MagicMock()
+    bot.post_message = AsyncMock(return_value={"ts": "1234.5678"})
+    bot.update_message = AsyncMock()
+    bot.post_ephemeral = AsyncMock()
+    return bot
+
+
+# TEST-101: ask_choice ハンドラでタイムアウト後にボタンクリック → ephemeral メッセージ
+@pytest.mark.asyncio
+async def test_ask_choice_timeout_ephemeral():
+    bridge = RequestBridge()
+    audit = AuditLog(":memory:")
+    config = _make_config()
+    app = FakeApp()
+    bot = _make_bot()
+
+    register_ask_handlers(app, bridge, audit, config, bot=bot)
+
+    # pending に存在しない correlation_id でボタンクリック
+    body = {
+        "user": {"id": "UAPPROVER01"},
+        "actions": [{"value": "nonexistent|0|0", "action_id": "ask_choice_0_0"}],
+        "message": {"ts": "123.456"},
+        "channel": {"id": "C123"},
+    }
+    await app.call_action("ask_choice_0_0", body)
+
+    bot.post_ephemeral.assert_awaited_once()
+    call_kwargs = bot.post_ephemeral.call_args.kwargs
+    assert call_kwargs["channel"] == "C123"
+    assert call_kwargs["user"] == "UAPPROVER01"
+    assert "timed out" in call_kwargs["text"]
+
+
+# TEST-102: ask_toggle ハンドラでタイムアウト後にボタンクリック → ephemeral メッセージ
+@pytest.mark.asyncio
+async def test_ask_toggle_timeout_ephemeral():
+    bridge = RequestBridge()
+    audit = AuditLog(":memory:")
+    config = _make_config()
+    app = FakeApp()
+    bot = _make_bot()
+
+    register_ask_handlers(app, bridge, audit, config, bot=bot)
+
+    body = {
+        "user": {"id": "UAPPROVER01"},
+        "actions": [{"value": "nonexistent|0|0", "action_id": "ask_toggle_0_0"}],
+        "message": {"ts": "123.456"},
+        "channel": {"id": "C123"},
+    }
+    await app.call_action("ask_toggle_0_0", body)
+
+    bot.post_ephemeral.assert_awaited_once()
+    call_kwargs = bot.post_ephemeral.call_args.kwargs
+    assert "timed out" in call_kwargs["text"]
+
+
+# TEST-103: bot.update_message() 失敗時に ephemeral 通知 + 回答確定処理が継続される
+@pytest.mark.asyncio
+async def test_update_message_failure_continues_resolve():
+    from src.slack_bot import SlackAPIError
+
+    bridge = RequestBridge()
+    audit = AuditLog(":memory:")
+    config = _make_config()
+    app = FakeApp()
+    bot = _make_bot()
+    bot.update_message = AsyncMock(side_effect=SlackAPIError("update failed"))
+
+    register_ask_handlers(app, bridge, audit, config, bot=bot)
+
+    req = bridge.create_request("ask_question")
+    cid = req.correlation_id
+    req._question_meta = {
+        "questions": [{"question": "Q1?", "options": [{"label": "A"}]}],
+        "question_keys": ["Q1?"],
+        "answers": {},
+        "answered_count": 0,
+        "total": 1,
+    }
+
+    body = {
+        "user": {"id": "UAPPROVER01"},
+        "actions": [{"value": f"{cid}|0|0", "action_id": "ask_choice_0_0"}],
+        "message": {"ts": "123.456"},
+        "channel": {"id": "C123"},
+    }
+    await app.call_action("ask_choice_0_0", body)
+
+    # bot.update_message が失敗しても回答は記録される
+    assert req._question_meta["answers"]["Q1?"] == "A"
+    assert req._question_meta["answered_count"] == 1
+    # 全質問回答済みで resolve されている
+    assert req.event.is_set()
+    assert req.result["decision"] == "answered"
+    # ephemeral で通知されている
+    bot.post_ephemeral.assert_awaited_once()
+    call_kwargs = bot.post_ephemeral.call_args.kwargs
+    assert "回答は受け付けました" in call_kwargs["text"]
+
+
+# TEST-123: bot.update_message() に channel 引数を渡した場合と省略した場合
+@pytest.mark.asyncio
+async def test_update_message_channel_argument():
+    from unittest.mock import patch as _patch
+
+    from src.slack_bot import SlackBot
+    from src.bridge import RequestBridge as _RB
+    from src.audit import AuditLog as _AL
+
+    config = _make_config()
+    bridge = _RB()
+    audit = _AL(":memory:")
+
+    with (
+        _patch("src.slack_bot.AsyncApp") as MockApp,
+        _patch.object(SlackBot, "_register_handlers"),
+    ):
+        mock_app = MagicMock()
+        mock_app.client = MagicMock()
+        mock_app.client.chat_update = AsyncMock(return_value={"ok": True})
+        MockApp.return_value = mock_app
+
+        bot = SlackBot(config=config, bridge=bridge, audit=audit)
+        bot.app = mock_app
+
+        # channel 指定時
+        await bot.update_message(
+            ts="1234.5678", blocks=[], text="test", channel="COTHER",
+        )
+        call_kwargs = mock_app.client.chat_update.call_args.kwargs
+        assert call_kwargs["channel"] == "COTHER"
+
+        mock_app.client.chat_update.reset_mock()
+
+        # channel 省略時は config.slack_channel
+        await bot.update_message(ts="1234.5678", blocks=[], text="test")
+        call_kwargs = mock_app.client.chat_update.call_args.kwargs
+        assert call_kwargs["channel"] == config.slack_channel

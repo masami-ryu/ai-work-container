@@ -119,6 +119,8 @@ class SessionManager:
         self._config = config
         self._audit = audit
         self._sessions: dict[str, Session] = {}
+        # スレッド→質問マッピング: thread_ts → [{cid, question_index, message_ts}]
+        self._thread_questions: dict[str, list[dict]] = {}
 
     async def start_session(
         self, prompt: str, cwd: str | None = None
@@ -169,6 +171,7 @@ class SessionManager:
                 audit=self._audit,
                 thread_ts=session.thread_ts,
                 session=session,
+                session_manager=self,
             )
 
             options = ClaudeAgentOptions(
@@ -345,6 +348,76 @@ class SessionManager:
             }
             for s in self._sessions.values()
         ]
+
+    def list_running_sessions(self) -> list[dict]:
+        """status == "running" のセッション一覧を返す。"""
+        return [
+            {
+                "session_id": s.session_id,
+                "status": s.status,
+                "prompt": s.prompt,
+                "cwd": s.cwd,
+                "thread_ts": s.thread_ts,
+            }
+            for s in self._sessions.values()
+            if s.status == "running"
+        ]
+
+    async def stop_session(self, session_id: str) -> str:
+        """セッションを停止する。結果メッセージを返す。"""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return f"Session '{session_id}' not found."
+
+        if session.task is None or session.task.done():
+            return f"Session '{session_id}' is already finished (status: {session.status})."
+
+        session.task.cancel()
+        try:
+            await session.task
+        except asyncio.CancelledError:
+            pass
+
+        return f"Session '{session_id}' has been stopped."
+
+    def register_thread_question(
+        self, thread_ts: str, cid: str, question_index: int, message_ts: str,
+    ) -> None:
+        """スレッド→質問マッピングを登録する。"""
+        entries = self._thread_questions.setdefault(thread_ts, [])
+        entries.append({
+            "cid": cid,
+            "question_index": question_index,
+            "message_ts": message_ts,
+        })
+
+    def get_pending_questions_for_thread(self, thread_ts: str) -> list[dict]:
+        """スレッドの未回答質問リストを返す。"""
+        return list(self._thread_questions.get(thread_ts, []))
+
+    def unregister_thread_question(
+        self, thread_ts: str, cid: str, question_index: int,
+    ) -> None:
+        """特定質問のマッピングのみ解放する。"""
+        entries = self._thread_questions.get(thread_ts)
+        if entries is None:
+            return
+        self._thread_questions[thread_ts] = [
+            e for e in entries
+            if not (e["cid"] == cid and e["question_index"] == question_index)
+        ]
+        if not self._thread_questions[thread_ts]:
+            del self._thread_questions[thread_ts]
+
+    def unregister_thread_questions(self, cid: str) -> None:
+        """指定 cid の全質問マッピングを解放する。"""
+        for thread_ts in list(self._thread_questions.keys()):
+            self._thread_questions[thread_ts] = [
+                e for e in self._thread_questions[thread_ts]
+                if e["cid"] != cid
+            ]
+            if not self._thread_questions[thread_ts]:
+                del self._thread_questions[thread_ts]
 
     async def notify_client_disconnected(self, session_id: str) -> None:
         """TASK-603: CLI クライアント切断時に Slack スレッドに通知を投稿する。"""

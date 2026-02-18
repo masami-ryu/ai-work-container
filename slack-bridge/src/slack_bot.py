@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .bridge import RequestBridge
     from .audit import AuditLog
     from .config import Config
+    from .session import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class SlackBot:
         self.audit = audit
         self.app = AsyncApp(token=config.slack_bot_token)
         self._handler: AsyncSocketModeHandler | None = None
+        self._session_manager: SessionManager | None = None
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -51,18 +53,63 @@ class SlackBot:
             bridge=self.bridge,
             audit=self.audit,
             config=self.config,
+            bot=self,
         )
         register_ask_handlers(
             app=self.app,
             bridge=self.bridge,
             audit=self.audit,
             config=self.config,
+            bot=self,
+        )
+
+    def set_session_manager(self, session_manager: SessionManager) -> None:
+        """SessionManager を注入し、セッション依存ハンドラを登録する。"""
+        if self._session_manager is not None:
+            raise RuntimeError("set_session_manager() has already been called")
+        self._session_manager = session_manager
+        self._register_session_handlers()
+
+    def _register_session_handlers(self) -> None:
+        """SessionManager 依存のハンドラ（スラッシュコマンド・スレッド返信）を登録する。"""
+        from .handlers.slash_commands import register_slash_command_handlers
+        from .handlers.thread_reply import register_thread_reply_handler
+
+        register_slash_command_handlers(
+            app=self.app,
+            session_manager=self._session_manager,
+            bot=self,
+            config=self.config,
+            audit=self.audit,
+        )
+        register_thread_reply_handler(
+            app=self.app,
+            session_manager=self._session_manager,
+            bridge=self.bridge,
+            bot=self,
+            config=self.config,
+            audit=self.audit,
         )
 
     async def start(self) -> None:
+        if self._session_manager is None:
+            raise RuntimeError(
+                "set_session_manager() must be called before start()"
+            )
         self._handler = AsyncSocketModeHandler(
             self.app, self.config.slack_app_token
         )
+
+        # Socket Mode 接続の健全性チェック用リスナーを登録
+        def _on_close(close_status_code=None, close_msg=None):
+            logger.warning("Socket Mode connection closed")
+
+        def _on_error(error):
+            logger.warning("Socket Mode connection error")
+
+        self._handler.client.on_close_listeners.append(_on_close)
+        self._handler.client.on_error_listeners.append(_on_error)
+
         await self._handler.connect_async()
         logger.info("Slack Socket Mode connected")
 
@@ -85,11 +132,12 @@ class SlackBot:
         return resp
 
     async def update_message(
-        self, *, ts: str, blocks: list[dict], text: str = ""
+        self, *, ts: str, blocks: list[dict], text: str = "",
+        channel: str | None = None,
     ) -> None:
         await self._retry_api_call(
             self.app.client.chat_update,
-            channel=self.config.slack_channel,
+            channel=channel or self.config.slack_channel,
             ts=ts,
             blocks=blocks,
             text=text or "Updated",

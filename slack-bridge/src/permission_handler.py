@@ -34,6 +34,7 @@ def create_permission_callback(
     audit: AuditLog,
     thread_ts: str | None = None,
     session: Session | None = None,
+    session_manager: Any | None = None,
 ):
     """canUseTool コールバックを生成する。thread_ts でセッション毎のスレッドに投稿。
 
@@ -81,6 +82,7 @@ def create_permission_callback(
                 config=config,
                 audit=audit,
                 thread_ts=thread_ts,
+                session_manager=session_manager,
             )
             decision = result.get("decision", "deny")
 

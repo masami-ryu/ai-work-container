@@ -6,6 +6,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..slack_bot import SlackAPIError
+
 from ..slack_messages import (
     permission_blocks,
     permission_resolved_blocks,
@@ -121,6 +123,7 @@ def register_permission_handlers(
     bridge: RequestBridge,
     audit: AuditLog,
     config: Config,
+    bot: Any | None = None,
 ) -> None:
     """Slack の action ハンドラを登録する。"""
 
@@ -160,12 +163,26 @@ def register_permission_handlers(
         channel = body["channel"]["id"]
         tool_name = _extract_tool_name(body)
         summary_text = _extract_command_summary(body)
-        await client.chat_update(
-            channel=channel,
-            ts=msg_ts,
-            blocks=permission_resolved_blocks(tool_name, "allow", user_id, summary_text),
-            text=f"{tool_name} → ALLOW",
-        )
+        if bot is not None:
+            try:
+                await bot.update_message(
+                    ts=msg_ts,
+                    blocks=permission_resolved_blocks(tool_name, "allow", user_id, summary_text),
+                    text=f"{tool_name} → ALLOW",
+                    channel=channel,
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update permission message: %s", e)
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text="✅ Permission allowed (message update failed)",
+                )
+        else:
+            await client.chat_update(
+                channel=channel,
+                ts=msg_ts,
+                blocks=permission_resolved_blocks(tool_name, "allow", user_id, summary_text),
+                text=f"{tool_name} → ALLOW",
+            )
 
     @app.action("perm_deny")
     async def on_deny(ack, body, client):
@@ -202,12 +219,26 @@ def register_permission_handlers(
         channel = body["channel"]["id"]
         tool_name = _extract_tool_name(body)
         summary_text = _extract_command_summary(body)
-        await client.chat_update(
-            channel=channel,
-            ts=msg_ts,
-            blocks=permission_resolved_blocks(tool_name, "deny", user_id, summary_text),
-            text=f"{tool_name} → DENY",
-        )
+        if bot is not None:
+            try:
+                await bot.update_message(
+                    ts=msg_ts,
+                    blocks=permission_resolved_blocks(tool_name, "deny", user_id, summary_text),
+                    text=f"{tool_name} → DENY",
+                    channel=channel,
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update permission message: %s", e)
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text="🚫 Permission denied (message update failed)",
+                )
+        else:
+            await client.chat_update(
+                channel=channel,
+                ts=msg_ts,
+                blocks=permission_resolved_blocks(tool_name, "deny", user_id, summary_text),
+                text=f"{tool_name} → DENY",
+            )
 
 
 def _extract_tool_name(body: dict) -> str:

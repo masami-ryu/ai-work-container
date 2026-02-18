@@ -713,14 +713,14 @@ class TestAskQuestionBlocks:
             timeout_sec=120,
         )
         context_blocks = [b for b in blocks if b["type"] == "context"]
-        assert len(context_blocks) == 1
+        assert len(context_blocks) == 2  # description + thread reply hint
         elements_text = " ".join(e["text"] for e in context_blocks[0]["elements"])
         assert "React" in elements_text
         assert "A JavaScript library for UIs" in elements_text
         assert "Vue" in elements_text
 
-    def test_no_description_no_context(self):
-        """description がない場合は context ブロックなし。"""
+    def test_no_description_only_hint_context(self):
+        """description がない場合はスレッド返信ヒントの context のみ。"""
         blocks = ask_question_blocks(
             question_text="Pick one",
             header="Choice",
@@ -731,7 +731,8 @@ class TestAskQuestionBlocks:
             timeout_sec=120,
         )
         context_blocks = [b for b in blocks if b["type"] == "context"]
-        assert len(context_blocks) == 0
+        assert len(context_blocks) == 1  # thread reply hint only
+        assert "reply" in context_blocks[0]["elements"][0]["text"].lower()
 
     def test_multi_select_confirm_button(self):
         """multi_select の場合は Confirm ボタンが追加される。"""

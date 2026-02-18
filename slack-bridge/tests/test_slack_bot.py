@@ -195,3 +195,38 @@ async def test_slack_api_error_chains_original_exception(bot):
             await bot._retry_api_call(api_method, channel="C123")
 
     assert exc_info.value.__cause__ is original_error
+
+
+# TASK-103: Socket Mode 接続の健全性チェック
+@pytest.mark.asyncio
+async def test_socket_mode_close_and_error_listeners(bot):
+    """start() で on_close_listeners / on_error_listeners にリスナーが登録される。"""
+    import logging
+
+    mock_handler = MagicMock()
+    mock_client = MagicMock()
+    mock_client.on_close_listeners = []
+    mock_client.on_error_listeners = []
+    mock_handler.client = mock_client
+    mock_handler.connect_async = AsyncMock()
+
+    # set_session_manager を呼んでおく
+    mock_sm = MagicMock()
+    with patch.object(bot, "_register_session_handlers"):
+        bot.set_session_manager(mock_sm)
+
+    with patch("src.slack_bot.AsyncSocketModeHandler", return_value=mock_handler):
+        await bot.start()
+
+    # リスナーが登録されていること
+    assert len(mock_client.on_close_listeners) == 1
+    assert len(mock_client.on_error_listeners) == 1
+
+    # リスナーを呼び出してログが出ることを検証
+    with patch("src.slack_bot.logger") as mock_logger:
+        mock_client.on_close_listeners[0]()
+        mock_logger.warning.assert_called_with("Socket Mode connection closed")
+
+        mock_logger.reset_mock()
+        mock_client.on_error_listeners[0](Exception("test error"))
+        mock_logger.warning.assert_called_with("Socket Mode connection error")

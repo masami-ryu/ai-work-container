@@ -34,6 +34,7 @@ async def _serve() -> None:
     audit = AuditLog()
     bot = SlackBot(config=config, bridge=bridge, audit=audit)
     session_manager = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+    bot.set_session_manager(session_manager)
     ipc_server = IPCServer(session_manager=session_manager)
 
     shutdown_event = asyncio.Event()

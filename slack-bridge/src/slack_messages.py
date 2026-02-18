@@ -368,6 +368,14 @@ def ask_question_blocks(
             "elements": desc_elements[:10],  # context elements max 10
         })
 
+    # スレッド返信ヒント
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": "💡 You can also reply in this thread to answer."},
+        ],
+    })
+
     return blocks
 
 

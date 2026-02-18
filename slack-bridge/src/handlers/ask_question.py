@@ -8,6 +8,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..slack_bot import SlackAPIError
 from ..slack_messages import (
     ask_question_blocks,
     ask_resolved_blocks,
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# タイムアウト後のボタンクリック時の ephemeral メッセージ
+_TIMED_OUT_EPHEMERAL = "⏰ This question has already timed out. Your response was not recorded."
+
 
 async def handle_ask_question(
     input_data: dict[str, Any],
@@ -31,6 +35,7 @@ async def handle_ask_question(
     config: Config,
     audit: AuditLog,
     thread_ts: str | None = None,
+    session_manager: Any | None = None,
 ) -> dict:
     """AskUserQuestion を Slack に投稿し、全質問の回答を待つ。
 
@@ -100,6 +105,11 @@ async def handle_ask_question(
     }
     req._question_meta = meta  # type: ignore[attr-defined]
 
+    # スレッド→質問マッピングを登録（スレッド返信による回答を可能にする）
+    if session_manager is not None and thread_ts is not None:
+        for qi, msg_ts in enumerate(message_ts_list):
+            session_manager.register_thread_question(thread_ts, cid, qi, msg_ts)
+
     start = time.time()
     result = await bridge.wait_for_response(cid, timeout=config.ask_question_timeout_sec)
     elapsed = time.time() - start
@@ -165,6 +175,10 @@ async def handle_ask_question(
             response_time_sec=elapsed,
         )
 
+    # スレッド→質問マッピングを全解放
+    if session_manager is not None:
+        session_manager.unregister_thread_questions(cid)
+
     return result
 
 
@@ -194,6 +208,7 @@ def register_ask_handlers(
     bridge: RequestBridge,
     audit: AuditLog,
     config: Config,
+    bot: Any | None = None,
 ) -> None:
     """Slack action/view ハンドラを登録する。"""
 
@@ -224,6 +239,11 @@ def register_ask_handlers(
         qi, oi = int(qi_str), int(oi_str)
 
         if not bridge.has_pending(cid):
+            if bot is not None:
+                channel = body["channel"]["id"]
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text=_TIMED_OUT_EPHEMERAL,
+                )
             return
 
         req = bridge._pending.get(cid)
@@ -248,12 +268,27 @@ def register_ask_handlers(
         # メッセージを確定テキストに更新
         msg_ts = body["message"]["ts"]
         channel = body["channel"]["id"]
-        await client.chat_update(
-            channel=channel,
-            ts=msg_ts,
-            blocks=ask_resolved_blocks(q_text, selected_label, user_id),
-            text=f"{q_text} → {selected_label}",
-        )
+        if bot is not None:
+            try:
+                await bot.update_message(
+                    ts=msg_ts,
+                    blocks=ask_resolved_blocks(q_text, selected_label, user_id),
+                    text=f"{q_text} → {selected_label}",
+                    channel=channel,
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update ask_choice message: %s", e)
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id,
+                    text=f"✅ 回答は受け付けました: {selected_label} (message update failed)",
+                )
+        else:
+            await client.chat_update(
+                channel=channel,
+                ts=msg_ts,
+                blocks=ask_resolved_blocks(q_text, selected_label, user_id),
+                text=f"{q_text} → {selected_label}",
+            )
 
         audit.record(
             correlation_id=cid,
@@ -292,6 +327,11 @@ def register_ask_handlers(
         qi, oi = int(qi_str), int(oi_str)
 
         if not bridge.has_pending(cid):
+            if bot is not None:
+                channel = body["channel"]["id"]
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text=_TIMED_OUT_EPHEMERAL,
+                )
             return
 
         req = bridge._pending.get(cid)
@@ -321,12 +361,23 @@ def register_ask_handlers(
             timeout_sec=config.ask_question_timeout_sec,
             selected_labels=current,
         )
-        await client.chat_update(
-            channel=channel,
-            ts=msg_ts,
-            blocks=blocks,
-            text=f"Question: {q_text}",
-        )
+        if bot is not None:
+            try:
+                await bot.update_message(
+                    ts=msg_ts,
+                    blocks=blocks,
+                    text=f"Question: {q_text}",
+                    channel=channel,
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update ask_toggle message: %s", e)
+        else:
+            await client.chat_update(
+                channel=channel,
+                ts=msg_ts,
+                blocks=blocks,
+                text=f"Question: {q_text}",
+            )
 
     # --- multiSelect 確定 (ask_confirm_*) ---
 
@@ -347,6 +398,11 @@ def register_ask_handlers(
             return
 
         if not bridge.has_pending(cid):
+            if bot is not None:
+                channel = body["channel"]["id"]
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text=_TIMED_OUT_EPHEMERAL,
+                )
             return
 
         req = bridge._pending.get(cid)
@@ -372,12 +428,27 @@ def register_ask_handlers(
         qi = int(aid.rsplit("_", 1)[1])
         q_text = meta["question_keys"][qi]
         answer = meta["answers"].get(q_text, "(none)")
-        await client.chat_update(
-            channel=channel,
-            ts=msg_ts,
-            blocks=ask_resolved_blocks(q_text, answer, user_id),
-            text=f"{q_text} → {answer}",
-        )
+        if bot is not None:
+            try:
+                await bot.update_message(
+                    ts=msg_ts,
+                    blocks=ask_resolved_blocks(q_text, answer, user_id),
+                    text=f"{q_text} → {answer}",
+                    channel=channel,
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update ask_confirm message: %s", e)
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id,
+                    text=f"✅ 回答は受け付けました: {answer} (message update failed)",
+                )
+        else:
+            await client.chat_update(
+                channel=channel,
+                ts=msg_ts,
+                blocks=ask_resolved_blocks(q_text, answer, user_id),
+                text=f"{q_text} → {answer}",
+            )
 
         audit.record(
             correlation_id=cid,
@@ -416,6 +487,11 @@ def register_ask_handlers(
             return
 
         if not bridge.has_pending(cid):
+            if bot is not None:
+                channel = body["channel"]["id"]
+                await bot.post_ephemeral(
+                    channel=channel, user=user_id, text=_TIMED_OUT_EPHEMERAL,
+                )
             return
 
         trigger_id = body["trigger_id"]
