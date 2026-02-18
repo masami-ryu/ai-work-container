@@ -20,7 +20,9 @@ from .slack_messages import (
     error_alert_blocks,
     timeout_warning_blocks,
     periodic_progress_blocks,
+    progress_placeholder_blocks,
     client_disconnected_blocks,
+    interrupt_ack_blocks,
 )
 
 if TYPE_CHECKING:
@@ -32,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_BUFFER_MAX_LINES = 1000
 
-# 定期進捗通知の間隔（秒）
-PERIODIC_PROGRESS_INTERVAL = 120  # 2分
-
 # 連続タイムアウト警告の閾値
 CONSECUTIVE_TIMEOUT_THRESHOLD = 3
+
+# 割り込み後 receive_response() 終了待ちのタイムアウト（秒）
+_INTERRUPT_RESPONSE_DRAIN_TIMEOUT = 30
 
 
 @dataclass
@@ -94,7 +96,7 @@ class Session:
     session_id: str
     prompt: str
     cwd: str
-    status: str = "running"  # running, completed, error
+    status: str = "running"  # running, completed, error, cancelled
     thread_ts: str | None = None
     task: asyncio.Task | None = None
     output_buffer: deque[str] = field(default_factory=lambda: deque(maxlen=OUTPUT_BUFFER_MAX_LINES))
@@ -102,6 +104,16 @@ class Session:
     stats: ToolStats = field(default_factory=ToolStats)
     started_at: float = field(default_factory=time.time)
     error_message: str | None = None
+    # TASK-101: SDK クライアントへの参照（割り込み指示で使用）
+    client: Any = None
+    # TASK-107: 割り込み指示キュー（サイズ上限は Config.interrupt_queue_maxsize で設定）
+    interrupt_queue: asyncio.Queue[str] | None = None
+    # TASK-108: 割り込み処理中の再入防止フラグ
+    _interrupt_in_progress: bool = False
+    # TASK-201: 最新の TodoList スナップショット（定期進捗通知に統合表示）
+    last_todos: list[dict[str, Any]] | None = None
+    # TASK-205: 進捗プレースホルダーメッセージの ts（通知音排除用）
+    progress_msg_ts: str | None = None
 
 
 class SessionManager:
@@ -121,6 +133,8 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         # スレッド→質問マッピング: thread_ts → [{cid, question_index, message_ts}]
         self._thread_questions: dict[str, list[dict]] = {}
+        # TASK-104: スレッド→セッションマッピング（割り込み指示用）
+        self._thread_to_session: dict[str, Session] = {}
 
     async def start_session(
         self, prompt: str, cwd: str | None = None
@@ -137,13 +151,33 @@ class SessionManager:
         )
         thread_ts = resp["ts"]
 
+        # TASK-107: 割り込みキューを Config のサイズ上限で初期化
+        interrupt_queue: asyncio.Queue[str] = asyncio.Queue(
+            maxsize=self._config.interrupt_queue_maxsize,
+        )
+
         session = Session(
             session_id=session_id,
             prompt=prompt,
             cwd=effective_cwd,
             thread_ts=thread_ts,
+            interrupt_queue=interrupt_queue,
         )
         self._sessions[session_id] = session
+
+        # TASK-104: スレッド→セッションマッピングを登録
+        self._thread_to_session[thread_ts] = session
+
+        # TASK-205: 進捗プレースホルダーメッセージを投稿（通知音排除）
+        try:
+            placeholder_resp = await self._bot.post_message(
+                blocks=progress_placeholder_blocks(),
+                text=f"Session {session_id} progress",
+                thread_ts=thread_ts,
+            )
+            session.progress_msg_ts = placeholder_resp["ts"]
+        except Exception:
+            logger.warning("Failed to post progress placeholder for session %s", session_id)
 
         # セッションタスクを起動
         session.task = asyncio.create_task(
@@ -155,7 +189,18 @@ class SessionManager:
         return session
 
     async def _run_session(self, session: Session) -> None:
-        """セッション内で Claude SDK クライアントを実行する。"""
+        """セッション内で Claude SDK クライアントを実行する。
+
+        割り込み指示対応のループ構造:
+        - receive_response() と interrupt_queue.get() を asyncio.wait() で並行監視
+        - 割り込み検出時: interrupt() → receive_response() の自然終了を待機 → query() で再開
+
+        SDK interrupt() 動作パターン（確認済み）:
+        - interrupt() は制御チャネルで中断信号を送信し、CLI の応答を待つ（最大60秒）
+        - CLI は通常のメッセージストリームに ResultMessage を発行する
+        - receive_response() は ResultMessage を受信して自然終了する（例外は発生しない）
+        - 接続は維持されるため、続けて query() を呼び出し可能
+        """
         # TASK-304: 定期進捗通知タスク
         progress_task = asyncio.create_task(
             self._periodic_progress(session),
@@ -181,12 +226,69 @@ class SessionManager:
             )
 
             async with ClaudeSDKClient(options=options) as client:
+                # TASK-101: Session に SDK クライアント参照を保持
+                session.client = client
                 await client.query(session.prompt)
-                async for message in client.receive_response():
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                self._emit_output(session, block.text)
+
+                # 割り込み対応ループ
+                while True:
+                    response_task = asyncio.create_task(
+                        self._consume_responses(client, session),
+                        name=f"response-{session.session_id}",
+                    )
+                    interrupt_task = asyncio.create_task(
+                        session.interrupt_queue.get(),
+                        name=f"interrupt-wait-{session.session_id}",
+                    )
+
+                    done, pending = await asyncio.wait(
+                        {response_task, interrupt_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if interrupt_task in done:
+                        new_instruction = interrupt_task.result()
+                        session._interrupt_in_progress = True
+
+                        try:
+                            # SDK に中断を通知（CLI が ResultMessage を発行する）
+                            await client.interrupt()
+
+                            # receive_response() が ResultMessage で自然終了するのを待機
+                            try:
+                                await asyncio.wait_for(
+                                    response_task, timeout=_INTERRUPT_RESPONSE_DRAIN_TIMEOUT
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "Session %s: response drain timeout after interrupt, force cancelling",
+                                    session.session_id,
+                                )
+                                response_task.cancel()
+                                try:
+                                    await response_task
+                                except asyncio.CancelledError:
+                                    pass
+                            except Exception:
+                                # 中断後の応答処理エラーは無視
+                                pass
+
+                            # 新しい指示を送信
+                            await client.query(new_instruction)
+                        finally:
+                            session._interrupt_in_progress = False
+
+                        continue  # ループ先頭で再度 receive_response + 監視を開始
+
+                    if response_task in done:
+                        # 正常完了（ResultMessage 到達）
+                        interrupt_task.cancel()
+                        # response_task で例外が発生していたら再送出
+                        response_task.result()
+                        break
+
+                # クライアント参照をクリア
+                session.client = None
 
             session.status = "completed"
             self._emit_event(session, {"type": "completed", "session_id": session.session_id})
@@ -223,6 +325,12 @@ class SessionManager:
                 logger.exception("Failed to post error alert")
 
         finally:
+            session.client = None
+
+            # TASK-104: スレッド→セッションマッピングを解除
+            if session.thread_ts and session.thread_ts in self._thread_to_session:
+                del self._thread_to_session[session.thread_ts]
+
             # 定期進捗通知タスクをキャンセル
             progress_task.cancel()
             try:
@@ -249,16 +357,29 @@ class SessionManager:
             except Exception:
                 logger.exception("Failed to post session end message")
 
+    async def _consume_responses(self, client: ClaudeSDKClient, session: Session) -> None:
+        """receive_response() のメッセージをイテレートし出力を処理する。"""
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        self._emit_output(session, block.text)
+
     async def _periodic_progress(self, session: Session) -> None:
         """TASK-304: 定期的な進捗ステータス通知。
 
-        既存メッセージを編集更新する方式でスレッド内のメッセージ増加を抑制する。
+        TASK-205/206: 通知音排除対応。
+        - session.progress_msg_ts が設定済みの場合（プレースホルダー投稿成功時）は
+          常に chat_update で更新し、chat_postMessage を呼ばない。
+        - progress_msg_ts が None の場合（フォールバック）は従来通り chat_postMessage で初回投稿。
+        TASK-201: TodoList 状態を進捗通知に統合表示。
+        TASK-203: 進捗間隔は Config.progress_interval_sec で設定可能。
         """
-        progress_msg_ts: str | None = None
+        interval = self._config.progress_interval_sec
 
         try:
-            # 最初の通知は PERIODIC_PROGRESS_INTERVAL 後
-            await asyncio.sleep(PERIODIC_PROGRESS_INTERVAL)
+            # 最初の通知は interval 後
+            await asyncio.sleep(interval)
 
             while session.status == "running":
                 duration = time.time() - session.started_at
@@ -267,27 +388,28 @@ class SessionManager:
                     duration_sec=duration,
                     tool_uses=session.stats.total_uses,
                     last_tool=session.stats.last_tool,
+                    todos=session.last_todos,
                 )
 
                 try:
-                    if progress_msg_ts is None:
-                        # 初回は新規投稿
+                    if session.progress_msg_ts is not None:
+                        # TASK-206: プレースホルダーが存在する場合は常に chat_update
+                        await self._bot.update_message(
+                            ts=session.progress_msg_ts,
+                            blocks=blocks,
+                        )
+                    else:
+                        # フォールバック: プレースホルダー投稿失敗時は新規投稿
                         resp = await self._bot.post_message(
                             blocks=blocks,
                             text=f"Session {session.session_id} progress",
                             thread_ts=session.thread_ts,
                         )
-                        progress_msg_ts = resp["ts"]
-                    else:
-                        # 2回目以降は既存メッセージを更新
-                        await self._bot.update_message(
-                            ts=progress_msg_ts,
-                            blocks=blocks,
-                        )
+                        session.progress_msg_ts = resp["ts"]
                 except Exception:
                     logger.warning("Failed to update periodic progress for session %s", session.session_id)
 
-                await asyncio.sleep(PERIODIC_PROGRESS_INTERVAL)
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
 
@@ -379,6 +501,27 @@ class SessionManager:
             pass
 
         return f"Session '{session_id}' has been stopped."
+
+    def get_session_by_thread(self, thread_ts: str) -> Session | None:
+        """TASK-104: スレッド ts からセッションを取得する。"""
+        return self._thread_to_session.get(thread_ts)
+
+    def enqueue_interrupt(self, session: Session, instruction: str) -> None:
+        """TASK-107: 割り込み指示をキューに投入する（latest-only ポリシー）。"""
+        if session.interrupt_queue is None:
+            return
+        try:
+            session.interrupt_queue.put_nowait(instruction)
+        except asyncio.QueueFull:
+            # 上限到達時は最古のエントリを破棄して最新を投入
+            try:
+                session.interrupt_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                session.interrupt_queue.put_nowait(instruction)
+            except asyncio.QueueFull:
+                logger.warning("Failed to enqueue interrupt for session %s", session.session_id)
 
     def register_thread_question(
         self, thread_ts: str, cid: str, question_index: int, message_ts: str,

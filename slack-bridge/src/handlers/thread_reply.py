@@ -1,4 +1,4 @@
-"""スレッド返信ハンドラ: スレッド返信による質問回答"""
+"""スレッド返信ハンドラ: スレッド返信による質問回答 + 割り込み指示"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..handlers.ask_question import _try_resolve_all_answered
 from ..slack_bot import SlackAPIError
-from ..slack_messages import ask_resolved_blocks
+from ..slack_messages import ask_resolved_blocks, interrupt_ack_blocks
 
 if TYPE_CHECKING:
     from slack_bolt.app.async_app import AsyncApp
@@ -47,60 +47,97 @@ def register_thread_reply_handler(
 
         # pending な質問を検索
         pending = session_manager.get_pending_questions_for_thread(thread_ts)
-        if not pending:
+
+        if pending:
+            # --- 既存: 質問回答処理 ---
+            entry = pending[0]
+            cid = entry["cid"]
+            question_index = entry["question_index"]
+            message_ts = entry["message_ts"]
+
+            text = event.get("text", "").strip()
+            if not text:
+                return
+
+            # bridge の pending request から question_meta を取得
+            req = bridge._pending.get(cid)
+            if req is None:
+                return
+            meta = getattr(req, "_question_meta", None)
+            if meta is None:
+                return
+
+            q_text = meta["question_keys"][question_index]
+
+            # 既にこの質問に回答済みなら無視
+            if q_text in meta["answers"]:
+                return
+
+            # 回答を記録
+            meta["answers"][q_text] = text
+            meta["answered_count"] += 1
+            meta["last_user_id"] = user_id
+
+            # 質問メッセージを更新
+            try:
+                await bot.update_message(
+                    ts=message_ts,
+                    blocks=ask_resolved_blocks(q_text, text, user_id),
+                    text=f"{q_text} → {text}",
+                )
+            except SlackAPIError as e:
+                logger.error("Failed to update thread reply message: %s", e)
+
+            # 監査ログ記録
+            audit.record(
+                correlation_id=cid,
+                request_type="ask_question",
+                tool_name="AskUserQuestion",
+                summary=q_text,
+                decision="thread_reply",
+                responder_user_id=user_id,
+            )
+
+            # 単一解放
+            session_manager.unregister_thread_question(thread_ts, cid, question_index)
+
+            # 全回答完了チェック
+            _try_resolve_all_answered(bridge, cid)
             return
 
-        # 最も古い未回答質問に回答を割り当てる
-        entry = pending[0]
-        cid = entry["cid"]
-        question_index = entry["question_index"]
-        message_ts = entry["message_ts"]
+        # --- TASK-103: 割り込み指示処理 ---
+        # pending 質問がない場合、スレッドに紐付いたセッションへの割り込み指示と判断
+        session = session_manager.get_session_by_thread(thread_ts)
+        if session is None:
+            return
 
         text = event.get("text", "").strip()
         if not text:
             return
 
-        # bridge の pending request から question_meta を取得
-        req = bridge._pending.get(cid)
-        if req is None:
-            return
-        meta = getattr(req, "_question_meta", None)
-        if meta is None:
+        if session.status != "running":
             return
 
-        q_text = meta["question_keys"][question_index]
+        # TASK-107: 割り込みキューに投入
+        session_manager.enqueue_interrupt(session, text)
 
-        # 既にこの質問に回答済みなら無視
-        if q_text in meta["answers"]:
-            return
-
-        # 回答を記録
-        meta["answers"][q_text] = text
-        meta["answered_count"] += 1
-        meta["last_user_id"] = user_id
-
-        # 質問メッセージを更新
+        # TASK-105: 確認メッセージをスレッドに投稿
         try:
-            await bot.update_message(
-                ts=message_ts,
-                blocks=ask_resolved_blocks(q_text, text, user_id),
-                text=f"{q_text} → {text}",
+            await bot.post_message(
+                blocks=interrupt_ack_blocks(text),
+                text=f"Interrupt: {text[:80]}",
+                thread_ts=thread_ts,
             )
-        except SlackAPIError as e:
-            logger.error("Failed to update thread reply message: %s", e)
+        except Exception:
+            logger.warning("Failed to post interrupt ack for session %s", session.session_id)
 
-        # 監査ログ記録
+        # TASK-106: 監査ログ記録
         audit.record(
-            correlation_id=cid,
-            request_type="ask_question",
-            tool_name="AskUserQuestion",
-            summary=q_text,
-            decision="thread_reply",
+            correlation_id=session.session_id,
+            request_type="interrupt",
+            tool_name=None,
+            summary=text[:200],
+            decision="accepted",
             responder_user_id=user_id,
+            session_id=session.session_id,
         )
-
-        # 単一解放
-        session_manager.unregister_thread_question(thread_ts, cid, question_index)
-
-        # 全回答完了チェック
-        _try_resolve_all_answered(bridge, cid)

@@ -571,8 +571,12 @@ def periodic_progress_blocks(
     duration_sec: float,
     tool_uses: int,
     last_tool: str | None = None,
+    todos: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
-    """定期進捗ステータスメッセージ (TASK-304)。"""
+    """定期進捗ステータスメッセージ (TASK-304, TASK-201)。
+
+    TASK-201: todos が提供された場合、TodoList 状態を統合表示する。
+    """
     mins, secs = divmod(int(duration_sec), 60)
     duration_text = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
 
@@ -580,10 +584,68 @@ def periodic_progress_blocks(
     if last_tool:
         status_parts.append(f"📌 Last: {last_tool}")
 
-    return [
+    blocks: list[dict] = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": " | ".join(status_parts)},
+        },
+    ]
+
+    # TASK-201: TodoList 状態を統合表示
+    if todos:
+        total = len(todos)
+        completed = sum(1 for t in todos if t.get("status") == "completed")
+        in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
+
+        bar_length = 20
+        filled = int(bar_length * completed / total) if total > 0 else 0
+        progress_bar = "█" * filled + "░" * (bar_length - filled)
+        pct = int(100 * completed / total) if total > 0 else 0
+
+        todo_lines = [f"*Tasks:* {progress_bar} {pct}% ({completed}/{total})"]
+        for t in todos:
+            status = t.get("status", "pending")
+            content = t.get("content", "") or t.get("activeForm", "")
+            if status == "completed":
+                todo_lines.append(f"  ✅ ~{content}~")
+            elif status == "in_progress":
+                active = t.get("activeForm", content)
+                todo_lines.append(f"  🔄 *{active}*")
+            else:
+                todo_lines.append(f"  ⬜ {content}")
+
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": _safe_block_text("\n".join(todo_lines))},
+        })
+
+    return blocks
+
+
+def progress_placeholder_blocks() -> list[dict]:
+    """TASK-205: 進捗プレースホルダーメッセージ。
+
+    セッション開始時に chat_postMessage で投稿し、以降の進捗更新は chat_update で行う。
+    """
+    return [
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": "⏳ Working..."},
+            ],
+        },
+    ]
+
+
+def interrupt_ack_blocks(instruction: str) -> list[dict]:
+    """TASK-105: 割り込み指示受信時の確認メッセージ。"""
+    preview = instruction[:200] + ("..." if len(instruction) > 200 else "")
+    return [
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f":arrow_right: 追加指示を送信しました: \"{preview}\""},
+            ],
         },
     ]
 

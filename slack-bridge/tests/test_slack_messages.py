@@ -21,10 +21,12 @@ from src.slack_messages import (
     ask_timeout_blocks,
     client_disconnected_blocks,
     error_alert_blocks,
+    interrupt_ack_blocks,
     permission_blocks,
     permission_resolved_blocks,
     permission_timeout_blocks,
     periodic_progress_blocks,
+    progress_placeholder_blocks,
     session_end_blocks,
     session_start_blocks,
     timeout_warning_blocks,
@@ -947,3 +949,94 @@ class TestClientDisconnectedBlocks:
         blocks = client_disconnected_blocks("sess-001")
         text = blocks[0]["text"]["text"]
         assert ":electric_plug:" in text
+
+
+# ============================================================
+# TASK-403/TEST-008: periodic_progress_blocks に TodoList 統合表示
+# ============================================================
+
+
+class TestPeriodicProgressBlocksWithTodos:
+    """TASK-201/403: periodic_progress_blocks に TodoList 統合表示のテスト。"""
+
+    def test_without_todos(self):
+        """todos なしの場合は従来通りの1ブロック。"""
+        blocks = periodic_progress_blocks("sess-001", 90.0, 5)
+        assert len(blocks) == 1
+        text = blocks[0]["text"]["text"]
+        assert "1m 30s" in text
+
+    def test_with_todos(self):
+        """todos がある場合、TodoList 状態が2つ目のブロックに統合表示される。"""
+        todos = [
+            {"content": "Task A", "status": "completed"},
+            {"content": "Task B", "activeForm": "Doing B", "status": "in_progress"},
+            {"content": "Task C", "status": "pending"},
+        ]
+        blocks = periodic_progress_blocks("sess-001", 120.0, 10, todos=todos)
+        assert len(blocks) == 2
+        todo_text = blocks[1]["text"]["text"]
+        assert "1/3" in todo_text
+        assert "33%" in todo_text
+        assert "Task A" in todo_text
+        assert "Doing B" in todo_text
+        assert "Task C" in todo_text
+
+    def test_with_empty_todos(self):
+        """空の todos リストは無視される。"""
+        blocks = periodic_progress_blocks("sess-001", 60.0, 3, todos=[])
+        assert len(blocks) == 1
+
+    def test_with_all_completed_todos(self):
+        """全 todo 完了時は 100% 表示。"""
+        todos = [
+            {"content": "Done 1", "status": "completed"},
+            {"content": "Done 2", "status": "completed"},
+        ]
+        blocks = periodic_progress_blocks("sess-001", 300.0, 20, todos=todos)
+        todo_text = blocks[1]["text"]["text"]
+        assert "100%" in todo_text
+        assert "2/2" in todo_text
+
+
+# ============================================================
+# TASK-205: progress_placeholder_blocks
+# ============================================================
+
+
+class TestProgressPlaceholderBlocks:
+    """TASK-205: 進捗プレースホルダーメッセージのテスト。"""
+
+    def test_format(self):
+        blocks = progress_placeholder_blocks()
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "context"
+        text = blocks[0]["elements"][0]["text"]
+        assert "Working" in text
+
+
+# ============================================================
+# TASK-105: interrupt_ack_blocks
+# ============================================================
+
+
+class TestInterruptAckBlocks:
+    """TASK-105: 割り込み確認メッセージのテスト。"""
+
+    def test_contains_instruction(self):
+        blocks = interrupt_ack_blocks("Fix the tests")
+        text = blocks[0]["elements"][0]["text"]
+        assert "Fix the tests" in text
+        assert "追加指示" in text
+
+    def test_long_instruction_truncated(self):
+        long_text = "A" * 300
+        blocks = interrupt_ack_blocks(long_text)
+        text = blocks[0]["elements"][0]["text"]
+        assert "..." in text
+        assert len(text) < 350  # 200 chars preview + some overhead
+
+    def test_short_instruction_not_truncated(self):
+        blocks = interrupt_ack_blocks("short instruction")
+        text = blocks[0]["elements"][0]["text"]
+        assert "..." not in text

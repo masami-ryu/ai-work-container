@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from slack_bolt.app.async_app import AsyncApp
@@ -13,6 +14,36 @@ if TYPE_CHECKING:
     from ..session import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+class ParsedArgs(NamedTuple):
+    """TASK-301: /claude コマンドの解析結果。"""
+    prompt: str
+    cwd: str | None
+
+
+def _parse_claude_args(text: str) -> ParsedArgs:
+    """TASK-301: /claude のテキストから --cwd オプションを解析する。
+
+    書式: /claude --cwd <path> <prompt> または /claude <prompt>
+    先頭トークンが --cwd の場合のみオプションとして扱う。
+    空白を含むパスは非対応（シンプルさを優先）。
+    """
+    stripped = text.strip()
+    if not stripped.startswith("--cwd"):
+        return ParsedArgs(prompt=stripped, cwd=None)
+
+    # "--cwd" を除去
+    rest = stripped[5:].lstrip()
+    if not rest:
+        # "--cwd" のみ（path も prompt もない）
+        return ParsedArgs(prompt="", cwd=None)
+
+    # 次のトークンを path として取得
+    parts = rest.split(None, 1)
+    cwd = parts[0]
+    prompt = parts[1].strip() if len(parts) > 1 else ""
+    return ParsedArgs(prompt=prompt, cwd=cwd)
 
 
 def _check_channel(command: dict, config: Any) -> bool:
@@ -69,13 +100,36 @@ def register_slash_command_handlers(
             )
             return
 
-        prompt = command.get("text", "").strip()
+        # TASK-301: --cwd オプション解析
+        raw_text = command.get("text", "").strip()
+        parsed = _parse_claude_args(raw_text)
+        prompt = parsed.prompt
+        cwd = parsed.cwd
+
         if not prompt:
             await respond(
-                text="Usage: /claude <prompt>",
+                text="Usage: /claude [--cwd <path>] <prompt>",
                 response_type="ephemeral",
             )
             return
+
+        # TASK-302/303: cwd 指定時のパス検証
+        effective_cwd = config.default_cwd
+        if cwd is not None:
+            resolved = Path(cwd).resolve()
+            if not resolved.exists():
+                await respond(
+                    text=f"🚫 Directory not found: {resolved}",
+                    response_type="ephemeral",
+                )
+                return
+            if not resolved.is_dir():
+                await respond(
+                    text=f"🚫 Not a directory: {resolved}",
+                    response_type="ephemeral",
+                )
+                return
+            effective_cwd = str(resolved)
 
         # 監査ログ記録
         audit.record(
@@ -85,6 +139,7 @@ def register_slash_command_handlers(
             decision="accepted",
             responder_user_id=user_id,
             summary=prompt[:200],
+            session_id=f"cwd={effective_cwd}",
         )
 
         # 非同期でセッション開始
@@ -92,7 +147,7 @@ def register_slash_command_handlers(
             try:
                 await session_manager.start_session(
                     prompt=prompt,
-                    cwd=config.default_cwd,
+                    cwd=effective_cwd,
                 )
             except Exception:
                 logger.exception("Failed to start session from /claude")

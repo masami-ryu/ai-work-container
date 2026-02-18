@@ -238,8 +238,8 @@ async def test_write_tool_tracks_changed_files():
 
 
 @pytest.mark.asyncio
-async def test_todowrite_triggers_todo_progress_notification():
-    """TodoWrite 実行時に session が設定されていれば Slack に進捗通知が送信される。"""
+async def test_todowrite_updates_session_last_todos():
+    """TASK-202/406: TodoWrite 実行時に session.last_todos が更新され、Slack への直接投稿は行われない。"""
     bridge = RequestBridge()
     bot = MagicMock()
     bot.post_message = AsyncMock(return_value={"ts": "9999.0001"})
@@ -259,18 +259,17 @@ async def test_todowrite_triggers_todo_progress_notification():
         ]
     }
 
-    with patch("src.permission_handler.time") as mock_time:
-        # _todo_last_notify_time は 0 なので、now=100 であれば間隔チェックを通過する
-        mock_time.time.return_value = 100.0
-
-        result = await callback("TodoWrite", todos_input, None)
+    result = await callback("TodoWrite", todos_input, None)
 
     assert result.behavior == "allow"
-    # bot.post_message が呼ばれた（セッション開始メッセージとは別に進捗通知）
-    bot.post_message.assert_called()
-    # 通知メッセージの text にセッションIDが含まれる
-    call_kwargs = bot.post_message.call_args
-    assert "todo-sess" in call_kwargs.kwargs.get("text", "") or "todo-sess" in str(call_kwargs)
+    # session.last_todos が更新される
+    assert session.last_todos is not None
+    assert len(session.last_todos) == 2
+    assert session.last_todos[0]["content"] == "Task A"
+    assert session.last_todos[1]["status"] == "in_progress"
+    # Slack API は呼ばれない
+    bot.post_message.assert_not_called()
+    bot.update_message.assert_not_called()
 
 
 @pytest.mark.asyncio

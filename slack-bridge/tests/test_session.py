@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -564,3 +565,329 @@ class TestSessionEndBlocks:
         # 最低限ヘッダブロックだけが存在する
         assert len(blocks) >= 1
         assert "sess-009" in blocks[0]["text"]["text"]
+
+
+# --- TASK-402: 割り込み指示のセッション統合テスト ---
+
+
+class TestInterruptQueue:
+    """割り込みキューの動作テスト。"""
+
+    def test_enqueue_interrupt_basic(self):
+        """基本的な割り込みキュー投入。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        session = Session(
+            session_id="int-1", prompt="test", cwd=".",
+            interrupt_queue=asyncio.Queue(maxsize=5),
+        )
+        sm.enqueue_interrupt(session, "new instruction")
+
+        assert not session.interrupt_queue.empty()
+        assert session.interrupt_queue.get_nowait() == "new instruction"
+
+    def test_enqueue_interrupt_overflow_drops_oldest(self):
+        """TEST-010: キュー上限超過時に最古のエントリが破棄される。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        session = Session(
+            session_id="int-2", prompt="test", cwd=".",
+            interrupt_queue=asyncio.Queue(maxsize=2),
+        )
+        sm.enqueue_interrupt(session, "first")
+        sm.enqueue_interrupt(session, "second")
+        # キュー満杯
+        assert session.interrupt_queue.full()
+
+        # 3つ目投入 → 最古 (first) が破棄される
+        sm.enqueue_interrupt(session, "third")
+        items = []
+        while not session.interrupt_queue.empty():
+            items.append(session.interrupt_queue.get_nowait())
+        assert items == ["second", "third"]
+
+    def test_enqueue_interrupt_none_queue(self):
+        """interrupt_queue が None の場合はエラーなく無視される。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        session = Session(session_id="int-3", prompt="test", cwd=".")
+        session.interrupt_queue = None
+        sm.enqueue_interrupt(session, "ignored")  # エラーが発生しない
+
+    def test_interrupt_in_progress_flag(self):
+        """TASK-108/TEST-011: _interrupt_in_progress フラグの動作確認。"""
+        session = Session(session_id="int-4", prompt="test", cwd=".")
+        assert session._interrupt_in_progress is False
+
+        session._interrupt_in_progress = True
+        assert session._interrupt_in_progress is True
+
+
+# --- TASK-104/402: スレッド→セッションマッピングと解放テスト ---
+
+
+class TestThreadToSessionMapping:
+    """スレッド→セッションマッピングの登録・解除テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_mapping_registered_on_start(self):
+        """TEST-015: セッション開始時にマッピングが登録される。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        with patch("src.session.ClaudeSDKClient") as mock_sdk:
+            mock_client = AsyncMock()
+            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.receive_response = AsyncMock(return_value=AsyncMock(
+                __aiter__=lambda self: self,
+                __anext__=AsyncMock(side_effect=StopAsyncIteration),
+            ))
+
+            session = await sm.start_session("test", "/tmp")
+
+        thread_ts = session.thread_ts
+        assert sm.get_session_by_thread(thread_ts) is session
+
+        await sm.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_mapping_released_after_natural_completion(self):
+        """TEST-015: 自然完了後に get_session_by_thread() が None を返す。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        with patch("src.session.ClaudeSDKClient") as mock_sdk:
+            mock_client = AsyncMock()
+            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.receive_response = AsyncMock(return_value=AsyncMock(
+                __aiter__=lambda self: self,
+                __anext__=AsyncMock(side_effect=StopAsyncIteration),
+            ))
+
+            session = await sm.start_session("test", "/tmp")
+            thread_ts = session.thread_ts
+
+        # タスク完了を待機
+        try:
+            await asyncio.wait_for(session.task, timeout=2.0)
+        except Exception:
+            pass
+
+        assert sm.get_session_by_thread(thread_ts) is None
+
+    @pytest.mark.asyncio
+    async def test_mapping_released_after_stop_session(self):
+        """TEST-015: stop_session() 後に get_session_by_thread() が None を返す。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        with patch("src.session.ClaudeSDKClient") as mock_sdk:
+            mock_client = AsyncMock()
+            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.receive_response = AsyncMock(return_value=AsyncMock(
+                __aiter__=lambda self: self,
+                __anext__=AsyncMock(side_effect=StopAsyncIteration),
+            ))
+            mock_client.query = AsyncMock()
+
+            session = await sm.start_session("test", "/tmp")
+            thread_ts = session.thread_ts
+
+            assert sm.get_session_by_thread(thread_ts) is session
+
+            # タスク完了を待機（receive_response はすぐに終了する）
+            try:
+                await asyncio.wait_for(session.task, timeout=2.0)
+            except Exception:
+                pass
+
+        assert sm.get_session_by_thread(thread_ts) is None
+
+    @pytest.mark.asyncio
+    async def test_mapping_released_after_shutdown(self):
+        """TEST-015: shutdown() 後に get_session_by_thread() が None を返す。"""
+        config = _make_config()
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        with patch("src.session.ClaudeSDKClient") as mock_sdk:
+            mock_client = AsyncMock()
+            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.receive_response = AsyncMock(return_value=AsyncMock(
+                __aiter__=lambda self: self,
+                __anext__=AsyncMock(side_effect=StopAsyncIteration),
+            ))
+            mock_client.query = AsyncMock()
+
+            session = await sm.start_session("test", "/tmp")
+            thread_ts = session.thread_ts
+
+        # タスク完了を待機
+        try:
+            await asyncio.wait_for(session.task, timeout=2.0)
+        except Exception:
+            pass
+
+        await sm.shutdown()
+
+        assert sm.get_session_by_thread(thread_ts) is None
+
+
+# --- TASK-409: 通知音排除のテスト ---
+
+
+class TestProgressNotificationSilent:
+    """TASK-205/206: 通知音排除の動作テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_progress_placeholder_posted_on_start(self):
+        """TEST-019: セッション開始時にプレースホルダーメッセージが投稿され、ts が保持される。"""
+        config = _make_config()
+        bot = _make_bot()
+        # 2回目の post_message 呼び出し（プレースホルダー）に別の ts を返す
+        bot.post_message = AsyncMock(side_effect=[
+            {"ts": "start_msg_ts"},     # セッション開始メッセージ
+            {"ts": "placeholder_ts"},   # プレースホルダー
+        ])
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        with patch("src.session.ClaudeSDKClient") as mock_sdk:
+            mock_client = AsyncMock()
+            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.receive_response = AsyncMock(return_value=AsyncMock(
+                __aiter__=lambda self: self,
+                __anext__=AsyncMock(side_effect=StopAsyncIteration),
+            ))
+
+            session = await sm.start_session("test", ".")
+
+        # プレースホルダー ts が設定される
+        assert session.progress_msg_ts == "placeholder_ts"
+        # post_message が2回呼ばれている（セッション開始 + プレースホルダー）
+        assert bot.post_message.call_count == 2
+
+        await sm.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_periodic_progress_uses_update_when_placeholder_set(self):
+        """TEST-020: progress_msg_ts 設定済みの場合、_periodic_progress は chat_update のみ使用。"""
+        config = _make_config(progress_interval_sec=10)
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        session = Session(
+            session_id="prog-1", prompt="test", cwd=".",
+            progress_msg_ts="existing_placeholder_ts",
+        )
+        session.started_at = 0
+
+        # asyncio.sleep をパッチして即座に返す。2回目でループ終了。
+        call_count = 0
+
+        async def _fake_sleep(_seconds):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                session.status = "completed"
+
+        with patch("src.session.asyncio.sleep", side_effect=_fake_sleep):
+            await sm._periodic_progress(session)
+
+        # chat_update が呼ばれ、chat_postMessage は呼ばれない
+        bot.update_message.assert_called()
+        update_kwargs = bot.update_message.call_args.kwargs
+        assert update_kwargs["ts"] == "existing_placeholder_ts"
+        # post_message は呼ばれていない
+        bot.post_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_periodic_progress_fallback_when_no_placeholder(self):
+        """TEST-021: progress_msg_ts が None の場合、chat_postMessage で初回投稿する。"""
+        config = _make_config(progress_interval_sec=10)
+        bot = _make_bot()
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+
+        session = Session(
+            session_id="prog-2", prompt="test", cwd=".",
+            progress_msg_ts=None,
+        )
+        session.started_at = 0
+        session.thread_ts = "thread_prog_2"
+
+        call_count = 0
+
+        async def _fake_sleep(_seconds):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                session.status = "completed"
+
+        with patch("src.session.asyncio.sleep", side_effect=_fake_sleep):
+            await sm._periodic_progress(session)
+
+        # post_message が呼ばれた（フォールバック）
+        bot.post_message.assert_called()
+        # progress_msg_ts が設定される
+        assert session.progress_msg_ts == "1234.5678"
+
+
+# --- Session フィールドのテスト ---
+
+
+class TestSessionFields:
+    """Session dataclass の新規フィールドテスト。"""
+
+    def test_client_field_default(self):
+        """client フィールドのデフォルト値は None。"""
+        session = Session(session_id="f1", prompt="test", cwd=".")
+        assert session.client is None
+
+    def test_interrupt_queue_field(self):
+        """interrupt_queue フィールドの設定と取得。"""
+        q = asyncio.Queue(maxsize=5)
+        session = Session(session_id="f2", prompt="test", cwd=".", interrupt_queue=q)
+        assert session.interrupt_queue is q
+
+    def test_last_todos_field_default(self):
+        """last_todos フィールドのデフォルト値は None。"""
+        session = Session(session_id="f3", prompt="test", cwd=".")
+        assert session.last_todos is None
+
+    def test_progress_msg_ts_field(self):
+        """progress_msg_ts フィールドの設定と取得。"""
+        session = Session(session_id="f4", prompt="test", cwd=".", progress_msg_ts="ts_123")
+        assert session.progress_msg_ts == "ts_123"
