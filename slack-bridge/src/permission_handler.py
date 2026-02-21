@@ -99,6 +99,7 @@ def create_permission_callback(
         # 3. その他のツール → 権限確認ハンドラへ
         from .handlers.permission import handle_permission
 
+        # P4-002: session_id を渡して通知テキストを改善
         result = await handle_permission(
             tool_name,
             input_data,
@@ -107,6 +108,7 @@ def create_permission_callback(
             config=config,
             audit=audit,
             thread_ts=thread_ts,
+            session_id=session.session_id if session else None,
         )
         decision = result.get("decision", "deny")
         reason = result.get("reason", "")

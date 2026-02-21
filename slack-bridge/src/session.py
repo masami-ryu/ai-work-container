@@ -10,7 +10,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock
+from claude_agent_sdk import (
+    ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock,
+    ToolUseBlock, ThinkingBlock, ToolResultBlock,
+)
 
 from .bridge import RequestBridge
 from .permission_handler import create_permission_callback
@@ -125,6 +128,7 @@ class SessionManager:
         bridge: RequestBridge,
         config: Config,
         audit: AuditLog,
+        session_store: Any | None = None,
     ) -> None:
         self._bot = bot
         self._bridge = bridge
@@ -135,6 +139,63 @@ class SessionManager:
         self._thread_questions: dict[str, list[dict]] = {}
         # TASK-104: スレッド→セッションマッピング（割り込み指示用）
         self._thread_to_session: dict[str, Session] = {}
+        # P5-001: セッション永続化層
+        self._store = session_store
+
+    async def recover_interrupted_sessions(self) -> int:
+        """P5-003: デーモン起動時に前回中断されたセッションを復旧する。
+
+        status="running" のレコードを検出し、Slack スレッドに中断通知を投稿、
+        ステータスを "interrupted" に更新する。
+        重複通知防止: status を即座に "interrupted" に更新してから通知するため、
+        再度再起動しても同一セッションが重複通知されない。
+
+        Returns:
+            復旧されたセッション数。
+        """
+        if self._store is None:
+            return 0
+
+        try:
+            active_sessions = self._store.list_active()
+        except Exception:
+            logger.warning("Failed to read active sessions from store")
+            return 0
+
+        count = 0
+        for session_data in active_sessions:
+            session_id = session_data["session_id"]
+            thread_ts = session_data.get("thread_ts")
+
+            # まずステータスを更新（重複通知防止）
+            try:
+                self._store.update_status(session_id, "interrupted")
+            except Exception:
+                logger.warning("Failed to update interrupted status for session %s", session_id)
+                continue
+
+            # Slack スレッドに中断通知を投稿
+            if thread_ts:
+                try:
+                    from .slack_messages import session_interrupted_blocks
+                    blocks = session_interrupted_blocks(session_id)
+                    await self._bot.post_message(
+                        blocks=blocks,
+                        text=f"Session {session_id} was interrupted by daemon restart",
+                        thread_ts=thread_ts,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to post interrupted notification for session %s",
+                        session_id,
+                    )
+
+            count += 1
+            logger.info("Recovered interrupted session: %s", session_id)
+
+        if count > 0:
+            logger.info("Recovered %d interrupted session(s)", count)
+        return count
 
     async def start_session(
         self, prompt: str, cwd: str | None = None
@@ -144,10 +205,12 @@ class SessionManager:
         effective_cwd = cwd or "."
 
         # Slack にセッション開始メッセージを投稿（スレッド親）
+        # P4-003: 通知テキストにプロンプトの最初の行を含める
         blocks = session_start_blocks(prompt, effective_cwd, session_id)
+        prompt_first_line = prompt.split("\n", 1)[0][:80]
         resp = await self._bot.post_message(
             blocks=blocks,
-            text=f"[Session {session_id}] {prompt[:80]}",
+            text=f"[Session {session_id}] {prompt_first_line}",
         )
         thread_ts = resp["ts"]
 
@@ -164,6 +227,21 @@ class SessionManager:
             interrupt_queue=interrupt_queue,
         )
         self._sessions[session_id] = session
+
+        # P5-002: セッション状態を永続化
+        if self._store is not None:
+            try:
+                from datetime import datetime, timezone
+                self._store.save(
+                    session_id=session_id,
+                    prompt=prompt,
+                    cwd=effective_cwd,
+                    status="running",
+                    thread_ts=thread_ts,
+                    started_at=datetime.fromtimestamp(session.started_at, tz=timezone.utc).isoformat(),
+                )
+            except Exception:
+                logger.warning("Failed to persist session %s", session_id)
 
         # TASK-104: スレッド→セッションマッピングを登録
         self._thread_to_session[thread_ts] = session
@@ -291,10 +369,14 @@ class SessionManager:
                 session.client = None
 
             session.status = "completed"
+            # P5-002: 完了ステータスを永続化
+            self._update_store_status(session.session_id, "completed")
             self._emit_event(session, {"type": "completed", "session_id": session.session_id})
 
         except asyncio.CancelledError:
             session.status = "cancelled"
+            # P5-002: キャンセルステータスを永続化
+            self._update_store_status(session.session_id, "cancelled")
             self._emit_event(session, {
                 "type": "error",
                 "session_id": session.session_id,
@@ -306,6 +388,8 @@ class SessionManager:
         except Exception as e:
             session.status = "error"
             session.error_message = str(e)
+            # P5-002: エラーステータスを永続化
+            self._update_store_status(session.session_id, "error")
             logger.exception("Session %s failed", session.session_id)
             self._emit_event(session, {
                 "type": "error",
@@ -357,13 +441,52 @@ class SessionManager:
             except Exception:
                 logger.exception("Failed to post session end message")
 
+            # P5-004: 終端セッションの遅延クリーンアップをスケジュール
+            self._schedule_cleanup(session.session_id)
+
     async def _consume_responses(self, client: ClaudeSDKClient, session: Session) -> None:
-        """receive_response() のメッセージをイテレートし出力を処理する。"""
+        """receive_response() のメッセージをイテレートし出力を処理する。
+
+        P3-001〜P3-003: TextBlock に加え ToolUseBlock/ThinkingBlock/ToolResultBlock も処理する。
+        P3-004: block_type フィールドを出力イベントに付与する。
+        P3-005: ThinkingBlock は verbose モード時のみ出力する。
+        """
+        verbose = self._config.verbose
         async for message in client.receive_response():
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
-                        self._emit_output(session, block.text)
+                        self._emit_output(session, block.text, block_type="text")
+
+                    elif isinstance(block, ToolUseBlock):
+                        # P3-001: ツール名と入力のサマリを出力
+                        input_summary = str(block.input)
+                        if len(input_summary) > 200:
+                            input_summary = input_summary[:200] + "..."
+                        tool_text = f"\n[Tool: {block.name}] {input_summary}\n"
+                        self._emit_output(session, tool_text, block_type="tool_use")
+
+                    elif isinstance(block, ThinkingBlock):
+                        # P3-002/P3-005: verbose モード時のみ ThinkingBlock を出力
+                        if verbose:
+                            thinking_preview = block.thinking
+                            if len(thinking_preview) > 500:
+                                thinking_preview = thinking_preview[:500] + "..."
+                            thinking_text = f"\n[Thinking] {thinking_preview}\n"
+                            self._emit_output(session, thinking_text, block_type="thinking")
+
+                    elif isinstance(block, ToolResultBlock):
+                        # P3-003: ツール実行結果のサマリを出力
+                        status = "error" if block.is_error else "ok"
+                        content_preview = ""
+                        if isinstance(block.content, str):
+                            content_preview = block.content[:200]
+                            if len(block.content) > 200:
+                                content_preview += "..."
+                        elif isinstance(block.content, list):
+                            content_preview = f"({len(block.content)} items)"
+                        result_text = f"\n[Result: {status}] {content_preview}\n"
+                        self._emit_output(session, result_text, block_type="tool_result")
 
     async def _periodic_progress(self, session: Session) -> None:
         """TASK-304: 定期的な進捗ステータス通知。
@@ -413,14 +536,49 @@ class SessionManager:
         except asyncio.CancelledError:
             pass
 
-    def _emit_output(self, session: Session, text: str) -> None:
-        """出力をバッファに蓄積し、購読者にイベントを配信する。"""
+    def _update_store_status(self, session_id: str, status: str) -> None:
+        """P5-002: セッションストアのステータスを安全に更新する。"""
+        if self._store is not None:
+            try:
+                self._store.update_status(session_id, status)
+            except Exception:
+                logger.warning("Failed to update session store status for %s", session_id)
+
+    def _schedule_cleanup(self, session_id: str) -> None:
+        """P5-004: 終端セッションの遅延クリーンアップをスケジュールする。
+
+        session_retention_sec 後に _sessions dict からセッションを削除する。
+        SQLite 上のレコードは保持（監査・履歴用）。
+        """
+        retention = self._config.session_retention_sec
+
+        def _cleanup() -> None:
+            session = self._sessions.pop(session_id, None)
+            if session is not None:
+                logger.info(
+                    "Cleaned up terminal session %s (status=%s, retained %ds)",
+                    session_id, session.status, retention,
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_later(retention, _cleanup)
+        except RuntimeError:
+            # イベントループが存在しない場合は即時削除
+            self._sessions.pop(session_id, None)
+
+    def _emit_output(self, session: Session, text: str, block_type: str = "text") -> None:
+        """出力をバッファに蓄積し、購読者にイベントを配信する。
+
+        P3-004: block_type フィールドを付与し、CLI 側でブロック種別に応じた表示を可能にする。
+        """
         for line in text.splitlines(keepends=True):
             session.output_buffer.append(line)
         event = {
             "type": "output",
             "session_id": session.session_id,
             "text": text,
+            "block_type": block_type,
         }
         self._emit_event(session, event)
 
@@ -470,6 +628,63 @@ class SessionManager:
             }
             for s in self._sessions.values()
         ]
+
+    def list_all_sessions(self) -> list[dict]:
+        """P5-005: SQLite から全セッション（履歴含む）を返す。
+
+        アクティブセッション（メモリ内）のステータスを SQLite のレコードに優先させる。
+        """
+        if self._store is None:
+            # ストアがない場合はメモリ上のセッションのみ返す
+            return self.list_sessions()
+
+        try:
+            stored = self._store.list_all()
+        except Exception:
+            logger.warning("Failed to list sessions from store")
+            return self.list_sessions()
+
+        # メモリ上のセッションで最新ステータスを上書き
+        memory_sessions = {s.session_id: s for s in self._sessions.values()}
+        result = []
+        seen_ids = set()
+        for row in stored:
+            sid = row["session_id"]
+            seen_ids.add(sid)
+            if sid in memory_sessions:
+                s = memory_sessions[sid]
+                result.append({
+                    "session_id": s.session_id,
+                    "status": s.status,
+                    "prompt": s.prompt,
+                    "cwd": s.cwd,
+                    "thread_ts": s.thread_ts,
+                    "started_at": row.get("started_at"),
+                    "updated_at": row.get("updated_at"),
+                })
+            else:
+                result.append({
+                    "session_id": sid,
+                    "status": row.get("status", "unknown"),
+                    "prompt": row.get("prompt", ""),
+                    "cwd": row.get("cwd", ""),
+                    "thread_ts": row.get("thread_ts"),
+                    "started_at": row.get("started_at"),
+                    "updated_at": row.get("updated_at"),
+                })
+
+        # メモリ上にあるがストアにないセッション（保存前にリストされた場合）
+        for sid, s in memory_sessions.items():
+            if sid not in seen_ids:
+                result.append({
+                    "session_id": s.session_id,
+                    "status": s.status,
+                    "prompt": s.prompt,
+                    "cwd": s.cwd,
+                    "thread_ts": s.thread_ts,
+                })
+
+        return result
 
     def list_running_sessions(self) -> list[dict]:
         """status == "running" のセッション一覧を返す。"""

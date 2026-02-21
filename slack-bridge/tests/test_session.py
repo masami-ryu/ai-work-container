@@ -891,3 +891,253 @@ class TestSessionFields:
         """progress_msg_ts フィールドの設定と取得。"""
         session = Session(session_id="f4", prompt="test", cwd=".", progress_msg_ts="ts_123")
         assert session.progress_msg_ts == "ts_123"
+
+
+# --- P3-006: 出力ストリーミング拡張のユニットテスト ---
+
+
+class TestOutputStreamingExtension:
+    """P3-006: 各ブロックタイプの出力フォーマットテスト。"""
+
+    def _make_session_manager(self):
+        bridge = RequestBridge()
+        audit = AuditLog(":memory:")
+        config = _make_config()
+        bot = _make_bot()
+        sm = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
+        return sm
+
+    def _make_session(self):
+        return Session(session_id="stream_test", prompt="test", cwd=".")
+
+    def test_emit_output_text_block(self):
+        """P3-006: TextBlock 出力にblock_type='text'が付与される。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        sm._emit_output(session, "Hello world", block_type="text")
+
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["text"] == "Hello world"
+        assert event["block_type"] == "text"
+
+    def test_emit_output_tool_use_block(self):
+        """P3-006: ToolUseBlock 出力にblock_type='tool_use'が付与される。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        sm._emit_output(session, "[Tool: Bash] ls -la", block_type="tool_use")
+
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "tool_use"
+        assert "[Tool: Bash]" in event["text"]
+
+    def test_emit_output_thinking_block(self):
+        """P3-006: ThinkingBlock 出力にblock_type='thinking'が付与される。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        sm._emit_output(session, "[Thinking] I need to...", block_type="thinking")
+
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "thinking"
+        assert "[Thinking]" in event["text"]
+
+    def test_emit_output_tool_result_block(self):
+        """P3-006: ToolResultBlock 出力にblock_type='tool_result'が付与される。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        sm._emit_output(session, "[Result: ok] success", block_type="tool_result")
+
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "tool_result"
+        assert "[Result: ok]" in event["text"]
+
+    def test_emit_output_default_block_type(self):
+        """P3-006: block_type 未指定時はデフォルトで'text'が付与される。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        sm._emit_output(session, "default text")
+
+        event = queue.get_nowait()
+        assert event["block_type"] == "text"
+
+    @pytest.mark.asyncio
+    async def test_consume_responses_text_block(self):
+        """P3-006: _consume_responses が TextBlock を正しく処理する。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        from claude_agent_sdk import AssistantMessage, TextBlock
+
+        mock_client = AsyncMock()
+        text_block = TextBlock(text="Hello from Agent")
+        msg = AssistantMessage(content=[text_block], model="test-model")
+
+        async def mock_receive():
+            yield msg
+
+        mock_client.receive_response = mock_receive
+
+        await sm._consume_responses(mock_client, session)
+
+        # 出力イベントが配信された
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert "Hello from Agent" in event["text"]
+        assert event["block_type"] == "text"
+
+    @pytest.mark.asyncio
+    async def test_consume_responses_tool_use_block(self):
+        """P3-006: _consume_responses が ToolUseBlock を正しく処理する。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        from claude_agent_sdk import AssistantMessage, ToolUseBlock
+
+        mock_client = AsyncMock()
+        tool_block = ToolUseBlock(id="tool_1", name="Bash", input={"command": "ls -la"})
+        msg = AssistantMessage(content=[tool_block], model="test-model")
+
+        async def mock_receive():
+            yield msg
+
+        mock_client.receive_response = mock_receive
+
+        await sm._consume_responses(mock_client, session)
+
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "tool_use"
+        assert "[Tool: Bash]" in event["text"]
+
+    @pytest.mark.asyncio
+    async def test_consume_responses_thinking_block_verbose(self):
+        """P3-006: verbose=True 時に ThinkingBlock が出力される。"""
+        sm = self._make_session_manager()
+        # verbose を True に設定
+        sm._config = _make_config(verbose=True)
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        from claude_agent_sdk import AssistantMessage, ThinkingBlock
+
+        mock_client = AsyncMock()
+        thinking_block = ThinkingBlock(thinking="I need to analyze the code", signature="sig123")
+        msg = AssistantMessage(content=[thinking_block], model="test-model")
+
+        async def mock_receive():
+            yield msg
+
+        mock_client.receive_response = mock_receive
+
+        await sm._consume_responses(mock_client, session)
+
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "thinking"
+        assert "[Thinking]" in event["text"]
+
+    @pytest.mark.asyncio
+    async def test_consume_responses_thinking_block_not_verbose(self):
+        """P3-006: verbose=False 時に ThinkingBlock が出力されない。"""
+        sm = self._make_session_manager()
+        # verbose はデフォルトで False
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        from claude_agent_sdk import AssistantMessage, ThinkingBlock
+
+        mock_client = AsyncMock()
+        thinking_block = ThinkingBlock(thinking="I need to analyze", signature="sig123")
+        msg = AssistantMessage(content=[thinking_block], model="test-model")
+
+        async def mock_receive():
+            yield msg
+
+        mock_client.receive_response = mock_receive
+
+        await sm._consume_responses(mock_client, session)
+
+        # ThinkingBlock は出力されない
+        assert queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_consume_responses_tool_result_block(self):
+        """P3-006: _consume_responses が ToolResultBlock を正しく処理する。"""
+        sm = self._make_session_manager()
+        session = self._make_session()
+        session.subscribers = []
+
+        queue: asyncio.Queue = asyncio.Queue()
+        session.subscribers.append(queue)
+
+        from claude_agent_sdk import AssistantMessage, ToolResultBlock
+
+        mock_client = AsyncMock()
+        result_block = ToolResultBlock(tool_use_id="tool_1", content="file.txt\ndir/", is_error=False)
+        msg = AssistantMessage(content=[result_block], model="test-model")
+
+        async def mock_receive():
+            yield msg
+
+        mock_client.receive_response = mock_receive
+
+        await sm._consume_responses(mock_client, session)
+
+        assert not queue.empty()
+        event = queue.get_nowait()
+        assert event["type"] == "output"
+        assert event["block_type"] == "tool_result"
+        assert "[Result: ok]" in event["text"]
+
+    def test_verbose_config(self):
+        """P3-006: verbose 設定が config に反映される。"""
+        config_verbose = _make_config(verbose=True)
+        assert config_verbose.verbose is True
+
+        config_default = _make_config()
+        assert config_default.verbose is False

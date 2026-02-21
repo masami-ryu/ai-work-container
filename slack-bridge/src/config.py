@@ -32,6 +32,8 @@ class Config:
     default_cwd: str = "."
     progress_interval_sec: int = 120
     interrupt_queue_maxsize: int = 5
+    verbose: bool = False
+    session_retention_sec: int = 3600
 
     def __post_init__(self) -> None:
         """TASK-602: 設定値のバリデーション。"""
@@ -89,6 +91,18 @@ class Config:
                 "must be <= 600 seconds"
             )
 
+        # P5-004: セッション保持時間バリデーション
+        if self.session_retention_sec < 60:
+            errors.append(
+                f"SESSION_RETENTION_SEC ({self.session_retention_sec}) "
+                "must be >= 60 seconds"
+            )
+        if self.session_retention_sec > 86400:
+            errors.append(
+                f"SESSION_RETENTION_SEC ({self.session_retention_sec}) "
+                "must be <= 86400 seconds (24h)"
+            )
+
         if errors:
             raise ConfigValidationError(
                 "Config validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -129,6 +143,8 @@ def load_config() -> Config:
         default_cwd=os.environ.get("DEFAULT_CWD", "."),
         progress_interval_sec=int(os.environ.get("PROGRESS_INTERVAL_SEC", "120")),
         interrupt_queue_maxsize=int(os.environ.get("INTERRUPT_QUEUE_MAXSIZE", "5")),
+        verbose=os.environ.get("SB_VERBOSE", "").strip() in ("1", "true", "yes"),
+        session_retention_sec=int(os.environ.get("SB_SESSION_RETENTION_SEC", "3600")),
     )
 
 

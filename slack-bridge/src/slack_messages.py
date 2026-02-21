@@ -169,32 +169,90 @@ def permission_blocks(
     input_data: dict[str, Any],
     correlation_id: str,
     timeout_sec: int,
+    session_id: str | None = None,
 ) -> list[dict]:
+    """P4-001: 権限確認メッセージ（モバイル最適化版）。
+
+    デフォルト表示: Tool名 + Risk + ボタンのみ（コンパクト）。
+    詳細（Scope/Why/コマンド全文）は Details ボタン押下時にスレッド返信で表示。
+    """
+    summary = _command_summary(tool_name, input_data)
+    scope = summary.get("scope", "")
+
+    # P4-001: コンパクトなメイン表示（Tool + Risk + スコープヒント）
+    scope_hint = f" in `{scope}`" if scope else ""
+    blocks: list[dict] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"{_risk_text(tool_name)} *{tool_name}*{scope_hint}",
+            },
+        },
+    ]
+
+    # Allow/Deny/Details ボタン（P4-004: Details ボタン追加）
+    actions_elements = [
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Allow"},
+            "style": "primary",
+            "action_id": "perm_allow",
+            "value": correlation_id,
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Deny"},
+            "style": "danger",
+            "action_id": "perm_deny",
+            "value": correlation_id,
+        },
+        {
+            "type": "button",
+            "text": {"type": "plain_text", "text": "Details"},
+            "action_id": "perm_details",
+            "value": correlation_id,
+        },
+    ]
+    blocks.append({"type": "actions", "elements": actions_elements})
+
+    # タイムアウト + セッションIDをコンテキストに表示
+    context_parts = [f"Timeout: {timeout_sec // 60}min → auto-deny"]
+    if session_id:
+        context_parts.append(f"Session: {session_id}")
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": " | ".join(context_parts)},
+        ],
+    })
+
+    return blocks
+
+
+def permission_details_blocks(
+    tool_name: str,
+    input_data: dict[str, Any],
+) -> list[dict]:
+    """P4-004: 権限確認の詳細情報ブロック（Details ボタン押下時にスレッド返信で表示）。"""
     summary = _command_summary(tool_name, input_data)
     description_text = input_data.get("description", "")
 
     blocks: list[dict] = [
         {
-            "type": "header",
-            "text": {"type": "plain_text", "text": "Permission Required"},
-        },
-        {
             "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Tool:*\n{tool_name}"},
-                {"type": "mrkdwn", "text": f"*Risk:*\n{_risk_text(tool_name)}"},
-            ],
+            "text": {"type": "mrkdwn", "text": f"*Details for {tool_name}:*"},
         },
     ]
 
-    # TASK-202: 実行意図（description）がある場合は表示
+    # 実行意図（Why）
     if description_text:
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Why:* {_safe_block_text(description_text)}"},
         })
 
-    # TASK-203: 影響範囲
+    # 影響範囲（Scope）
     scope = summary.get("scope", "")
     if scope:
         blocks.append({
@@ -202,45 +260,13 @@ def permission_blocks(
             "text": {"type": "mrkdwn", "text": f"*Scope:* `{scope}`"},
         })
 
-    # TASK-201: リッチなコマンドサマリ
+    # コマンドサマリ（全文）
     summary_text = summary["description"]
     truncated_indicator = " ⚠️ _truncated_" if summary.get("truncated") else ""
     code_block = _safe_block_text(f"```\n{summary_text}\n```{truncated_indicator}")
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": code_block},
-    })
-
-    # Allow/Deny ボタン
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Allow"},
-                "style": "primary",
-                "action_id": "perm_allow",
-                "value": correlation_id,
-            },
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Deny"},
-                "style": "danger",
-                "action_id": "perm_deny",
-                "value": correlation_id,
-            },
-        ],
-    })
-
-    # タイムアウト表示
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": f"Timeout: {timeout_sec // 60}min → auto-deny",
-            }
-        ],
     })
 
     return blocks
@@ -690,6 +716,55 @@ def client_disconnected_blocks(session_id: str) -> list[dict]:
             "text": {
                 "type": "mrkdwn",
                 "text": f":electric_plug: *Session {session_id}*: CLI connection lost, but the session continues running.",
+            },
+        },
+    ]
+
+
+# --- Socket Mode 再接続通知メッセージ (P2-004) ---
+
+
+def reconnect_success_blocks(disconnect_count: int) -> list[dict]:
+    """P2-004: Socket Mode 再接続成功通知メッセージ。"""
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f":white_check_mark: *Socket Mode reconnected* (total disconnects: {disconnect_count})",
+            },
+        },
+    ]
+
+
+def reconnect_failure_blocks(disconnect_count: int) -> list[dict]:
+    """P2-004: Socket Mode 再接続失敗通知メッセージ。"""
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"<!channel> :rotating_light: *Socket Mode reconnection failed*\n"
+                    f"Total disconnects: {disconnect_count}\n"
+                    f"Daemon will shut down. Please restart with `sb serve`."
+                ),
+            },
+        },
+    ]
+
+
+def session_interrupted_blocks(session_id: str) -> list[dict]:
+    """P5-003: セッション中断通知メッセージ（デーモン再起動時）。"""
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f":warning: *Session {session_id}* was interrupted by daemon restart.\n"
+                    f"This session cannot be resumed."
+                ),
             },
         },
     ]

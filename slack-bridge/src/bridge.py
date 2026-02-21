@@ -41,6 +41,10 @@ class RequestBridge:
     def has_pending(self, correlation_id: str) -> bool:
         return correlation_id in self._pending
 
+    def get_request(self, correlation_id: str) -> PendingRequest | None:
+        """P4-004: correlation_id から PendingRequest を取得する（Details ボタン用）。"""
+        return self._pending.get(correlation_id)
+
     def resolve(self, correlation_id: str, result: dict) -> None:
         req = self._pending.pop(correlation_id, None)
         if req is None:

@@ -27,19 +27,25 @@ async def _serve() -> None:
     from .audit import AuditLog
     from .slack_bot import SlackBot
     from .session import SessionManager
+    from .session_store import SessionStore
     from .ipc import IPCServer
 
     config = load_config()
     bridge = RequestBridge()
     audit = AuditLog()
-    bot = SlackBot(config=config, bridge=bridge, audit=audit)
-    session_manager = SessionManager(bot=bot, bridge=bridge, config=config, audit=audit)
-    bot.set_session_manager(session_manager)
-    ipc_server = IPCServer(session_manager=session_manager)
+    session_store = SessionStore()
 
     shutdown_event = asyncio.Event()
+    # P2-005: シャットダウン二重実行防止フラグ
+    shutdown_triggered = False
 
     async def _shutdown():
+        nonlocal shutdown_triggered
+        if shutdown_triggered:
+            logger.debug("Shutdown already triggered, ignoring duplicate")
+            return
+        shutdown_triggered = True
+
         logger.info("Shutting down...")
         # 1. IPC を draining にして新規セッションを拒否
         ipc_server.set_draining()
@@ -51,6 +57,18 @@ async def _serve() -> None:
         await bot.stop()
         shutdown_event.set()
 
+    # P2-003: 致命的切断時にシャットダウンを実行するコールバック
+    bot = SlackBot(
+        config=config, bridge=bridge, audit=audit,
+        on_fatal_disconnect=_shutdown,
+    )
+    session_manager = SessionManager(
+        bot=bot, bridge=bridge, config=config, audit=audit,
+        session_store=session_store,
+    )
+    bot.set_session_manager(session_manager)
+    ipc_server = IPCServer(session_manager=session_manager)
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown()))
@@ -61,7 +79,12 @@ async def _serve() -> None:
     await ipc_server.start()
     logger.info("IPC server started (socket: %s)", ipc_server.socket_path)
 
-    logger.info("Daemon ready. Use 'sb run \"prompt\"' to start a session.")
+    # P5-003: デーモン起動時に前回中断されたセッションを復旧
+    recovered = await session_manager.recover_interrupted_sessions()
+    if recovered > 0:
+        logger.info("Recovered %d interrupted session(s) from previous run", recovered)
+
+    logger.info("Daemon ready. Use '/claude' in Slack to start a session.")
 
     await shutdown_event.wait()
     logger.info("Daemon stopped")
@@ -111,7 +134,20 @@ async def _run(prompt: str, cwd: str | None, tail: int) -> None:
 
             elif event_type == "output":
                 text = event.get("text", "")
-                print(text, end="", flush=True)
+                block_type = event.get("block_type", "text")
+                # P3-004: block_type に基づくフォーマット表示
+                if block_type == "tool_use":
+                    # ツール使用: 青色（ANSI 34）
+                    print(f"\033[34m{text}\033[0m", end="", flush=True)
+                elif block_type == "thinking":
+                    # 思考: 灰色（ANSI 90）
+                    print(f"\033[90m{text}\033[0m", end="", flush=True)
+                elif block_type == "tool_result":
+                    # ツール結果: 緑色（ANSI 32）
+                    print(f"\033[32m{text}\033[0m", end="", flush=True)
+                else:
+                    # テキスト: 通常出力
+                    print(text, end="", flush=True)
 
             elif event_type == "error":
                 msg = event.get("message", "Unknown error")
@@ -131,14 +167,25 @@ async def _run(prompt: str, cwd: str | None, tail: int) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
+    import warnings
+    warnings.warn(
+        "`sb run` は次版で削除予定です。`/claude` コマンドを使用してください。\n"
+        "  Slack チャンネルで `/claude \"プロンプト\"` を実行すると同等の機能が利用できます。\n"
+        "  詳細: docs/セットアップガイド.md",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     asyncio.run(_run(args.prompt, args.cwd, args.tail))
 
 
 # --- status サブコマンド ---
 
 
-async def _status() -> None:
-    """IPC 経由でアクティブセッション一覧を取得し表示する。"""
+async def _status(include_all: bool = False) -> None:
+    """IPC 経由でセッション一覧を取得し表示する。
+
+    P5-005: --all オプションで SQLite から履歴含む全セッションを表示。
+    """
     from .config import load_client_config
 
     client_config = load_client_config()
@@ -155,6 +202,8 @@ async def _status() -> None:
         sys.exit(1)
 
     request = {"action": "list_sessions"}
+    if include_all:
+        request["include_history"] = True
     writer.write((json.dumps(request) + "\n").encode())
     await writer.drain()
 
@@ -169,23 +218,24 @@ async def _status() -> None:
     sessions = json.loads(line.decode())
 
     if not sessions:
-        print("No active sessions.")
+        label = "sessions" if include_all else "active sessions"
+        print(f"No {label}.")
         return
 
-    print(f"{'SESSION ID':<12} {'STATUS':<12} {'CWD':<30} PROMPT")
+    print(f"{'SESSION ID':<12} {'STATUS':<14} {'CWD':<30} PROMPT")
     print("-" * 80)
     for s in sessions:
         prompt_short = s.get("prompt", "")[:40]
         print(
             f"{s.get('session_id', ''):<12} "
-            f"{s.get('status', ''):<12} "
+            f"{s.get('status', ''):<14} "
             f"{s.get('cwd', ''):<30} "
             f"{prompt_short}"
         )
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
-    asyncio.run(_status())
+    asyncio.run(_status(include_all=args.all))
 
 
 # --- 旧CLI 互換エラー ---
@@ -224,6 +274,10 @@ def main() -> None:
 
     # status
     status_parser = subparsers.add_parser("status", help="アクティブセッション一覧")
+    status_parser.add_argument(
+        "--all", "-a", action="store_true", default=False,
+        help="履歴を含む全セッションを表示",
+    )
     status_parser.set_defaults(func=_cmd_status)
 
     args = parser.parse_args()

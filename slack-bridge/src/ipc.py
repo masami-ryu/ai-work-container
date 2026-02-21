@@ -123,7 +123,7 @@ class IPCServer:
             elif action == "session_output":
                 await self._handle_session_output(request, writer)
             elif action == "list_sessions":
-                await self._handle_list_sessions(writer)
+                await self._handle_list_sessions(request, writer)
             else:
                 await self._write_event(writer, {
                     "type": "error",
@@ -277,9 +277,18 @@ class IPCServer:
             if event["type"] in ("completed", "error"):
                 break
 
-    async def _handle_list_sessions(self, writer: asyncio.StreamWriter) -> None:
-        """セッション一覧を返す。"""
-        sessions = self._session_manager.list_sessions()
+    async def _handle_list_sessions(
+        self, request: dict, writer: asyncio.StreamWriter
+    ) -> None:
+        """セッション一覧を返す。
+
+        P5-005: include_history=True の場合は SQLite から履歴も含めて返す。
+        """
+        include_history = request.get("include_history", False)
+        if include_history:
+            sessions = self._session_manager.list_all_sessions()
+        else:
+            sessions = self._session_manager.list_sessions()
         line = json.dumps(sessions) + "\n"
         writer.write(line.encode())
         await writer.drain()

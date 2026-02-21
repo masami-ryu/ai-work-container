@@ -383,29 +383,32 @@ class TestBlockTextTruncation:
 
 
 class TestPermissionBlocks:
-    """permission_blocks の構造バリデーション"""
+    """permission_blocks の構造バリデーション (P4-001: コンパクト化対応)"""
 
     def test_basic_structure(self):
-        """基本的なブロック構造: header, section(fields), section(code), actions, context。"""
+        """P4-001: コンパクト構造: section, actions, context。"""
         blocks = permission_blocks("Bash", {"command": "ls"}, "corr-123", 120)
         block_types = [b["type"] for b in blocks]
-        assert "header" in block_types
+        assert "section" in block_types
         assert "actions" in block_types
         assert "context" in block_types
 
-    def test_header_text(self):
-        """ヘッダーが "Permission Required" であること。"""
+    def test_compact_tool_display(self):
+        """P4-001: ツール名とリスクがコンパクトに表示される。"""
         blocks = permission_blocks("Bash", {"command": "ls"}, "corr-123", 120)
-        header = blocks[0]
-        assert header["text"]["text"] == "Permission Required"
+        section = blocks[0]
+        text = section["text"]["text"]
+        assert "Bash" in text
+        assert "warning" in text  # risk emoji
 
-    def test_allow_deny_buttons(self):
-        """Allow/Deny ボタンが存在すること。"""
+    def test_allow_deny_details_buttons(self):
+        """P4-004: Allow/Deny/Details ボタンが存在すること。"""
         blocks = permission_blocks("Bash", {"command": "ls"}, "corr-123", 120)
         actions_block = next(b for b in blocks if b["type"] == "actions")
         action_ids = [e["action_id"] for e in actions_block["elements"]]
         assert "perm_allow" in action_ids
         assert "perm_deny" in action_ids
+        assert "perm_details" in action_ids
 
     def test_correlation_id_in_buttons(self):
         """ボタンの value に correlation_id が含まれること。"""
@@ -421,35 +424,38 @@ class TestPermissionBlocks:
         text = context_block["elements"][0]["text"]
         assert "5min" in text
 
-    def test_description_shown_when_provided(self):
-        """TASK-202: description がある場合は "Why" セクションが表示される。"""
-        blocks = permission_blocks(
-            "Bash",
-            {"command": "rm -rf /tmp/test", "description": "Clean up temp files"},
-            "corr-123",
-            120,
-        )
-        texts = [b.get("text", {}).get("text", "") for b in blocks if b["type"] == "section"]
-        assert any("Why" in t and "Clean up temp files" in t for t in texts)
+    def test_session_id_in_context(self):
+        """P4-001: session_id がコンテキストに表示される。"""
+        blocks = permission_blocks("Bash", {"command": "ls"}, "corr-123", 120, session_id="abc123")
+        context_block = next(b for b in blocks if b["type"] == "context")
+        text = context_block["elements"][0]["text"]
+        assert "abc123" in text
 
-    def test_scope_shown_for_bash_with_cwd(self):
-        """TASK-203: Bash の cwd がスコープとして表示される。"""
+    def test_scope_in_compact_display(self):
+        """P4-001: スコープがコンパクト表示に含まれる。"""
         blocks = permission_blocks(
             "Bash",
             {"command": "ls", "cwd": "/home/user/project"},
             "corr-123",
             120,
         )
-        texts = [b.get("text", {}).get("text", "") for b in blocks if b["type"] == "section"]
-        assert any("Scope" in t and "/home/user/project" in t for t in texts)
+        section_text = blocks[0]["text"]["text"]
+        assert "/home/user/project" in section_text
 
-    def test_truncated_indicator_for_long_command(self):
-        """長いコマンドには truncated インジケータが付く。"""
-        blocks = permission_blocks("Bash", {"command": "x" * 5000}, "corr-123", 120)
+    def test_details_blocks_structure(self):
+        """P4-004: permission_details_blocks がScope/Why/コマンド詳細を含む。"""
+        from src.slack_messages import permission_details_blocks
+        blocks = permission_details_blocks(
+            "Bash",
+            {"command": "rm -rf /tmp/test", "description": "Clean up temp files", "cwd": "/app"},
+        )
         all_text = " ".join(
             b.get("text", {}).get("text", "") for b in blocks if b["type"] == "section"
         )
-        assert "truncated" in all_text
+        assert "Bash" in all_text
+        assert "Why" in all_text
+        assert "Clean up temp files" in all_text
+        assert "Scope" in all_text
 
 
 # ============================================================
