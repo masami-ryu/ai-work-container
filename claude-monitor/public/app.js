@@ -201,7 +201,7 @@ function renderCard(session) {
   const currentGroupId = getSessionGroupId(session.session_id);
 
   let html = `
-    <div class="card-header${isCompleted ? ' clickable' : ''}" data-toggle-session="${isCompleted ? session.session_id : ''}">
+    <div class="card-header${isCompleted ? ' clickable' : ''}" data-toggle-session="${isCompleted ? escapeHtml(session.session_id) : ''}">
       <div class="card-title-row">
         <span class="session-title">${titleDisplay}</span>
         <span class="session-id">${shortId}</span>
@@ -298,7 +298,7 @@ function renderGroupDropdown(sessionId, currentGroupId) {
   let html = `<div class="group-select"><span class="label">Group:</span><select data-session-id="${escapeHtml(sessionId)}" class="group-dropdown">`;
   html += `<option value=""${!currentGroupId ? ' selected' : ''}>未分類</option>`;
   groupList.forEach(g => {
-    html += `<option value="${g.id}"${currentGroupId === g.id ? ' selected' : ''}>${escapeHtml(g.name)}</option>`;
+    html += `<option value="${escapeHtml(g.id)}"${currentGroupId === g.id ? ' selected' : ''}>${escapeHtml(g.name)}</option>`;
   });
   html += `<option value="__new__">+ 新規グループ</option>`;
   html += `</select></div>`;
@@ -566,10 +566,10 @@ function renderSidebar() {
   groupList.forEach(g => {
     const count = g.session_ids ? g.session_ids.length : 0;
     html += `
-      <div class="sidebar-item${selectedGroupId === g.id ? ' active' : ''}" data-group-filter="${g.id}">
+      <div class="sidebar-item${selectedGroupId === g.id ? ' active' : ''}" data-group-filter="${escapeHtml(g.id)}">
         <span class="group-name">${escapeHtml(g.name)}</span>
         <span class="group-count">${count}</span>
-        <button class="btn-delete-group" data-group-id="${g.id}" title="削除">×</button>
+        <button class="btn-delete-group" data-group-id="${escapeHtml(g.id)}" title="削除">×</button>
       </div>
     `;
   });

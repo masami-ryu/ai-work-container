@@ -20,4 +20,4 @@ claude-monitor/dist/
 
 # slack-bridge のローカル生成物（コミットしない）
 slack-bridge/audit.db
-session.db
+slack-bridge/session.db

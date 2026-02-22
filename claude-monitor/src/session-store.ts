@@ -191,7 +191,7 @@ export class SessionStore {
           this.sessions.delete(id);
           this.onDelete?.(id);
         }
-      } else if (session.status === "running") {
+      } else if (session.status === "running" || session.status === "waiting_answer") {
         const updatedAt = new Date(session.updated_at).getTime();
         if (now - updatedAt > STALENESS_TIMEOUT_MS) {
           session.status = "idle";

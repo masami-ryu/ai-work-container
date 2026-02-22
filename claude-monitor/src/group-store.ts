@@ -43,7 +43,7 @@ export class GroupStore {
   }
 
   private async save(): Promise<void> {
-    this.writePromise = this.writePromise.catch(() => {}).then(async () => {
+    this.writePromise = this.writePromise.catch((e) => { console.error("Group save failed:", e); }).then(async () => {
       await mkdir(DATA_DIR, { recursive: true });
       const data = JSON.stringify(Array.from(this.groups.values()), null, 2);
       await writeFile(DATA_FILE, data, "utf-8");
