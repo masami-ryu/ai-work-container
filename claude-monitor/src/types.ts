@@ -24,7 +24,14 @@ export interface Session {
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
+  activities: Activity[];
   questions: Question[];
+}
+
+export interface Activity {
+  timestamp: string;       // ISO 8601
+  type: "prompt" | "tool_use" | "message" | "milestone";
+  summary: string;         // 表示用テキスト
 }
 
 export interface Milestone {

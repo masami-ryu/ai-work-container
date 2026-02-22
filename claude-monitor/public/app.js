@@ -3,7 +3,7 @@ let sessions = {};
 let pendingDecisions = {};
 let groups = {};
 let selectedGroupId = null; // null=すべて, 'ungrouped'=未分類, string=グループID
-let expandedSessions = new Set(); // 展開状態の completed セッション
+let toggledSessions = new Set(); // デフォルト状態から反転されたセッション
 let ws = null;
 let reconnectDelay = 1000;
 let muted = false;
@@ -136,6 +136,12 @@ const STATUS_LABELS = {
   completed: '✅ 完了',
 };
 
+function isCollapsed(session) {
+  const defaultCollapsed = session.status === 'completed';
+  const toggled = toggledSessions.has(session.session_id);
+  return defaultCollapsed ? !toggled : toggled;
+}
+
 function renderSessions() {
   // textarea入力値を退避
   const savedTexts = {};
@@ -170,9 +176,19 @@ function renderSessions() {
     }
   }
 
-  // Sort: waiting_permission first, then waiting_answer, running, idle, error, completed
-  const order = { waiting_permission: 0, waiting_answer: 1, running: 2, error: 3, idle: 4, completed: 5 };
-  const sorted = ids.sort((a, b) => (order[sessions[a].status] ?? 9) - (order[sessions[b].status] ?? 9));
+  // toggledSessions のクリーンアップ（存在しないセッションIDを除去）
+  toggledSessions.forEach(id => {
+    if (!sessions[id]) toggledSessions.delete(id);
+  });
+
+  // Sort: ステータス優先順位（第1キー）+ updated_at 降順（第2キー）の複合ソート
+  const priority = { waiting_permission: 0, waiting_answer: 1, error: 2 };
+  const sorted = ids.sort((a, b) => {
+    const pa = priority[sessions[a].status] ?? 9;
+    const pb = priority[sessions[b].status] ?? 9;
+    if (pa !== pb) return pa - pb;
+    return new Date(sessions[b].updated_at).getTime() - new Date(sessions[a].updated_at).getTime();
+  });
 
   sorted.forEach(id => {
     const session = sessions[id];
@@ -208,14 +224,13 @@ function renderCard(session) {
   const updatedAt = new Date(session.updated_at).toLocaleTimeString('ja-JP');
   const statusLabel = STATUS_LABELS[session.status] || session.status;
   const titleDisplay = session.title ? escapeHtml(truncate(session.title, 60)) : `${shortId}...`;
-  const isCompleted = session.status === 'completed';
-  const isCollapsed = isCompleted && !expandedSessions.has(session.session_id);
+  const collapsed = isCollapsed(session);
 
   // グループ選択ドロップダウン用
   const currentGroupId = getSessionGroupId(session.session_id);
 
   let html = `
-    <div class="card-header${isCompleted ? ' clickable' : ''}" data-toggle-session="${isCompleted ? escapeHtml(session.session_id) : ''}">
+    <div class="card-header clickable" data-toggle-session="${escapeHtml(session.session_id)}">
       <div class="card-title-row">
         <span class="session-title">${titleDisplay}</span>
         <span class="session-id">${shortId}</span>
@@ -224,7 +239,7 @@ function renderCard(session) {
     </div>
   `;
 
-  if (isCollapsed) {
+  if (collapsed) {
     return html;
   }
 
@@ -316,6 +331,9 @@ function renderCard(session) {
     html += `</div>`;
   }
 
+  // Activities
+  html += renderActivitiesPanel(session.activities);
+
   html += `</div>`; // .card-body
 
   return html;
@@ -325,6 +343,24 @@ function toRelativePath(absolutePath, cwd) {
   if (!cwd || !absolutePath.startsWith(cwd)) return absolutePath;
   const rel = absolutePath.slice(cwd.length);
   return rel.startsWith('/') ? rel.slice(1) : rel;
+}
+
+function renderActivitiesPanel(activities) {
+  if (!activities || activities.length === 0) return '';
+  let html = `<details class="activities-panel"><summary>やり取り履歴 (${activities.length})</summary>`;
+  html += `<div class="activities-list">`;
+  // 新しい順に表示
+  [...activities].reverse().forEach(a => {
+    const time = new Date(a.timestamp).toLocaleTimeString('ja-JP');
+    const icon = { prompt: '\u{1F4AC}', tool_use: '\u{1F527}', message: '\u{1F4DD}', milestone: '\u{1F3C1}' }[a.type] || '\u2022';
+    html += `<div class="activity-item activity-${a.type}">`;
+    html += `<span class="activity-time">${time}</span>`;
+    html += `<span class="activity-icon">${icon}</span>`;
+    html += `<span class="activity-summary">${escapeHtml(a.summary)}</span>`;
+    html += `</div>`;
+  });
+  html += `</div></details>`;
+  return html;
 }
 
 function renderArtifactsPanel(artifacts, cwd) {
@@ -444,10 +480,10 @@ function bindToggleCollapse() {
     const sessionId = header.dataset.toggleSession;
     if (!sessionId) return;
     header.onclick = () => {
-      if (expandedSessions.has(sessionId)) {
-        expandedSessions.delete(sessionId);
+      if (toggledSessions.has(sessionId)) {
+        toggledSessions.delete(sessionId);
       } else {
-        expandedSessions.add(sessionId);
+        toggledSessions.add(sessionId);
       }
       renderSessions();
     };
@@ -797,6 +833,11 @@ function handleMessage(msg) {
       const session = payload;
       const prev = sessions[session.session_id];
       sessions[session.session_id] = session;
+
+      // status変更時はトグル状態をリセットしてデフォルト表示に戻す
+      if (prev && prev.status !== session.status) {
+        toggledSessions.delete(session.session_id);
+      }
 
       // Sound + notification on state transitions
       if (!prev || prev.status !== session.status) {

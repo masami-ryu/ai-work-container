@@ -1,8 +1,9 @@
-import type { Session, SessionStatus, HookEvent, Milestone, Question } from "./types.js";
+import type { Session, SessionStatus, HookEvent, Milestone, Question, Activity } from "./types.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
 const STALENESS_TIMEOUT_MS = 10 * 60 * 1000; // running 状態で10分更新なしなら idle に遷移
+const MAX_ACTIVITIES = 30;
 
 const TMUX_PANE_RE = /^[\w-]+:\d+\.\d+$/;
 
@@ -58,6 +59,9 @@ export class SessionStore {
       timestamp: new Date().toISOString(),
     };
     session.milestones.push(entry);
+    // アクティビティにも記録
+    const summary = details ? `${milestone} - ${details}` : milestone;
+    this.addActivity(session, "milestone", summary, entry.timestamp);
     session.updated_at = new Date().toISOString();
     this.onChange(session);
     return session;
@@ -94,6 +98,7 @@ export class SessionStore {
     session.last_message = "";
     session.last_activity = "";
     session.artifacts = [];
+    session.activities = [];
     session.questions = [];
     session.error_info = "";
     session.error_at = "";
@@ -118,6 +123,7 @@ export class SessionStore {
       last_activity: "",
       artifacts: [],
       title: "",
+      activities: [],
       tmux_pane: "",
       error_info: "",
       error_at: "",
@@ -143,17 +149,23 @@ export class SessionStore {
         if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         break;
 
-      case "UserPromptSubmit":
+      case "UserPromptSubmit": {
         // idle → running 復帰
         session.status = "running";
         session.questions = [];
         // 初回プロンプトをタイトルとして保存（スラッシュコマンドは除外）
         const normalizedPrompt = event.prompt?.trimStart() ?? "";
+        const truncatedPrompt = normalizedPrompt.length > 80
+          ? normalizedPrompt.substring(0, 80) + "..." : normalizedPrompt;
         if (!session.title && normalizedPrompt && !normalizedPrompt.startsWith("/")) {
-          session.title =
-            normalizedPrompt.length > 80 ? normalizedPrompt.substring(0, 80) + "..." : normalizedPrompt;
+          session.title = truncatedPrompt;
+        }
+        // アクティビティ蓄積
+        if (normalizedPrompt) {
+          this.addActivity(session, "prompt", truncatedPrompt, event.timestamp || new Date().toISOString());
         }
         break;
+      }
 
       case "Notification":
         // Notification(idle_prompt) は状態を変更しない（Stop が idle への遷移を担当）
@@ -187,6 +199,11 @@ export class SessionStore {
         } else if (event.tool_name) {
           session.last_activity = event.tool_name + (event.file_path ? `: ${event.file_path}` : "");
         }
+        // アクティビティ蓄積
+        if (event.tool_name) {
+          const summary = event.file_path ? `${event.tool_name}: ${event.file_path}` : event.tool_name;
+          this.addActivity(session, "tool_use", summary, event.timestamp || new Date().toISOString());
+        }
         break;
 
       case "Stop":
@@ -195,6 +212,9 @@ export class SessionStore {
         if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         if (event.last_message) {
           session.last_message = event.last_message;
+          // アクティビティ蓄積
+          const msgSummary = event.last_message.length > 200 ? event.last_message.substring(0, 200) + "..." : event.last_message;
+          this.addActivity(session, "message", msgSummary, event.timestamp || new Date().toISOString());
         }
         break;
 
@@ -205,6 +225,13 @@ export class SessionStore {
           session.last_message = event.reason;
         }
         break;
+    }
+  }
+
+  private addActivity(session: Session, type: Activity["type"], summary: string, timestamp: string): void {
+    session.activities.push({ timestamp, type, summary });
+    if (session.activities.length > MAX_ACTIVITIES) {
+      session.activities.splice(0, session.activities.length - MAX_ACTIVITIES);
     }
   }
 
