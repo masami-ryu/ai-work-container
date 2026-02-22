@@ -17,6 +17,7 @@ const ALLOWED_ORIGINS = new Set([
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ]);
+const HOOK_TOKEN = process.env.CLAUDE_MONITOR_HOOK_TOKEN || "";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -116,6 +117,10 @@ function validateOrigin(req: express.Request, res: express.Response, next: expre
 
 // イベント受信（notify.sh から）
 app.post("/api/events", (req, res) => {
+  if (HOOK_TOKEN && req.header("x-hook-token") !== HOOK_TOKEN) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
   const event = req.body as HookEvent;
   if (!event.session_id || !event.event_type) {
     res.status(400).json({ error: "session_id and event_type are required" });
@@ -157,6 +162,10 @@ app.get("/api/sessions", (_req, res) => {
 
 // 決定リクエスト登録（decide.sh から）
 app.post("/api/decisions", (req, res) => {
+  if (HOOK_TOKEN && req.header("x-hook-token") !== HOOK_TOKEN) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
   const decReq = req.body as DecisionRequest;
   if (!decReq.correlation_id || !decReq.session_id) {
     res.status(400).json({ error: "correlation_id and session_id are required" });

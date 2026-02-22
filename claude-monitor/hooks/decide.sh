@@ -2,6 +2,10 @@
 # 決定待ち: ダッシュボードサーバーに pending decision を登録し、ブラウザ応答を待つ
 set -euo pipefail
 BASE_URL="http://localhost:3456"
+HOOK_TOKEN_HEADER=""
+if [ -n "${CLAUDE_MONITOR_HOOK_TOKEN:-}" ]; then
+  HOOK_TOKEN_HEADER="-H X-Hook-Token: $CLAUDE_MONITOR_HOOK_TOKEN"
+fi
 INPUT=$(cat)
 
 EVENT_TYPE=$(echo "$INPUT" | jq -r '.hook_event_name')
@@ -32,6 +36,7 @@ PAYLOAD=$(echo "$INPUT" | jq -c \
 
 REGISTER_RESULT=$(curl -s -X POST "$BASE_URL/api/decisions" \
   -H "Content-Type: application/json" \
+  $HOOK_TOKEN_HEADER \
   -d "$PAYLOAD" -w "%{http_code}" -o /dev/null || echo "000")
 
 # サーバー未起動時はフォールバック（通常の権限ダイアログに任せる）
