@@ -562,6 +562,32 @@ footer summary {
   color: #aaa;
   font-family: monospace;
   font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.artifacts-list .artifact-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.copy-path-btn {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.copy-path-btn:hover {
+  color: #2196f3;
 }
 
 /* Group select dropdown */

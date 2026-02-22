@@ -193,6 +193,7 @@ function renderSessions() {
   bindToggleCollapse();
   bindGroupDropdowns();
   bindSendKeysButtons();
+  bindCopyPathButtons();
 
   // textarea入力値を復元
   Object.entries(savedTexts).forEach(([sid, val]) => {
@@ -303,7 +304,7 @@ function renderCard(session) {
 
   // 成果物一覧
   if (session.artifacts && session.artifacts.length > 0) {
-    html += renderArtifactsPanel(session.artifacts);
+    html += renderArtifactsPanel(session.artifacts, session.cwd);
   }
 
   // Milestones
@@ -320,12 +321,17 @@ function renderCard(session) {
   return html;
 }
 
-function renderArtifactsPanel(artifacts) {
+function toRelativePath(absolutePath, cwd) {
+  if (!cwd || !absolutePath.startsWith(cwd)) return absolutePath;
+  const rel = absolutePath.slice(cwd.length);
+  return rel.startsWith('/') ? rel.slice(1) : rel;
+}
+
+function renderArtifactsPanel(artifacts, cwd) {
   let html = `<details class="artifacts-panel"><summary>成果物 (${artifacts.length})</summary><ul class="artifacts-list">`;
   artifacts.forEach(p => {
-    const segments = p.split('/');
-    const shortPath = segments.length > 2 ? segments.slice(-2).join('/') : p;
-    html += `<li title="${escapeHtml(p)}">${escapeHtml(shortPath)}</li>`;
+    const displayPath = toRelativePath(p, cwd);
+    html += `<li title="${escapeHtml(p)}"><span class="artifact-path">${escapeHtml(displayPath)}</span><button class="copy-path-btn" data-path="${escapeHtml(displayPath)}" title="パスをコピー">&#128203;</button></li>`;
   });
   html += `</ul></details>`;
   return html;
@@ -595,6 +601,31 @@ function bindSendKeysButtons() {
         if (textarea.value.trim()) {
           sendKeys(sessionId, textarea.value);
         }
+      }
+    };
+  });
+}
+
+function bindCopyPathButtons() {
+  document.querySelectorAll('.copy-path-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const path = btn.dataset.path;
+      try {
+        await navigator.clipboard.writeText(path);
+        btn.textContent = '\u2713';
+        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
+      } catch {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = path;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = '\u2713';
+        setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500);
       }
     };
   });
