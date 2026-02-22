@@ -15,6 +15,9 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# claude-monitor ビルド成果物
+claude-monitor/dist/
+
 # slack-bridge のローカル生成物（コミットしない）
 slack-bridge/audit.db
-
+session.db

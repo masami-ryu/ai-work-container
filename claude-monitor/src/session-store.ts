@@ -2,14 +2,17 @@ import type { Session, SessionStatus, HookEvent, Milestone, Question } from "./t
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
+const STALENESS_TIMEOUT_MS = 10 * 60 * 1000; // running 状態で10分更新なしなら idle に遷移
 
 export class SessionStore {
   private sessions = new Map<string, Session>();
   private cleanupTimer: ReturnType<typeof setInterval>;
   private onChange: (session: Session) => void;
+  private onDelete?: (sessionId: string) => void;
 
-  constructor(onChange: (session: Session) => void) {
+  constructor(onChange: (session: Session) => void, onDelete?: (sessionId: string) => void) {
     this.onChange = onChange;
+    this.onDelete = onDelete;
     this.cleanupTimer = setInterval(() => this.cleanup(), CLEANUP_INTERVAL_MS);
   }
 
@@ -92,6 +95,9 @@ export class SessionStore {
       status_text: "",
       milestones: [],
       last_message: "",
+      last_activity: "",
+      artifacts: [],
+      title: "",
       error_info: "",
       error_at: "",
       created_at: event.timestamp || new Date().toISOString(),
@@ -118,6 +124,10 @@ export class SessionStore {
         // idle → running 復帰
         session.status = "running";
         session.questions = [];
+        // 初回プロンプトをタイトルとして保存
+        if (!session.title && event.prompt) {
+          session.title = event.prompt.length > 80 ? event.prompt.substring(0, 80) + "..." : event.prompt;
+        }
         break;
 
       case "Notification":
@@ -137,6 +147,20 @@ export class SessionStore {
           if (event.questions && event.questions.length > 0) {
             session.questions = event.questions;
           }
+        }
+        break;
+
+      case "PostToolUse":
+        // Write/Edit 時にファイルパスを成果物として記録 + last_activity を更新
+        if (event.tool_name && (event.tool_name === "Write" || event.tool_name === "Edit")) {
+          if (event.file_path) {
+            if (!session.artifacts.includes(event.file_path)) {
+              session.artifacts.push(event.file_path);
+            }
+            session.last_activity = `${event.tool_name}: ${event.file_path}`;
+          }
+        } else if (event.tool_name) {
+          session.last_activity = event.tool_name + (event.file_path ? `: ${event.file_path}` : "");
         }
         break;
 
@@ -165,6 +189,14 @@ export class SessionStore {
         const updatedAt = new Date(session.updated_at).getTime();
         if (now - updatedAt > COMPLETED_TTL_MS) {
           this.sessions.delete(id);
+          this.onDelete?.(id);
+        }
+      } else if (session.status === "running") {
+        const updatedAt = new Date(session.updated_at).getTime();
+        if (now - updatedAt > STALENESS_TIMEOUT_MS) {
+          session.status = "idle";
+          session.updated_at = new Date().toISOString();
+          this.onChange(session);
         }
       }
     }

@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
+import { GroupStore } from "./group-store.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import type { HookEvent, DecisionRequest, DecisionResponse, WSMessage, Decision } from "./types.js";
 
@@ -31,12 +32,26 @@ function broadcast(msg: WSMessage): void {
 }
 
 // --- Stores ---
-const sessionStore = new SessionStore((session) => {
+const groupStore = new GroupStore((group) => {
   broadcast({
-    type: "session_update",
-    payload: session,
+    type: "group_update",
+    payload: group,
   });
 });
+
+const sessionStore = new SessionStore(
+  (session) => {
+    broadcast({
+      type: "session_update",
+      payload: session,
+    });
+  },
+  (sessionId) => {
+    groupStore.removeSessionFromAll(sessionId).catch(e => {
+      console.error("Failed to clean up group references for deleted session:", e);
+    });
+  },
+);
 
 const decisionStore = new DecisionStore({
   onDecisionPending: (decision: Decision) => {
@@ -106,6 +121,17 @@ app.post("/api/events", (req, res) => {
   }
 
   const session = sessionStore.processEvent(event);
+
+  // SessionEnd 時に pending decisions を自動キャンセル
+  if (event.event_type === "SessionEnd") {
+    const cancelled = decisionStore.cancelBySession(event.session_id);
+    for (const decision of cancelled) {
+      broadcast({
+        type: "decision_resolved",
+        payload: decision,
+      });
+    }
+  }
 
   // Notification イベントは別途 WebSocket 通知
   if (event.event_type === "Notification") {
@@ -177,6 +203,99 @@ app.post("/api/sessions/:id/reset-error", validateOrigin, (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Group API ---
+
+// グループ一覧
+app.get("/api/groups", (_req, res) => {
+  res.json(groupStore.getAll());
+});
+
+// グループ作成
+app.post("/api/groups", validateOrigin, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name || name.length > 100) {
+    res.status(400).json({ error: "name is required and must be <= 100 characters" });
+    return;
+  }
+  try {
+    const group = await groupStore.create(name);
+    res.status(201).json(group);
+  } catch (e) {
+    console.error("Failed to create group:", e);
+    res.status(500).json({ error: "Failed to persist group" });
+  }
+});
+
+// グループ更新
+app.put("/api/groups/:id", validateOrigin, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!name || name.length > 100) {
+    res.status(400).json({ error: "name is required and must be <= 100 characters" });
+    return;
+  }
+  try {
+    const group = await groupStore.update(req.params.id as string, name);
+    if (!group) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+    res.json(group);
+  } catch (e) {
+    console.error("Failed to update group:", e);
+    res.status(500).json({ error: "Failed to persist group" });
+  }
+});
+
+// グループ削除
+app.delete("/api/groups/:id", validateOrigin, async (req, res) => {
+  const id = req.params.id as string;
+  try {
+    const deleted = await groupStore.delete(id);
+    if (!deleted) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+    broadcast({ type: "group_delete", payload: { id } });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Failed to delete group:", e);
+    res.status(500).json({ error: "Failed to persist group deletion" });
+  }
+});
+
+// セッション追加/削除
+app.post("/api/groups/:id/sessions", validateOrigin, async (req, res) => {
+  const { session_id, action } = req.body as { session_id: string; action: "add" | "remove" };
+  if (!session_id || !action || !["add", "remove"].includes(action)) {
+    res.status(400).json({ error: "session_id and action ('add' or 'remove') are required" });
+    return;
+  }
+  try {
+    if (action === "add") {
+      if (!sessionStore.get(session_id)) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      const group = await groupStore.addSession(req.params.id as string, session_id);
+      if (!group) {
+        res.status(404).json({ error: "Group not found" });
+        return;
+      }
+      res.json(group);
+    } else {
+      const group = await groupStore.removeSession(req.params.id as string, session_id);
+      if (!group) {
+        res.status(404).json({ error: "Group not found or session not in group" });
+        return;
+      }
+      res.json(group);
+    }
+  } catch (e) {
+    console.error("Failed to update group sessions:", e);
+    res.status(500).json({ error: "Failed to persist group session change" });
+  }
+});
+
 // --- MCP handler ---
 const mcpHandler = createMcpHandler(sessionStore);
 app.post("/mcp", mcpHandler);
@@ -205,9 +324,12 @@ wss.on("connection", (ws) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
-  console.log(`Listening on ${HOST}:${PORT}`);
+// グループデータをロードしてからサーバー起動
+groupStore.load().then(() => {
+  server.listen(PORT, HOST, () => {
+    console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
+    console.log(`Listening on ${HOST}:${PORT}`);
+  });
 });
 
 // Graceful shutdown

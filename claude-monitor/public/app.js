@@ -1,6 +1,9 @@
 // --- State ---
 let sessions = {};
 let pendingDecisions = {};
+let groups = {};
+let selectedGroupId = null; // null=すべて, 'ungrouped'=未分類, string=グループID
+let expandedSessions = new Set(); // 展開状態の completed セッション
 let ws = null;
 let reconnectDelay = 1000;
 let muted = false;
@@ -60,6 +63,10 @@ function playCompletedSound() {
   });
 }
 
+function playIdleSound() {
+  playBeep(440, 0.2, 1, 'sine');
+}
+
 // --- Desktop Notification ---
 function sendDesktopNotification(title, body) {
   if (Notification.permission === 'granted') {
@@ -101,7 +108,15 @@ function addLogEntry(eventType, sessionId, detail) {
   const time = new Date().toLocaleTimeString('ja-JP');
   const entry = document.createElement('div');
   entry.className = 'log-entry';
-  entry.innerHTML = `<span class="log-time">${time}</span><span class="log-event">${eventType}</span><span>${sessionId?.substring(0, 8) || ''} ${detail || ''}</span>`;
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'log-time';
+  timeSpan.textContent = time;
+  const eventSpan = document.createElement('span');
+  eventSpan.className = 'log-event';
+  eventSpan.textContent = eventType;
+  const detailSpan = document.createElement('span');
+  detailSpan.textContent = `${sessionId?.substring(0, 8) || ''} ${detail || ''}`;
+  entry.append(timeSpan, eventSpan, detailSpan);
   eventLog.prepend(entry);
   logEntries++;
   logCount.textContent = logEntries;
@@ -122,16 +137,29 @@ const STATUS_LABELS = {
 };
 
 function renderSessions() {
-  const ids = Object.keys(sessions);
+  let ids = Object.keys(sessions);
+
+  // グループフィルタ
+  if (selectedGroupId === 'ungrouped') {
+    ids = ids.filter(id => !getSessionGroupId(id));
+  } else if (selectedGroupId) {
+    const group = groups[selectedGroupId];
+    if (group) {
+      ids = ids.filter(id => group.session_ids && group.session_ids.includes(id));
+    }
+  }
+
   emptyMessage.style.display = ids.length === 0 ? 'block' : 'none';
 
   // Count active
-  const active = ids.filter(id => !['completed'].includes(sessions[id].status));
-  activeCount.textContent = `${active.length} active / ${ids.length} total`;
+  const allIds = Object.keys(sessions);
+  const active = allIds.filter(id => !['completed'].includes(sessions[id].status));
+  activeCount.textContent = `${active.length} active / ${allIds.length} total`;
 
   // Remove stale cards
+  const visibleSet = new Set(ids);
   for (const card of sessionsContainer.querySelectorAll('.session-card')) {
-    if (!sessions[card.dataset.sessionId]) {
+    if (!visibleSet.has(card.dataset.sessionId)) {
       card.remove();
     }
   }
@@ -156,6 +184,8 @@ function renderSessions() {
   // Bind event handlers
   bindDecisionButtons();
   bindResetErrorButtons();
+  bindToggleCollapse();
+  bindGroupDropdowns();
 }
 
 function renderCard(session) {
@@ -163,21 +193,47 @@ function renderCard(session) {
   const cwd = session.cwd ? session.cwd.split('/').pop() : '-';
   const updatedAt = new Date(session.updated_at).toLocaleTimeString('ja-JP');
   const statusLabel = STATUS_LABELS[session.status] || session.status;
+  const titleDisplay = session.title ? escapeHtml(truncate(session.title, 60)) : `${shortId}...`;
+  const isCompleted = session.status === 'completed';
+  const isCollapsed = isCompleted && !expandedSessions.has(session.session_id);
+
+  // グループ選択ドロップダウン用
+  const currentGroupId = getSessionGroupId(session.session_id);
 
   let html = `
-    <div class="card-header">
-      <span class="session-id">${shortId}...</span>
+    <div class="card-header${isCompleted ? ' clickable' : ''}" data-toggle-session="${isCompleted ? session.session_id : ''}">
+      <div class="card-title-row">
+        <span class="session-title">${titleDisplay}</span>
+        <span class="session-id">${shortId}</span>
+      </div>
       <span class="status-badge badge-${session.status}">${statusLabel}</span>
-    </div>
-    <div class="card-info">
-      <div><span class="label">CWD:</span>${escapeHtml(cwd)}</div>
-      ${session.model ? `<div><span class="label">Model:</span>${escapeHtml(session.model)}</div>` : ''}
-      <div><span class="label">更新:</span>${updatedAt}</div>
     </div>
   `;
 
+  if (isCollapsed) {
+    return html;
+  }
+
+  html += `
+    <div class="card-body">
+      <div class="card-info">
+        <div><span class="label">CWD:</span>${escapeHtml(cwd)}</div>
+        ${session.model ? `<div><span class="label">Model:</span>${escapeHtml(session.model)}</div>` : ''}
+        <div><span class="label">更新:</span>${updatedAt}</div>
+      </div>
+  `;
+
+  // グループ選択ドロップダウン
+  html += renderGroupDropdown(session.session_id, currentGroupId);
+
   if (session.status_text) {
     html += `<div class="status-text">${escapeHtml(session.status_text)}</div>`;
+  }
+
+  // 直近アクティビティ
+  const activityText = session.last_activity || session.last_message;
+  if (activityText) {
+    html += `<div class="last-activity">${escapeHtml(truncate(activityText, 200))}</div>`;
   }
 
   // Decision panel
@@ -207,9 +263,9 @@ function renderCard(session) {
     html += renderErrorPanel(session);
   }
 
-  // Last message
-  if (session.last_message && session.status === 'idle') {
-    html += `<div class="last-message">${escapeHtml(truncate(session.last_message, 150))}</div>`;
+  // 成果物一覧
+  if (session.artifacts && session.artifacts.length > 0) {
+    html += renderArtifactsPanel(session.artifacts);
   }
 
   // Milestones
@@ -221,7 +277,41 @@ function renderCard(session) {
     html += `</div>`;
   }
 
+  html += `</div>`; // .card-body
+
   return html;
+}
+
+function renderArtifactsPanel(artifacts) {
+  let html = `<details class="artifacts-panel"><summary>成果物 (${artifacts.length})</summary><ul class="artifacts-list">`;
+  artifacts.forEach(p => {
+    const segments = p.split('/');
+    const shortPath = segments.length > 2 ? segments.slice(-2).join('/') : p;
+    html += `<li title="${escapeHtml(p)}">${escapeHtml(shortPath)}</li>`;
+  });
+  html += `</ul></details>`;
+  return html;
+}
+
+function renderGroupDropdown(sessionId, currentGroupId) {
+  const groupList = Object.values(groups);
+  let html = `<div class="group-select"><span class="label">Group:</span><select data-session-id="${escapeHtml(sessionId)}" class="group-dropdown">`;
+  html += `<option value=""${!currentGroupId ? ' selected' : ''}>未分類</option>`;
+  groupList.forEach(g => {
+    html += `<option value="${g.id}"${currentGroupId === g.id ? ' selected' : ''}>${escapeHtml(g.name)}</option>`;
+  });
+  html += `<option value="__new__">+ 新規グループ</option>`;
+  html += `</select></div>`;
+  return html;
+}
+
+function getSessionGroupId(sessionId) {
+  for (const g of Object.values(groups)) {
+    if (g.session_ids && g.session_ids.includes(sessionId)) {
+      return g.id;
+    }
+  }
+  return null;
 }
 
 function renderDecisionPanel(decision) {
@@ -305,6 +395,110 @@ function bindResetErrorButtons() {
   });
 }
 
+function bindToggleCollapse() {
+  document.querySelectorAll('.card-header[data-toggle-session]').forEach(header => {
+    const sessionId = header.dataset.toggleSession;
+    if (!sessionId) return;
+    header.onclick = () => {
+      if (expandedSessions.has(sessionId)) {
+        expandedSessions.delete(sessionId);
+      } else {
+        expandedSessions.add(sessionId);
+      }
+      renderSessions();
+    };
+  });
+}
+
+function bindGroupDropdowns() {
+  document.querySelectorAll('.group-dropdown').forEach(select => {
+    select.onchange = async () => {
+      const sessionId = select.dataset.sessionId;
+      const value = select.value;
+      if (value === '__new__') {
+        const name = prompt('グループ名を入力:');
+        if (!name) {
+          renderSessions();
+          return;
+        }
+        try {
+          const res = await fetch('/api/groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+          });
+          if (!res.ok) {
+            console.error('Create group failed:', await res.text());
+            renderSessions();
+            return;
+          }
+          const group = await res.json();
+          groups[group.id] = group;
+          // 新グループにセッションを追加
+          await assignSessionToGroup(sessionId, group.id);
+          renderSidebar();
+          renderSessions();
+        } catch (e) {
+          console.error('Create group error:', e);
+        }
+      } else if (value === '') {
+        // 現在のグループから削除
+        const currentGroupId = getSessionGroupId(sessionId);
+        if (currentGroupId) {
+          await removeSessionFromGroup(sessionId, currentGroupId);
+        }
+        renderSessions();
+      } else {
+        // 現在のグループから削除してから新グループに追加
+        const currentGroupId = getSessionGroupId(sessionId);
+        if (currentGroupId) {
+          await removeSessionFromGroup(sessionId, currentGroupId);
+        }
+        await assignSessionToGroup(sessionId, value);
+        renderSessions();
+      }
+    };
+  });
+}
+
+async function assignSessionToGroup(sessionId, groupId) {
+  try {
+    const res = await fetch(`/api/groups/${groupId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, action: 'add' }),
+    });
+    if (res.ok) {
+      const group = await res.json();
+      groups[group.id] = group;
+      renderSidebar();
+    } else {
+      console.error('Assign session failed:', await res.text());
+    }
+  } catch (e) {
+    console.error('Assign session error:', e);
+  }
+}
+
+async function removeSessionFromGroup(sessionId, groupId) {
+  try {
+    const res = await fetch(`/api/groups/${groupId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, action: 'remove' }),
+    });
+    if (res.ok) {
+      const group = await res.json();
+      groups[group.id] = group;
+      renderSidebar();
+    } else {
+      console.error('Remove session failed:', await res.text());
+    }
+  } catch (e) {
+    console.error('Remove session error:', e);
+  }
+}
+
 // --- API ---
 async function respondDecision(id, decision) {
   try {
@@ -337,20 +531,82 @@ async function resetError(sessionId) {
 
 async function fetchInitialState() {
   try {
-    const [sessRes, decRes] = await Promise.all([
+    const [sessRes, decRes, groupRes] = await Promise.all([
       fetch('/api/sessions'),
       fetch('/api/decisions/pending'),
+      fetch('/api/groups'),
     ]);
     const sessList = await sessRes.json();
     const decList = await decRes.json();
+    const groupList = await groupRes.json();
     sessions = {};
     sessList.forEach(s => { sessions[s.session_id] = s; });
     pendingDecisions = {};
     decList.forEach(d => { pendingDecisions[d.id] = d; });
+    groups = {};
+    groupList.forEach(g => { groups[g.id] = g; });
+    renderSidebar();
     renderSessions();
   } catch (e) {
     console.error('Failed to fetch initial state:', e);
   }
+}
+
+// --- Sidebar ---
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const groupList = Object.values(groups);
+
+  let html = `
+    <div class="sidebar-item${selectedGroupId === null ? ' active' : ''}" data-group-filter="">すべて</div>
+    <div class="sidebar-item${selectedGroupId === 'ungrouped' ? ' active' : ''}" data-group-filter="ungrouped">未分類</div>
+  `;
+
+  groupList.forEach(g => {
+    const count = g.session_ids ? g.session_ids.length : 0;
+    html += `
+      <div class="sidebar-item${selectedGroupId === g.id ? ' active' : ''}" data-group-filter="${g.id}">
+        <span class="group-name">${escapeHtml(g.name)}</span>
+        <span class="group-count">${count}</span>
+        <button class="btn-delete-group" data-group-id="${g.id}" title="削除">×</button>
+      </div>
+    `;
+  });
+
+  sidebar.innerHTML = html;
+
+  // バインド
+  sidebar.querySelectorAll('.sidebar-item').forEach(item => {
+    item.onclick = (e) => {
+      if (e.target.classList.contains('btn-delete-group')) return;
+      const filter = item.dataset.groupFilter;
+      selectedGroupId = filter === '' ? null : filter;
+      renderSidebar();
+      renderSessions();
+    };
+  });
+
+  sidebar.querySelectorAll('.btn-delete-group').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const groupId = btn.dataset.groupId;
+      if (!confirm('グループを削除しますか？')) return;
+      try {
+        const res = await fetch(`/api/groups/${groupId}`, { method: 'DELETE' });
+        if (!res.ok) {
+          console.error('Delete group failed:', await res.text());
+          return;
+        }
+        delete groups[groupId];
+        if (selectedGroupId === groupId) selectedGroupId = null;
+        renderSidebar();
+        renderSessions();
+      } catch (e) {
+        console.error('Delete group error:', e);
+      }
+    };
+  });
 }
 
 // --- Countdown timer ---
@@ -422,6 +678,9 @@ function handleMessage(msg) {
           playQuestionSound();
           const qText = session.questions?.[0]?.question || '質問が発生しました';
           sendDesktopNotification('質問', qText);
+        } else if (session.status === 'idle') {
+          playIdleSound();
+          sendDesktopNotification('入力待ち', `セッション ${session.session_id.substring(0, 8)} が入力待ちです`);
         } else if (session.status === 'completed') {
           playCompletedSound();
           sendDesktopNotification('完了', `セッション ${session.session_id.substring(0, 8)} が完了しました`);
@@ -451,6 +710,25 @@ function handleMessage(msg) {
 
     case 'notification': {
       addLogEntry('notification', payload.session_id, payload.message || payload.notification_type);
+      break;
+    }
+
+    case 'group_update': {
+      const group = payload;
+      groups[group.id] = group;
+      addLogEntry('group_update', '', group.name);
+      renderSidebar();
+      renderSessions();
+      break;
+    }
+
+    case 'group_delete': {
+      const { id: deletedId } = payload;
+      delete groups[deletedId];
+      if (selectedGroupId === deletedId) selectedGroupId = null;
+      addLogEntry('group_delete', '', deletedId.substring(0, 8));
+      renderSidebar();
+      renderSessions();
       break;
     }
   }

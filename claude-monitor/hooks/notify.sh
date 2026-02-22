@@ -12,6 +12,8 @@ PAYLOAD=$(echo "$INPUT" | jq -c '{
   notification_type: (.notification_type // ""),
   message: (.message // ""),
   tool_name: (.tool_name // ""),
+  file_path: (.tool_input.file_path // ""),
+  prompt: (.prompt // ""),
   questions: (.tool_input.questions // []),
   last_message: (.last_assistant_message // ""),
   reason: (.reason // ""),

@@ -16,6 +16,9 @@ export interface Session {
   status_text: string; // MCP update_status で更新される作業内容
   milestones: Milestone[];
   last_message: string;
+  last_activity: string; // 直近のツール操作情報（PostToolUse: tool_name + file_path）
+  artifacts: string[]; // Write/Edit で検出された成果物ファイルパス
+  title: string; // ユーザーの初回指示内容
   error_info: string;
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
@@ -46,6 +49,7 @@ export type EventType =
   | "SessionStart"
   | "Notification"
   | "PreToolUse"
+  | "PostToolUse"
   | "Stop"
   | "SessionEnd"
   | "UserPromptSubmit";
@@ -65,10 +69,20 @@ export interface HookEvent {
   notification_type: string;
   message: string;
   tool_name: string;
+  file_path: string; // PostToolUse 時のファイルパス
+  prompt: string; // UserPromptSubmit 時のプロンプト
   questions: Question[];
   last_message: string;
   reason: string;
   timestamp: string; // ISO 8601
+}
+
+// グループ
+export interface Group {
+  id: string;
+  name: string;
+  session_ids: string[];
+  created_at: string; // ISO 8601
 }
 
 // 決定リクエスト
@@ -104,4 +118,6 @@ export type WSMessage =
   | { type: "session_update"; payload: Session }
   | { type: "decision_pending"; payload: Decision }
   | { type: "decision_resolved"; payload: Decision }
-  | { type: "notification"; payload: { session_id: string; message: string; notification_type: string } };
+  | { type: "notification"; payload: { session_id: string; message: string; notification_type: string } }
+  | { type: "group_update"; payload: Group }
+  | { type: "group_delete"; payload: { id: string } };

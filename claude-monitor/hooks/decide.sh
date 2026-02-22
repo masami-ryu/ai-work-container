@@ -12,6 +12,12 @@ if [ "$EVENT_TYPE" != "PermissionRequest" ]; then
   exit 0
 fi
 
+# AskUserQuestion はターミナル操作専用のため承認パネル不要
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""')
+if [ "$TOOL_NAME" = "AskUserQuestion" ]; then
+  exit 0
+fi
+
 # pending decision を登録
 PAYLOAD=$(echo "$INPUT" | jq -c \
   --arg correlation_id "$CORRELATION_ID" \

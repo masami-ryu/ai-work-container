@@ -89,6 +89,25 @@ export class DecisionStore {
     return Array.from(this.decisions.values()).filter((d) => d.status === "pending");
   }
 
+  cancelBySession(sessionId: string): Decision[] {
+    const cancelled: Decision[] = [];
+    for (const [id, decision] of this.decisions) {
+      if (decision.session_id === sessionId && decision.status === "pending") {
+        decision.status = "timeout";
+        decision.resolved_at = new Date().toISOString();
+        // waiter を解放
+        const waiter = this.waiters.get(id);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          waiter.resolve({ resolved: false });
+          this.waiters.delete(id);
+        }
+        cancelled.push(decision);
+      }
+    }
+    return cancelled;
+  }
+
   get(id: string): Decision | undefined {
     return this.decisions.get(id);
   }
