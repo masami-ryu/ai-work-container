@@ -242,10 +242,16 @@ app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
   const sanitizedText = text.replace(/\r?\n/g, " ");
 
   try {
+    // 既存入力行をクリア（残存テキストとの結合防止）
+    await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
     // リテラルモードでテキスト送信
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
     // Enterを別途送信
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
+    // /clear送信時はセッション表示データをリセット
+    if (sanitizedText.trim() === "/clear") {
+      sessionStore.clearSession(id);
+    }
     res.json({ ok: true });
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };

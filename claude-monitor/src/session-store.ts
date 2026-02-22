@@ -84,6 +84,24 @@ export class SessionStore {
     return session;
   }
 
+  clearSession(sessionId: string): Session | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    // status, cwd, model, tmux_pane は維持（セッション自体は継続中）
+    session.title = "";
+    session.status_text = "";
+    session.milestones = [];
+    session.last_message = "";
+    session.last_activity = "";
+    session.artifacts = [];
+    session.questions = [];
+    session.error_info = "";
+    session.error_at = "";
+    session.updated_at = new Date().toISOString();
+    this.onChange(session);
+    return session;
+  }
+
   destroy(): void {
     clearInterval(this.cleanupTimer);
   }
@@ -93,7 +111,7 @@ export class SessionStore {
       session_id: event.session_id,
       cwd: event.cwd || "",
       model: event.model || "",
-      status: "running",
+      status: "idle",
       status_text: "",
       milestones: [],
       last_message: "",
@@ -118,7 +136,8 @@ export class SessionStore {
 
     switch (event.event_type) {
       case "SessionStart":
-        session.status = "running";
+        // 初期状態はidle（プロンプト入力可能）。UserPromptSubmitでrunningに遷移する。
+        session.status = "idle";
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
         if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
@@ -128,9 +147,11 @@ export class SessionStore {
         // idle → running 復帰
         session.status = "running";
         session.questions = [];
-        // 初回プロンプトをタイトルとして保存
-        if (!session.title && event.prompt) {
-          session.title = event.prompt.length > 80 ? event.prompt.substring(0, 80) + "..." : event.prompt;
+        // 初回プロンプトをタイトルとして保存（スラッシュコマンドは除外）
+        const normalizedPrompt = event.prompt?.trimStart() ?? "";
+        if (!session.title && normalizedPrompt && !normalizedPrompt.startsWith("/")) {
+          session.title =
+            normalizedPrompt.length > 80 ? normalizedPrompt.substring(0, 80) + "..." : normalizedPrompt;
         }
         break;
 
