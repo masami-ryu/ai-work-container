@@ -287,7 +287,7 @@ function renderCard(session) {
           </div>
           <div class="send-keys-input-row">
             <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
-                      placeholder="プロンプトを入力..." rows="2"></textarea>
+                      placeholder="プロンプトを入力（改行はスペースに変換されます）" rows="2"></textarea>
             <button class="btn-send-keys" data-session-id="${escapeHtml(session.session_id)}">送信</button>
           </div>
         </div>

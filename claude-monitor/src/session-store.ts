@@ -4,6 +4,8 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
 const STALENESS_TIMEOUT_MS = 10 * 60 * 1000; // running 状態で10分更新なしなら idle に遷移
 
+const TMUX_PANE_RE = /^[\w-]+:\d+\.\d+$/;
+
 export class SessionStore {
   private sessions = new Map<string, Session>();
   private cleanupTimer: ReturnType<typeof setInterval>;
@@ -119,7 +121,7 @@ export class SessionStore {
         session.status = "running";
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
-        if (event.tmux_pane) session.tmux_pane = event.tmux_pane;
+        if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         break;
 
       case "UserPromptSubmit":
@@ -169,6 +171,7 @@ export class SessionStore {
       case "Stop":
         session.status = "idle";
         session.questions = [];
+        if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         if (event.last_message) {
           session.last_message = event.last_message;
         }
