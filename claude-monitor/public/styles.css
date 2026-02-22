@@ -580,6 +580,92 @@ footer summary {
   margin-left: 4px;
 }
 
+/* Send Keys Panel */
+.send-keys-panel {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(33, 150, 243, 0.08);
+  border: 1px solid rgba(33, 150, 243, 0.3);
+  border-radius: 8px;
+}
+
+.send-keys-panel.disabled {
+  opacity: 0.5;
+}
+
+.send-keys-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #2196f3;
+}
+
+.send-keys-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.send-keys-textarea {
+  flex: 1;
+  background: #0f1117;
+  color: #e0e0e0;
+  border: 1px solid #3a3d4a;
+  border-radius: 6px;
+  padding: 8px;
+  font-family: monospace;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 40px;
+}
+
+.send-keys-textarea:focus {
+  border-color: #2196f3;
+  outline: none;
+}
+
+.btn-send-keys {
+  background: #1565c0;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+.btn-send-keys:hover {
+  background: #1976d2;
+}
+
+.btn-send-keys:disabled {
+  background: #37474f;
+  cursor: not-allowed;
+}
+
+.btn-clear-session {
+  background: #37474f;
+  color: #e0e0e0;
+  border: 1px solid #546e7a;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  cursor: pointer;
+}
+
+.btn-clear-session:hover {
+  background: #455a64;
+}
+
+.tmux-not-connected {
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+}
+
 /* Responsive: hide sidebar on narrow screens */
 @media (max-width: 720px) {
   .sidebar {

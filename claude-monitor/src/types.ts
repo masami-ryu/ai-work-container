@@ -20,6 +20,7 @@ export interface Session {
   artifacts: string[]; // Write/Edit で検出された成果物ファイルパス
   title: string; // ユーザーの初回指示内容
   error_info: string;
+  tmux_pane: string; // tmux pane識別子（例: "main:0.1"）
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
@@ -73,6 +74,7 @@ export interface HookEvent {
   prompt: string; // UserPromptSubmit 時のプロンプト
   questions: Question[];
   last_message: string;
+  tmux_pane: string; // SessionStart時にnotify.shから送信
   reason: string;
   timestamp: string; // ISO 8601
 }

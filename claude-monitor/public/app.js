@@ -137,6 +137,12 @@ const STATUS_LABELS = {
 };
 
 function renderSessions() {
+  // textarea入力値を退避
+  const savedTexts = {};
+  document.querySelectorAll('.send-keys-textarea').forEach(ta => {
+    if (ta.value) savedTexts[ta.dataset.sessionId] = ta.value;
+  });
+
   let ids = Object.keys(sessions);
 
   // グループフィルタ
@@ -186,6 +192,13 @@ function renderSessions() {
   bindResetErrorButtons();
   bindToggleCollapse();
   bindGroupDropdowns();
+  bindSendKeysButtons();
+
+  // textarea入力値を復元
+  Object.entries(savedTexts).forEach(([sid, val]) => {
+    const ta = document.querySelector(`.send-keys-textarea[data-session-id="${sid}"]`);
+    if (ta) ta.value = val;
+  });
 }
 
 function renderCard(session) {
@@ -261,6 +274,31 @@ function renderCard(session) {
   // Error panel
   if (session.status === 'error') {
     html += renderErrorPanel(session);
+  }
+
+  // Send Keys パネル（idle状態のみ）
+  if (session.status === 'idle') {
+    if (session.tmux_pane) {
+      html += `
+        <div class="send-keys-panel" data-session-id="${escapeHtml(session.session_id)}">
+          <div class="send-keys-header">
+            <span>プロンプト入力</span>
+            <button class="btn-clear-session" data-session-id="${escapeHtml(session.session_id)}">/clear</button>
+          </div>
+          <div class="send-keys-input-row">
+            <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
+                      placeholder="プロンプトを入力..." rows="2"></textarea>
+            <button class="btn-send-keys" data-session-id="${escapeHtml(session.session_id)}">送信</button>
+          </div>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="send-keys-panel disabled">
+          <span class="tmux-not-connected">tmux接続なし — セッションをtmux内で起動してください</span>
+        </div>
+      `;
+    }
   }
 
   // 成果物一覧
@@ -526,6 +564,66 @@ async function resetError(sessionId) {
     }
   } catch (e) {
     console.error('Reset error:', e);
+  }
+}
+
+function bindSendKeysButtons() {
+  // 送信ボタン
+  document.querySelectorAll('.btn-send-keys').forEach(btn => {
+    btn.onclick = () => {
+      const sessionId = btn.dataset.sessionId;
+      const textarea = document.querySelector(`.send-keys-textarea[data-session-id="${sessionId}"]`);
+      if (textarea && textarea.value.trim()) {
+        sendKeys(sessionId, textarea.value);
+      }
+    };
+  });
+
+  // /clear ボタン
+  document.querySelectorAll('.btn-clear-session').forEach(btn => {
+    btn.onclick = () => {
+      sendKeys(btn.dataset.sessionId, '/clear');
+    };
+  });
+
+  // Ctrl+Enter で送信
+  document.querySelectorAll('.send-keys-textarea').forEach(textarea => {
+    textarea.onkeydown = (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        const sessionId = textarea.dataset.sessionId;
+        if (textarea.value.trim()) {
+          sendKeys(sessionId, textarea.value);
+        }
+      }
+    };
+  });
+}
+
+async function sendKeys(sessionId, text) {
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/send-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (res.ok) {
+      // 送信成功: テキストエリアをクリア
+      const textarea = document.querySelector(`.send-keys-textarea[data-session-id="${sessionId}"]`);
+      if (textarea) textarea.value = '';
+      addLogEntry('send-keys', sessionId, truncate(text, 40));
+    } else {
+      const data = await res.json();
+      console.error('send-keys failed:', data.error);
+      if (res.status === 403) {
+        addLogEntry('send-keys-error', sessionId, 'セッションがidle状態ではありません');
+      } else {
+        addLogEntry('send-keys-error', sessionId, data.error || 'エラー');
+      }
+    }
+  } catch (e) {
+    console.error('send-keys error:', e);
+    addLogEntry('send-keys-error', sessionId, '通信エラー');
   }
 }
 

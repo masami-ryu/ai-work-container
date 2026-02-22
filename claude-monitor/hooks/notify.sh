@@ -3,7 +3,13 @@
 set -euo pipefail
 INPUT=$(cat)
 
-PAYLOAD=$(echo "$INPUT" | jq -c '{
+# tmux pane情報を取得（tmux外ではスキップ）
+TMUX_PANE_INFO=""
+if [ -n "${TMUX:-}" ]; then
+  TMUX_PANE_INFO=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
+fi
+
+PAYLOAD=$(echo "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
   event_type: .hook_event_name,
   session_id: .session_id,
   cwd: .cwd,
@@ -16,6 +22,7 @@ PAYLOAD=$(echo "$INPUT" | jq -c '{
   prompt: (.prompt // ""),
   questions: (.tool_input.questions // []),
   last_message: (.last_assistant_message // ""),
+  tmux_pane: $tmux_pane,
   reason: (.reason // ""),
   timestamp: now | todate
 }')

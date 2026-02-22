@@ -3,6 +3,8 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { fileURLToPath } from "url";
 import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
 import { GroupStore } from "./group-store.js";
@@ -201,6 +203,46 @@ app.post("/api/sessions/:id/reset-error", validateOrigin, (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+// --- Send Keys API ---
+const execFileAsync = promisify(execFile);
+
+app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
+  const id = req.params.id as string;
+  const session = sessionStore.get(id);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+  if (!session.tmux_pane) {
+    res.status(400).json({ error: "tmux_pane not registered" });
+    return;
+  }
+  if (session.status !== "idle") {
+    res.status(403).json({ error: "Session is not idle" });
+    return;
+  }
+  const { text } = req.body as { text: unknown };
+  if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
+    res.status(400).json({ error: "text must be a string between 1 and 4096 characters" });
+    return;
+  }
+
+  // マルチライン入力の改行をスペースに置換
+  const sanitizedText = text.replace(/\r?\n/g, " ");
+
+  try {
+    // リテラルモードでテキスト送信
+    await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
+    // Enterを別途送信
+    await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
+    res.json({ ok: true });
+  } catch (e: unknown) {
+    const err = e as { stderr?: string; message?: string };
+    console.error("tmux send-keys failed:", err.stderr || err.message);
+    res.status(500).json({ error: "Failed to send keys" });
+  }
 });
 
 // --- Group API ---

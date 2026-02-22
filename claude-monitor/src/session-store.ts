@@ -98,6 +98,7 @@ export class SessionStore {
       last_activity: "",
       artifacts: [],
       title: "",
+      tmux_pane: "",
       error_info: "",
       error_at: "",
       created_at: event.timestamp || new Date().toISOString(),
@@ -118,6 +119,7 @@ export class SessionStore {
         session.status = "running";
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
+        if (event.tmux_pane) session.tmux_pane = event.tmux_pane;
         break;
 
       case "UserPromptSubmit":
