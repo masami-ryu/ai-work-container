@@ -1,16 +1,20 @@
 {
-	"servers": {
-		"msdocs": {
-			"type": "http",
-			"url": "https://learn.microsoft.com/api/mcp"
-		},
-		"context7": {
-			"type": "stdio",
-			"command": "npx",
-			"args": [
-				"-y",
-				"@upstash/context7-mcp@latest"
-			]
-		}
-			}
+  "servers": {
+    "msdocs": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ]
+    },
+    "claude-monitor": {
+      "type": "http",
+      "url": "http://localhost:3456/mcp"
+    }
+  }
 }
