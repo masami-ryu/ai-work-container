@@ -108,6 +108,26 @@ export class DecisionStore {
     return cancelled;
   }
 
+  denyBySession(sessionId: string): Decision[] {
+    const denied: Decision[] = [];
+    for (const [id, decision] of this.decisions) {
+      if (decision.session_id === sessionId && decision.status === "pending") {
+        decision.status = "resolved";
+        decision.result = "deny";
+        decision.resolved_at = new Date().toISOString();
+        const waiter = this.waiters.get(id);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          waiter.resolve({ resolved: true, decision: "deny" });
+          this.waiters.delete(id);
+        }
+        this.onDecisionResolved(decision);
+        denied.push(decision);
+      }
+    }
+    return denied;
+  }
+
   get(id: string): Decision | undefined {
     return this.decisions.get(id);
   }

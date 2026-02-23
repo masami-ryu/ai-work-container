@@ -154,6 +154,12 @@ function cancelSessionDecisions(sessionId: string): void {
   }
 }
 
+// pending decisions を deny 確定（recover 用）
+// onDecisionResolved コールバック経由で broadcast される
+function denySessionDecisions(sessionId: string): void {
+  decisionStore.denyBySession(sessionId);
+}
+
 // decision キャンセル + セッション完了遷移
 function completeSessionWithCleanup(sessionId: string, message: string): void {
   cancelSessionDecisions(sessionId);
@@ -269,6 +275,28 @@ app.post("/api/sessions/:id/reset-error", validateOrigin, (req, res) => {
   if (!session) {
     res.status(404).json({ error: "Session not found or not in error state" });
     return;
+  }
+  res.json({ ok: true });
+});
+
+// セッションの waiting_permission / waiting_answer 状態を復帰
+app.post("/api/sessions/:id/recover", validateOrigin, (req, res) => {
+  const id = req.params.id as string;
+  const session = sessionStore.get(id);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+  const wasWaitingPermission = session.status === "waiting_permission";
+  // 先にセッション状態を idle に復帰（onDecisionResolved での余分な状態遷移を回避）
+  const recovered = sessionStore.recover(id);
+  if (!recovered) {
+    res.status(400).json({ error: "Session is not in waiting_permission or waiting_answer state" });
+    return;
+  }
+  // waiting_permission だった場合、pending decisions を deny として確定
+  if (wasWaitingPermission) {
+    denySessionDecisions(id);
   }
   res.json({ ok: true });
 });

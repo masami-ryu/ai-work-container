@@ -96,6 +96,19 @@ export class SessionStore {
     return session;
   }
 
+  recover(sessionId: string): Session | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    if (session.status !== "waiting_permission" && session.status !== "waiting_answer") {
+      return undefined;
+    }
+    session.status = "idle";
+    session.questions = [];
+    session.updated_at = new Date().toISOString();
+    this.onChange(session);
+    return session;
+  }
+
   destroy(): void {
     clearInterval(this.cleanupTimer);
   }
@@ -177,10 +190,19 @@ export class SessionStore {
           if (event.questions && event.questions.length > 0) {
             session.questions = event.questions;
           }
+        } else if (session.status === "waiting_answer") {
+          // AskUserQuestion 以外のツールが来た場合、質問は終了している
+          session.status = "running";
+          session.questions = [];
         }
         break;
 
       case "PostToolUse":
+        // waiting_answer 状態で PostToolUse が来たら running に復帰（質問回答済み）
+        if (session.status === "waiting_answer") {
+          session.status = "running";
+          session.questions = [];
+        }
         // Write/Edit 時にファイルパスを成果物として記録 + last_activity を更新
         if (event.tool_name && (event.tool_name === "Write" || event.tool_name === "Edit")) {
           if (event.file_path) {

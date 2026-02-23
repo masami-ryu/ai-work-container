@@ -274,6 +274,7 @@ function renderSessions() {
   // Bind event handlers
   bindDecisionButtons();
   bindResetErrorButtons();
+  bindRecoverButtons();
   bindToggleCollapse();
   bindGroupDropdowns();
   bindSendKeysButtons();
@@ -350,15 +351,20 @@ function renderCard(session) {
       html += renderDecisionPanel(d);
     });
   }
+  // 復帰ボタンはステータス基準で表示（decision未到着タイミングでも表示される）
+  if (session.status === 'waiting_permission') {
+    html += `<button class="btn-recover" data-session-id="${escapeHtml(session.session_id)}">↩ 復帰</button>`;
+  }
 
   // Question panel
   if (session.status === 'waiting_answer' && session.questions && session.questions.length > 0) {
-    html += renderQuestionPanel(session.questions);
+    html += renderQuestionPanel(session.questions, session.session_id);
   } else if (session.status === 'waiting_answer') {
     html += `
       <div class="question-panel">
         <h4>質問発生</h4>
         <p class="terminal-notice">ターミナルで質問内容を確認してください</p>
+        <button class="btn-recover" data-session-id="${escapeHtml(session.session_id)}">↩ 復帰</button>
       </div>
     `;
   }
@@ -516,7 +522,7 @@ function renderDecisionPanel(decision) {
   `;
 }
 
-function renderQuestionPanel(questions) {
+function renderQuestionPanel(questions, sessionId) {
   let html = `<div class="question-panel"><h4>質問</h4>`;
   questions.forEach(q => {
     html += `<div class="question-item">`;
@@ -537,7 +543,9 @@ function renderQuestionPanel(questions) {
     }
     html += `</div>`;
   });
-  html += `<p class="terminal-notice">回答はターミナルで入力してください</p></div>`;
+  html += `<p class="terminal-notice">回答はターミナルで入力してください</p>`;
+  html += `<button class="btn-recover" data-session-id="${escapeHtml(sessionId)}">↩ 復帰</button>`;
+  html += `</div>`;
   return html;
 }
 
@@ -700,6 +708,32 @@ async function resetError(sessionId) {
   } catch (e) {
     console.error('Reset error:', e);
   }
+}
+
+async function recoverSession(sessionId) {
+  const session = sessions[sessionId];
+  if (session && session.status === 'waiting_permission') {
+    if (!confirm('承認待ちの操作が拒否されます。復帰しますか？')) return;
+  } else if (session && session.status === 'waiting_answer') {
+    if (!confirm('質問待ち状態を強制的に解除します。ターミナル側の質問は残る場合があります。復帰しますか？')) return;
+  }
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/recover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      console.error('Recover session failed:', await res.text());
+    }
+  } catch (e) {
+    console.error('Recover session error:', e);
+  }
+}
+
+function bindRecoverButtons() {
+  document.querySelectorAll('.btn-recover').forEach(btn => {
+    btn.onclick = () => recoverSession(btn.dataset.sessionId);
+  });
 }
 
 function bindSendKeysButtons() {
