@@ -1,11 +1,9 @@
-import type { Session, SessionStatus, HookEvent, Milestone, Question, Activity } from "./types.js";
+import { TMUX_PANE_ID_RE, type Session, type SessionStatus, type HookEvent, type Milestone, type Question, type Activity } from "./types.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
 const STALENESS_TIMEOUT_MS = 10 * 60 * 1000; // running 状態で10分更新なしなら idle に遷移
 const MAX_ACTIVITIES = 30;
-
-const TMUX_PANE_RE = /^[\w-]+:\d+\.\d+$/;
 
 export class SessionStore {
   private sessions = new Map<string, Session>();
@@ -77,29 +75,20 @@ export class SessionStore {
     this.onChange(session);
   }
 
-  resetError(sessionId: string): Session | undefined {
+  completeSession(sessionId: string, message: string): Session | undefined {
     const session = this.sessions.get(sessionId);
-    if (!session || session.status !== "error") return undefined;
-    session.status = "idle";
-    session.error_info = "";
-    session.error_at = "";
+    if (!session) return undefined;
+    session.status = "completed";
+    session.last_message = message;
     session.updated_at = new Date().toISOString();
     this.onChange(session);
     return session;
   }
 
-  clearSession(sessionId: string): Session | undefined {
+  resetError(sessionId: string): Session | undefined {
     const session = this.sessions.get(sessionId);
-    if (!session) return undefined;
-    // status, cwd, model, tmux_pane は維持（セッション自体は継続中）
-    session.title = "";
-    session.status_text = "";
-    session.milestones = [];
-    session.last_message = "";
-    session.last_activity = "";
-    session.artifacts = [];
-    session.activities = [];
-    session.questions = [];
+    if (!session || session.status !== "error") return undefined;
+    session.status = "idle";
     session.error_info = "";
     session.error_at = "";
     session.updated_at = new Date().toISOString();
@@ -146,7 +135,7 @@ export class SessionStore {
         session.status = "idle";
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
-        if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
+        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         break;
 
       case "UserPromptSubmit": {
@@ -209,7 +198,7 @@ export class SessionStore {
       case "Stop":
         session.status = "idle";
         session.questions = [];
-        if (event.tmux_pane && TMUX_PANE_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
+        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
         if (event.last_message) {
           session.last_message = event.last_message;
           // アクティビティ蓄積

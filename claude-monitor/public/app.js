@@ -276,6 +276,7 @@ function renderSessions() {
   bindGroupDropdowns();
   bindSendKeysButtons();
   bindCopyPathButtons();
+  bindCloseSessionButtons();
 
   // textarea入力値を復元
   Object.entries(savedTexts).forEach(([sid, val]) => {
@@ -295,13 +296,20 @@ function renderCard(session) {
   // グループ選択ドロップダウン用
   const currentGroupId = getSessionGroupId(session.session_id);
 
+  const closeBtn = (session.tmux_pane && session.status !== 'completed')
+    ? `<button class="btn-close-session" data-session-id="${escapeHtml(session.session_id)}" title="セッションを終了">×</button>`
+    : '';
+
   let html = `
     <div class="card-header clickable" data-toggle-session="${escapeHtml(session.session_id)}">
       <div class="card-title-row">
         <span class="session-title">${titleDisplay}</span>
         <span class="session-id">${shortId}</span>
       </div>
-      <span class="status-badge badge-${session.status}">${statusLabel}</span>
+      <div class="card-header-actions">
+        <span class="status-badge badge-${session.status}">${statusLabel}</span>
+        ${closeBtn}
+      </div>
     </div>
   `;
 
@@ -365,7 +373,6 @@ function renderCard(session) {
         <div class="send-keys-panel" data-session-id="${escapeHtml(session.session_id)}">
           <div class="send-keys-header">
             <span>プロンプト入力</span>
-            <button class="btn-clear-session" data-session-id="${escapeHtml(session.session_id)}">/clear</button>
           </div>
           <div class="send-keys-input-row">
             <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
@@ -687,13 +694,6 @@ function bindSendKeysButtons() {
     };
   });
 
-  // /clear ボタン
-  document.querySelectorAll('.btn-clear-session').forEach(btn => {
-    btn.onclick = () => {
-      sendKeys(btn.dataset.sessionId, '/clear');
-    };
-  });
-
   // Ctrl+Enter で送信
   document.querySelectorAll('.send-keys-textarea').forEach(textarea => {
     textarea.onkeydown = (e) => {
@@ -731,6 +731,34 @@ function bindCopyPathButtons() {
       }
     };
   });
+}
+
+function bindCloseSessionButtons() {
+  document.querySelectorAll('.btn-close-session').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      closeSession(btn.dataset.sessionId);
+    };
+  });
+}
+
+async function closeSession(sessionId) {
+  if (!confirm('このセッションを終了しますか？\ntmuxペインが閉じられます。')) return;
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (res.ok) {
+      addLogEntry('close', sessionId, 'セッションを終了しました');
+    } else {
+      const data = await res.json().catch(() => ({}));
+      addLogEntry('close-error', sessionId, data.error || 'エラー');
+    }
+  } catch (e) {
+    console.error('Close session error:', e);
+    addLogEntry('close-error', sessionId, '通信エラー');
+  }
 }
 
 async function sendKeys(sessionId, text) {
@@ -940,7 +968,7 @@ function handleMessage(msg) {
     case 'decision_resolved': {
       const decision = payload;
       delete pendingDecisions[decision.id];
-      addLogEntry('decision_resolved', decision.session_id, `${decision.tool_name} → ${decision.result}`);
+      addLogEntry('decision_resolved', decision.session_id, `${decision.tool_name} → ${decision.result || 'cancelled'}`);
       renderSessions();
       break;
     }

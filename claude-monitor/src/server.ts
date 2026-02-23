@@ -97,6 +97,22 @@ const decisionStore = new DecisionStore({
   },
 });
 
+// --- Session completion helpers ---
+
+// pending decisions をキャンセルしてブロードキャスト
+function cancelSessionDecisions(sessionId: string): void {
+  const cancelled = decisionStore.cancelBySession(sessionId);
+  for (const decision of cancelled) {
+    broadcast({ type: "decision_resolved", payload: decision });
+  }
+}
+
+// decision キャンセル + セッション完了遷移
+function completeSessionWithCleanup(sessionId: string, message: string): void {
+  cancelSessionDecisions(sessionId);
+  sessionStore.completeSession(sessionId, message);
+}
+
 // --- Express app ---
 const app = express();
 app.use(express.json());
@@ -133,13 +149,7 @@ app.post("/api/events", (req, res) => {
 
   // SessionEnd 時に pending decisions を自動キャンセル
   if (event.event_type === "SessionEnd") {
-    const cancelled = decisionStore.cancelBySession(event.session_id);
-    for (const decision of cancelled) {
-      broadcast({
-        type: "decision_resolved",
-        payload: decision,
-      });
-    }
+    cancelSessionDecisions(event.session_id);
   }
 
   // Notification イベントは別途 WebSocket 通知
@@ -250,16 +260,83 @@ app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
     // Enterを別途送信
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
-    // /clear送信時はセッション表示データをリセット
-    if (sanitizedText.trim() === "/clear") {
-      sessionStore.clearSession(id);
-    }
     res.json({ ok: true });
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };
     console.error("tmux send-keys failed:", err.stderr || err.message);
     res.status(500).json({ error: "Failed to send keys" });
   }
+});
+
+// --- Close Session API ---
+app.post("/api/sessions/:id/close", validateOrigin, async (req, res) => {
+  if (!tmuxManager.canManagePanes()) {
+    res.status(503).json({ error: "tmux is not available" });
+    return;
+  }
+
+  const id = req.params.id as string;
+  const session = sessionStore.get(id);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+  if (!session.tmux_pane) {
+    res.status(400).json({ error: "tmux_pane not registered" });
+    return;
+  }
+  if (session.status === "completed") {
+    res.status(400).json({ error: "Session already completed" });
+    return;
+  }
+
+  // killPane実行前にペイン存在確認
+  let panePresent: boolean;
+  try {
+    panePresent = await tmuxManager.paneExists(session.tmux_pane);
+  } catch (checkErr) {
+    console.error("tmux communication error:", (checkErr as Error).message);
+    res.status(502).json({ error: "tmux communication error" });
+    return;
+  }
+
+  if (panePresent) {
+    try {
+      await tmuxManager.killPane(session.tmux_pane);
+    } catch (e) {
+      const code = (e as Error & { code?: string }).code;
+      if (code === "ERR_SELFPANE_UNKNOWN") {
+        console.error("killPane refused (selfPaneId unknown):", (e as Error).message);
+        res.status(503).json({ error: "Server self-pane ID is not resolved" });
+        return;
+      }
+      if (code === "ERR_REFUSE_SERVER_PANE") {
+        console.error("killPane refused (self-pane protection):", (e as Error).message);
+        res.status(409).json({ error: "Refusing to kill server pane" });
+        return;
+      }
+      // その他のkillPaneエラー: ペインがまだ存在するか確認
+      let stillExists: boolean;
+      try {
+        stillExists = await tmuxManager.paneExists(session.tmux_pane);
+      } catch (recheckErr) {
+        console.error("tmux communication error:", (recheckErr as Error).message);
+        res.status(502).json({ error: "tmux communication error" });
+        return;
+      }
+      if (stillExists) {
+        console.error("killPane failed:", (e as Error).message);
+        res.status(502).json({ error: "Failed to close tmux pane" });
+        return;
+      }
+      console.warn("killPane: pane already closed");
+    }
+  } else {
+    console.warn("killPane skipped: pane already absent");
+  }
+
+  completeSessionWithCleanup(id, "セッションを手動で終了しました");
+  res.json({ ok: true });
 });
 
 // --- Group API ---
@@ -470,6 +547,39 @@ wss.on("connection", (ws) => {
   });
 });
 
+// --- Pane Monitor ---
+const PANE_CHECK_INTERVAL_MS = 5000;
+let paneCheckTimer: ReturnType<typeof setInterval> | null = null;
+let inFlight = false;
+
+function startPaneMonitor(): void {
+  if (!tmuxManager.canManagePanes()) return;
+
+  paneCheckTimer = setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const activePanes = await tmuxManager.listActivePanes();
+      // サーバー自身のペインが最低1つ存在するため、size===0はtmuxコマンドエラーと判断
+      if (activePanes.size === 0) {
+        console.warn("Pane monitor: no active panes detected, skipping check");
+        return;
+      }
+
+      for (const session of sessionStore.getAll()) {
+        if (!session.tmux_pane) continue;
+        if (session.status === "completed") continue;
+        if (activePanes.has(session.tmux_pane)) continue;
+
+        // ペインが消失 → completedに遷移
+        completeSessionWithCleanup(session.session_id, "tmuxペインが終了しました");
+      }
+    } finally {
+      inFlight = false;
+    }
+  }, PANE_CHECK_INTERVAL_MS);
+}
+
 // グループデータとTmuxManagerを並列初期化してからサーバー起動
 Promise.all([
   groupStore.load(),
@@ -478,22 +588,19 @@ Promise.all([
   server.listen(PORT, HOST, () => {
     console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
     console.log(`Listening on ${HOST}:${PORT}`);
+    startPaneMonitor();
   });
 });
 
 // Graceful shutdown
-process.on("SIGTERM", () => {
+function shutdown(): void {
+  if (paneCheckTimer) clearInterval(paneCheckTimer);
   tmuxManager.destroy();
   sessionStore.destroy();
   decisionStore.destroy();
   wss.close();
   server.close();
-});
+}
 
-process.on("SIGINT", () => {
-  tmuxManager.destroy();
-  sessionStore.destroy();
-  decisionStore.destroy();
-  wss.close();
-  server.close();
-});
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

@@ -1,6 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { CliToolConfig, LaunchResult } from "./types.js";
+import { TMUX_PANE_ID_RE, type CliToolConfig, type LaunchResult } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,6 +13,7 @@ const DEFAULT_TOOLS: CliToolConfig[] = [
 
 export class TmuxManager {
   private sessionName: string | null = null;
+  private selfPaneId: string | null = null;
   private tools: Map<string, CliToolConfig>;
   private defaultCwd: string | null;
   private launchQueue: Promise<void> = Promise.resolve();
@@ -40,7 +41,21 @@ export class TmuxManager {
         console.warn("Failed to detect tmux session name.");
         return false;
       }
-      console.log(`TmuxManager initialized: session=${this.sessionName}`);
+
+      // $TMUX_PANE を使いサーバー自身のペインIDを取得
+      const tmuxPane = process.env.TMUX_PANE;
+      if (tmuxPane) {
+        try {
+          const format = "#{session_name}:#{window_index}.#{pane_index}";
+          const { stdout: paneOut } = await execFileAsync("tmux", [
+            "display-message", "-t", tmuxPane, "-p", format,
+          ]);
+          this.selfPaneId = paneOut.trim() || null;
+        } catch (e) {
+          console.warn("Failed to resolve selfPaneId:", (e as Error).message);
+        }
+      }
+      console.log(`TmuxManager initialized: session=${this.sessionName}, selfPane=${this.selfPaneId ?? "(unknown)"}`);
       return true;
     } catch (e) {
       console.warn("TmuxManager initialization failed:", (e as Error).message);
@@ -48,7 +63,12 @@ export class TmuxManager {
     }
   }
 
-  // tmuxが利用可能かどうか
+  // tmuxペイン操作（kill/list/exists）が可能か（sessionNameのみ必要）
+  canManagePanes(): boolean {
+    return this.sessionName !== null;
+  }
+
+  // セッション起動が可能か（sessionName + defaultCwd が必要）
   isAvailable(): boolean {
     return this.sessionName !== null && this.defaultCwd !== null;
   }
@@ -56,6 +76,66 @@ export class TmuxManager {
   // 利用可能なCLIツール一覧
   getTools(): CliToolConfig[] {
     return Array.from(this.tools.values());
+  }
+
+  // tmuxペインをkillする（自ペイン保護付き）
+  async killPane(paneId: string): Promise<void> {
+    if (!this.canManagePanes()) {
+      throw new Error("TmuxManager is not available");
+    }
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      throw new Error("Invalid pane ID format");
+    }
+
+    // 自ペイン保護: サーバー自身のペインをkillしない
+    if (this.selfPaneId === null) {
+      const err = new Error("Cannot kill pane: server self pane ID is unknown");
+      (err as Error & { code: string }).code = "ERR_SELFPANE_UNKNOWN";
+      throw err;
+    }
+    if (paneId === this.selfPaneId) {
+      const err = new Error("Refusing to kill server's own pane");
+      (err as Error & { code: string }).code = "ERR_REFUSE_SERVER_PANE";
+      throw err;
+    }
+
+    await execFileAsync("tmux", ["kill-pane", "-t", paneId]);
+  }
+
+  // 全アクティブペインIDを取得（全tmuxセッション対象）
+  async listActivePanes(): Promise<Set<string>> {
+    if (!this.canManagePanes()) {
+      return new Set();
+    }
+    try {
+      const format = "#{session_name}:#{window_index}.#{pane_index}";
+      const { stdout } = await execFileAsync("tmux", [
+        "list-panes", "-a", "-F", format,
+      ]);
+      return new Set(stdout.trim().split("\n").filter(Boolean));
+    } catch (e) {
+      console.warn("listActivePanes failed:", (e as Error).message);
+      return new Set();
+    }
+  }
+
+  // 指定ペインが存在するか確認
+  // pane未検出時は false、tmux実行エラー時は例外を送出
+  async paneExists(paneId: string): Promise<boolean> {
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      return false;
+    }
+    try {
+      await execFileAsync("tmux", ["display-message", "-t", paneId, "-p", ""]);
+      return true;
+    } catch (e: unknown) {
+      const stderr = (e as { stderr?: string }).stderr ?? "";
+      const msg = stderr || (e as Error).message || "";
+      if (/can.t find|no such|not found/i.test(msg)) {
+        return false;
+      }
+      throw e;
+    }
   }
 
   // shutdown時にフラグを立て、以降のlaunchSessionを拒否する

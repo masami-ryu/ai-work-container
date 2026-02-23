@@ -142,6 +142,9 @@ export interface LaunchResult {
   tmux_pane: string;    // 作成されたペイン識別子（例: "main:1.2"）
 }
 
+// tmux ペインID検証用正規表現（例: "main:1.2"）
+export const TMUX_PANE_ID_RE = /^[\w-]+:\d+\.\d+$/;
+
 // WebSocket メッセージ
 export type WSMessage =
   | { type: "session_update"; payload: Session }
