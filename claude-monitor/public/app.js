@@ -332,6 +332,11 @@ function renderCard(session) {
   // グループ選択ドロップダウン
   html += renderGroupDropdown(session.session_id, currentGroupId);
 
+  // 作業工程テキスト（running 状態でのみ表示）
+  if (session.status === 'running' && session.current_progress) {
+    html += `<div class="current-progress">\u23F3 ${escapeHtml(truncate(session.current_progress, 200))}</div>`;
+  }
+
   if (session.status_text) {
     html += `<div class="status-text">${escapeHtml(session.status_text)}</div>`;
   }
@@ -451,7 +456,7 @@ function renderActivitiesPanel(activities) {
   // 新しい順に表示
   [...activities].reverse().forEach(a => {
     const time = new Date(a.timestamp).toLocaleTimeString('ja-JP');
-    const icon = { prompt: '\u{1F4AC}', tool_use: '\u{1F527}', message: '\u{1F4DD}', milestone: '\u{1F3C1}' }[a.type] || '\u2022';
+    const icon = { prompt: '\u{1F4AC}', tool_use: '\u{1F527}', message: '\u{1F4DD}', milestone: '\u{1F3C1}', progress: '\u23F3' }[a.type] || '\u2022';
     html += `<div class="activity-item activity-${a.type}">`;
     html += `<span class="activity-time">${time}</span>`;
     html += `<span class="activity-icon">${icon}</span>`;

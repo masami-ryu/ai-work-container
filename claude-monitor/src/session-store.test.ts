@@ -18,6 +18,8 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
     last_message: "",
     tmux_pane: "",
     reason: "",
+    transcript_path: "",
+    progress_text: "",
     timestamp: new Date().toISOString(),
     ...overrides,
   };
@@ -153,6 +155,92 @@ describe("SessionStore.recover", () => {
 
     const recovered = store.recover("s1");
     expect(recovered).toBeUndefined();
+    store.destroy();
+  });
+});
+
+describe("SessionStore progress テキスト", () => {
+  it("PreToolUse + progress_text で current_progress が更新される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "hello" }));
+    const session = store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Read",
+      progress_text: "ファイルを確認します。",
+    }));
+    expect(session.current_progress).toBe("ファイルを確認します。");
+    expect(session.activities.some(a => a.type === "progress" && a.summary === "ファイルを確認します。")).toBe(true);
+    store.destroy();
+  });
+
+  it("同一 progress_text の重複は activity に追加されない", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "hello" }));
+    store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Read",
+      progress_text: "ファイルを確認します。",
+    }));
+    const session = store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Glob",
+      progress_text: "ファイルを確認します。",
+    }));
+    const progressActivities = session.activities.filter(a => a.type === "progress");
+    expect(progressActivities.length).toBe(1);
+    store.destroy();
+  });
+
+  it("Stop 時に current_progress がクリアされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "hello" }));
+    store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Read",
+      progress_text: "ファイルを確認します。",
+    }));
+    const session = store.processEvent(makeEvent({ event_type: "Stop" }));
+    expect(session.current_progress).toBe("");
+    store.destroy();
+  });
+
+  it("UserPromptSubmit 時に current_progress がクリアされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "hello" }));
+    store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Read",
+      progress_text: "ファイルを確認します。",
+    }));
+    const session = store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "次のタスク" }));
+    expect(session.current_progress).toBe("");
+    store.destroy();
+  });
+
+  it("空の progress_text では current_progress が変更されない", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", prompt: "hello" }));
+    store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Read",
+      progress_text: "ファイルを確認します。",
+    }));
+    const session = store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      tool_name: "Glob",
+      progress_text: "",
+    }));
+    expect(session.current_progress).toBe("ファイルを確認します。");
     store.destroy();
   });
 });

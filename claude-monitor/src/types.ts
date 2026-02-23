@@ -17,6 +17,7 @@ export interface Session {
   milestones: Milestone[];
   last_message: string;
   last_activity: string; // 直近のツール操作情報（PostToolUse: tool_name + file_path）
+  current_progress: string; // 直近の作業工程テキスト（トランスクリプト解析で付与）
   artifacts: string[]; // Write/Edit で検出された成果物ファイルパス
   title: string; // ユーザーの初回指示内容
   error_info: string;
@@ -30,7 +31,7 @@ export interface Session {
 
 export interface Activity {
   timestamp: string;       // ISO 8601
-  type: "prompt" | "tool_use" | "message" | "milestone";
+  type: "prompt" | "tool_use" | "message" | "milestone" | "progress";
   summary: string;         // 表示用テキスト
 }
 
@@ -83,6 +84,8 @@ export interface HookEvent {
   last_message: string;
   tmux_pane: string; // SessionStart時にnotify.shから送信
   reason: string;
+  transcript_path: string; // Claude Code のトランスクリプト JSONL パス
+  progress_text: string; // サーバー側でトランスクリプトから抽出した作業工程テキスト（notify.sh からは送信されない）
   timestamp: string; // ISO 8601
 }
 

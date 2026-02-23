@@ -12,6 +12,7 @@ import { GroupStore } from "./group-store.js";
 import { PromptTemplateStore } from "./prompt-template-store.js";
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
+import { extractLatestProgress } from "./transcript-parser.js";
 import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision } from "./types.js";
 
 const PORT = 3456;
@@ -187,7 +188,7 @@ function validateOrigin(req: express.Request, res: express.Response, next: expre
 // --- REST API ---
 
 // イベント受信（notify.sh から）
-app.post("/api/events", (req, res) => {
+app.post("/api/events", async (req, res) => {
   if (HOOK_TOKEN && req.header("x-hook-token") !== HOOK_TOKEN) {
     res.status(403).json({ error: "Forbidden" });
     return;
@@ -196,6 +197,11 @@ app.post("/api/events", (req, res) => {
   if (!event.session_id || !event.event_type) {
     res.status(400).json({ error: "session_id and event_type are required" });
     return;
+  }
+
+  // PreToolUse 時にトランスクリプトから作業工程テキストを抽出
+  if (event.event_type === "PreToolUse" && event.transcript_path) {
+    event.progress_text = await extractLatestProgress(event.transcript_path);
   }
 
   const session = sessionStore.processEvent(event);

@@ -283,6 +283,23 @@ main.layout {
   margin-right: 6px;
 }
 
+/* Current progress text */
+.current-progress {
+  font-size: 13px;
+  color: #b0bec5;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(76, 175, 80, 0.06);
+  border-left: 2px solid rgba(76, 175, 80, 0.4);
+  border-radius: 0 4px 4px 0;
+  animation: progress-fade-in 0.3s ease-in;
+}
+
+@keyframes progress-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .status-text {
   font-size: 13px;
   color: #ccc;
@@ -758,6 +775,10 @@ footer summary {
 
 .activity-item.activity-milestone {
   background: rgba(156, 39, 176, 0.08);
+}
+
+.activity-item.activity-progress {
+  background: rgba(76, 175, 80, 0.06);
 }
 
 .activity-time {

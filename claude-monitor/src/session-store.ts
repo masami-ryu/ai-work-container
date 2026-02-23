@@ -123,6 +123,7 @@ export class SessionStore {
       milestones: [],
       last_message: "",
       last_activity: "",
+      current_progress: "",
       artifacts: [],
       title: "",
       activities: [],
@@ -158,6 +159,7 @@ export class SessionStore {
       case "UserPromptSubmit": {
         // idle → running 復帰
         session.status = "running";
+        session.current_progress = "";
         session.questions = [];
         // 初回プロンプトをタイトルとして保存（スラッシュコマンドは除外）
         const normalizedPrompt = event.prompt?.trimStart() ?? "";
@@ -195,6 +197,16 @@ export class SessionStore {
           session.status = "running";
           session.questions = [];
         }
+        // 作業工程テキストの更新（デデュプリケーション付き）
+        if (event.progress_text && event.progress_text !== session.current_progress) {
+          session.current_progress = event.progress_text;
+          this.addActivity(session, "progress",
+            event.progress_text.length > 200
+              ? event.progress_text.substring(0, 200) + "..."
+              : event.progress_text,
+            event.timestamp || new Date().toISOString()
+          );
+        }
         break;
 
       case "PostToolUse":
@@ -223,6 +235,7 @@ export class SessionStore {
 
       case "Stop":
         session.status = "idle";
+        session.current_progress = "";
         session.questions = [];
         if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) {
           session.tmux_pane = event.tmux_pane;
@@ -239,6 +252,7 @@ export class SessionStore {
 
       case "SessionEnd":
         session.status = "completed";
+        session.current_progress = "";
         session.questions = [];
         if (event.reason) {
           session.last_message = event.reason;

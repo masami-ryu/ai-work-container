@@ -22,6 +22,8 @@ PAYLOAD=$(echo "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
   last_message: (.last_assistant_message // ""),
   tmux_pane: $tmux_pane,
   reason: (.reason // ""),
+  transcript_path: (.transcript_path // ""),
+  progress_text: "",
   timestamp: now | todate
 }')
 
