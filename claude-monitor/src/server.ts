@@ -9,6 +9,7 @@ import { promisify } from "util";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
 import { GroupStore } from "./group-store.js";
+import { PromptTemplateStore } from "./prompt-template-store.js";
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision } from "./types.js";
@@ -44,6 +45,15 @@ const groupStore = new GroupStore((group) => {
   });
 });
 
+const promptTemplateStore = new PromptTemplateStore(
+  (template) => {
+    broadcast({ type: "prompt_template_update", payload: template });
+  },
+  (id) => {
+    broadcast({ type: "prompt_template_delete", payload: { id } });
+  },
+);
+
 const sessionStore = new SessionStore(
   (session) => {
     broadcast({
@@ -52,6 +62,7 @@ const sessionStore = new SessionStore(
     });
   },
   (sessionId) => {
+    deletePromptHistory(`session:${sessionId}`);
     groupStore.removeSessionFromAll(sessionId).catch(e => {
       console.error("Failed to clean up group references for deleted session:", e);
     });
@@ -96,6 +107,42 @@ const decisionStore = new DecisionStore({
     sessionStore.setError(decision.session_id, `Decision timeout: ${decision.tool_name}`);
   },
 });
+
+// --- Prompt History (in-memory) ---
+const PROMPT_HISTORY_MAX = 50;
+const promptHistories = new Map<string, string[]>();
+
+function getPromptHistoryKey(sessionId: string): string {
+  for (const g of groupStore.getAll()) {
+    if (g.session_ids.includes(sessionId)) {
+      return `group:${g.id}`;
+    }
+  }
+  return `session:${sessionId}`;
+}
+
+function addPromptHistory(key: string, text: string): void {
+  let history = promptHistories.get(key);
+  if (!history) {
+    history = [];
+    promptHistories.set(key, history);
+  }
+  // 直前と同一テキストはスキップ
+  if (history.length > 0 && history[history.length - 1] === text) return;
+  history.push(text);
+  // 上限管理
+  if (history.length > PROMPT_HISTORY_MAX) {
+    history.splice(0, history.length - PROMPT_HISTORY_MAX);
+  }
+}
+
+function getPromptHistory(key: string): string[] {
+  return promptHistories.get(key) || [];
+}
+
+function deletePromptHistory(key: string): void {
+  promptHistories.delete(key);
+}
 
 // --- Session completion helpers ---
 
@@ -260,6 +307,16 @@ app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
     // Enterを別途送信
     await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
+
+    // 履歴に記録
+    const historyKey = getPromptHistoryKey(id);
+    addPromptHistory(historyKey, text);
+    const [historyScope, historyId] = historyKey.split(":", 2) as ["group" | "session", string];
+    broadcast({
+      type: "prompt_history_update",
+      payload: { scope: historyScope, id: historyId, history: getPromptHistory(historyKey) },
+    });
+
     res.json({ ok: true });
   } catch (e: unknown) {
     const err = e as { stderr?: string; message?: string };
@@ -386,11 +443,28 @@ app.put("/api/groups/:id", validateOrigin, async (req, res) => {
 app.delete("/api/groups/:id", validateOrigin, async (req, res) => {
   const id = req.params.id as string;
   try {
+    const group = groupStore.get(id);
     const deleted = await groupStore.delete(id);
     if (!deleted) {
       res.status(404).json({ error: "Group not found" });
       return;
     }
+    // グループ履歴を所属セッションにコピーしてから削除
+    const groupKey = `group:${id}`;
+    const groupHistory = getPromptHistory(groupKey);
+    if (group && groupHistory.length > 0) {
+      for (const sessionId of group.session_ids) {
+        const sessionKey = `session:${sessionId}`;
+        for (const text of groupHistory) {
+          addPromptHistory(sessionKey, text);
+        }
+        broadcast({
+          type: "prompt_history_update",
+          payload: { scope: "session" as const, id: sessionId, history: getPromptHistory(sessionKey) },
+        });
+      }
+    }
+    deletePromptHistory(groupKey);
     broadcast({ type: "group_delete", payload: { id } });
     res.json({ ok: true });
   } catch (e) {
@@ -417,19 +491,122 @@ app.post("/api/groups/:id/sessions", validateOrigin, async (req, res) => {
         res.status(404).json({ error: "Group not found" });
         return;
       }
+      // セッション単体の履歴をグループ履歴に統合
+      const sessionKey = `session:${session_id}`;
+      const groupKey = `group:${group.id}`;
+      const sessionHistory = getPromptHistory(sessionKey);
+      if (sessionHistory.length > 0) {
+        for (const text of sessionHistory) {
+          addPromptHistory(groupKey, text);
+        }
+        deletePromptHistory(sessionKey);
+        const [historyScope, historyId] = groupKey.split(":", 2) as ["group", string];
+        broadcast({
+          type: "prompt_history_update",
+          payload: { scope: historyScope, id: historyId, history: getPromptHistory(groupKey) },
+        });
+      }
       res.json(group);
     } else {
-      const group = await groupStore.removeSession(req.params.id as string, session_id);
+      const groupId = req.params.id as string;
+      const group = await groupStore.removeSession(groupId, session_id);
       if (!group) {
         res.status(404).json({ error: "Group not found or session not in group" });
         return;
       }
+      // グループ履歴をセッション側にコピー
+      const groupKey = `group:${groupId}`;
+      const sessionKey = `session:${session_id}`;
+      for (const text of getPromptHistory(groupKey)) {
+        addPromptHistory(sessionKey, text);
+      }
+      broadcast({
+        type: "prompt_history_update",
+        payload: { scope: "session" as const, id: session_id, history: getPromptHistory(sessionKey) },
+      });
       res.json(group);
     }
   } catch (e) {
     console.error("Failed to update group sessions:", e);
     res.status(500).json({ error: "Failed to persist group session change" });
   }
+});
+
+// --- Prompt Template API ---
+
+app.get("/api/prompt-templates", (_req, res) => {
+  res.json(promptTemplateStore.getAll());
+});
+
+app.post("/api/prompt-templates", validateOrigin, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!name || name.length > 100) {
+    res.status(400).json({ error: "name is required and must be <= 100 characters" });
+    return;
+  }
+  if (!body || body.length > 4096) {
+    res.status(400).json({ error: "body is required and must be <= 4096 characters" });
+    return;
+  }
+  try {
+    const template = await promptTemplateStore.create(name, body);
+    res.status(201).json(template);
+  } catch (e) {
+    console.error("Failed to create prompt template:", e);
+    res.status(500).json({ error: "Failed to persist prompt template" });
+  }
+});
+
+app.put("/api/prompt-templates/:id", validateOrigin, async (req, res) => {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!name || name.length > 100) {
+    res.status(400).json({ error: "name is required and must be <= 100 characters" });
+    return;
+  }
+  if (!body || body.length > 4096) {
+    res.status(400).json({ error: "body is required and must be <= 4096 characters" });
+    return;
+  }
+  try {
+    const template = await promptTemplateStore.update(req.params.id as string, name, body);
+    if (!template) {
+      res.status(404).json({ error: "Prompt template not found" });
+      return;
+    }
+    res.json(template);
+  } catch (e) {
+    console.error("Failed to update prompt template:", e);
+    res.status(500).json({ error: "Failed to persist prompt template" });
+  }
+});
+
+app.delete("/api/prompt-templates/:id", validateOrigin, async (req, res) => {
+  const id = req.params.id as string;
+  try {
+    const deleted = await promptTemplateStore.delete(id);
+    if (!deleted) {
+      res.status(404).json({ error: "Prompt template not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Failed to delete prompt template:", e);
+    res.status(500).json({ error: "Failed to persist prompt template deletion" });
+  }
+});
+
+// --- Prompt History API ---
+
+app.get("/api/prompt-history/:type/:id", (req, res) => {
+  const type = req.params.type as string;
+  const id = req.params.id as string;
+  if (type !== "group" && type !== "session") {
+    res.status(400).json({ error: "type must be 'group' or 'session'" });
+    return;
+  }
+  res.json(getPromptHistory(`${type}:${id}`));
 });
 
 // --- TmuxManager ---
@@ -584,9 +761,10 @@ function startPaneMonitor(): void {
   }, PANE_CHECK_INTERVAL_MS);
 }
 
-// グループデータとTmuxManagerを並列初期化してからサーバー起動
+// データストアとTmuxManagerを並列初期化してからサーバー起動
 Promise.all([
   groupStore.load(),
+  promptTemplateStore.load(),
   tmuxManager.initialize(),
 ]).then(() => {
   server.listen(PORT, HOST, () => {

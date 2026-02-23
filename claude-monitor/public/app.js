@@ -2,6 +2,8 @@
 let sessions = {};
 let pendingDecisions = {};
 let groups = {};
+let promptTemplates = {}; // id -> PromptTemplate
+let promptHistories = {}; // "group:<id>" or "session:<id>" -> string[]
 let selectedGroupId = null; // null=すべて, 'ungrouped'=未分類, string=グループID
 let toggledSessions = new Set(); // デフォルト状態から反転されたセッション
 let ws = null;
@@ -369,15 +371,33 @@ function renderCard(session) {
   // Send Keys パネル（idle状態のみ）
   if (session.status === 'idle') {
     if (session.tmux_pane) {
+      const templateList = Object.values(promptTemplates);
+      let templateOptions = `<option value="">-- テンプレート選択 --</option>`;
+      templateList.forEach(t => {
+        templateOptions += `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`;
+      });
+
       html += `
         <div class="send-keys-panel" data-session-id="${escapeHtml(session.session_id)}">
           <div class="send-keys-header">
             <span>プロンプト入力</span>
+            <div class="send-keys-header-actions">
+              <button class="btn-history" data-session-id="${escapeHtml(session.session_id)}" title="送信履歴">&#128336;</button>
+              <select class="template-select" data-session-id="${escapeHtml(session.session_id)}">
+                ${templateOptions}
+              </select>
+              <button class="btn-template-manage" data-session-id="${escapeHtml(session.session_id)}" title="テンプレート管理">&#9881;</button>
+            </div>
           </div>
+          <div class="prompt-history-popup" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
+          <div class="template-manage-panel" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
           <div class="send-keys-input-row">
             <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
                       placeholder="プロンプトを入力（改行はスペースに変換されます）" rows="2"></textarea>
             <button class="btn-send-keys" data-session-id="${escapeHtml(session.session_id)}">送信</button>
+          </div>
+          <div class="send-keys-footer">
+            <button class="btn-save-template" data-session-id="${escapeHtml(session.session_id)}">テンプレートとして保存</button>
           </div>
         </div>
       `;
@@ -706,6 +726,211 @@ function bindSendKeysButtons() {
       }
     };
   });
+
+  // テンプレート選択ドロップダウン
+  document.querySelectorAll('.template-select').forEach(select => {
+    select.onchange = () => {
+      const sessionId = select.dataset.sessionId;
+      const templateId = select.value;
+      if (!templateId) return;
+      const template = promptTemplates[templateId];
+      if (!template) return;
+      const textarea = document.querySelector(`.send-keys-textarea[data-session-id="${sessionId}"]`);
+      if (textarea) textarea.value = template.body;
+      select.value = ''; // リセット
+    };
+  });
+
+  // テンプレートとして保存
+  document.querySelectorAll('.btn-save-template').forEach(btn => {
+    btn.onclick = async () => {
+      const sessionId = btn.dataset.sessionId;
+      const textarea = document.querySelector(`.send-keys-textarea[data-session-id="${sessionId}"]`);
+      if (!textarea || !textarea.value.trim()) {
+        return;
+      }
+      const name = prompt('テンプレート名を入力:');
+      if (!name) return;
+      try {
+        const res = await fetch('/api/prompt-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, body: textarea.value }),
+        });
+        if (res.ok) {
+          const template = await res.json();
+          promptTemplates[template.id] = template;
+          addLogEntry('template-save', '', `テンプレート「${name}」を保存しました`);
+          renderSessions();
+        } else {
+          const data = await res.json().catch(() => ({}));
+          addLogEntry('template-error', '', data.error || '保存に失敗しました');
+        }
+      } catch (e) {
+        console.error('Save template error:', e);
+      }
+    };
+  });
+
+  // テンプレート管理ボタン
+  document.querySelectorAll('.btn-template-manage').forEach(btn => {
+    btn.onclick = () => {
+      const sessionId = btn.dataset.sessionId;
+      const panel = document.querySelector(`.template-manage-panel[data-session-id="${sessionId}"]`);
+      if (!panel) return;
+      if (panel.style.display !== 'none') {
+        panel.style.display = 'none';
+        return;
+      }
+      renderTemplateManagePanel(panel);
+      panel.style.display = 'block';
+    };
+  });
+
+  // 履歴ボタン
+  document.querySelectorAll('.btn-history').forEach(btn => {
+    btn.onclick = () => {
+      const sessionId = btn.dataset.sessionId;
+      const popup = document.querySelector(`.prompt-history-popup[data-session-id="${sessionId}"]`);
+      if (!popup) return;
+      if (popup.style.display !== 'none') {
+        popup.style.display = 'none';
+        return;
+      }
+      renderHistoryPopup(popup, sessionId);
+      popup.style.display = 'block';
+    };
+  });
+}
+
+function renderTemplateManagePanel(panel) {
+  const templateList = Object.values(promptTemplates);
+  if (templateList.length === 0) {
+    panel.innerHTML = '<div class="template-manage-empty">テンプレートなし</div>';
+    return;
+  }
+  let html = '<div class="template-manage-list">';
+  templateList.forEach(t => {
+    html += `
+      <div class="template-manage-item" data-template-id="${escapeHtml(t.id)}">
+        <div class="template-manage-info">
+          <span class="template-manage-name">${escapeHtml(t.name)}</span>
+          <span class="template-manage-body">${escapeHtml(truncate(t.body, 50))}</span>
+        </div>
+        <div class="template-manage-actions">
+          <button class="btn-template-edit" data-template-id="${escapeHtml(t.id)}" title="編集">&#9998;</button>
+          <button class="btn-template-delete" data-template-id="${escapeHtml(t.id)}" title="削除">&#128465;</button>
+        </div>
+        <div class="template-edit-form" data-template-id="${escapeHtml(t.id)}" style="display:none;">
+          <input type="text" class="template-edit-name" value="${escapeHtml(t.name)}" placeholder="テンプレート名" />
+          <textarea class="template-edit-body" rows="4" placeholder="テンプレート本文">${escapeHtml(t.body)}</textarea>
+          <div class="template-edit-buttons">
+            <button class="btn-template-save" data-template-id="${escapeHtml(t.id)}">保存</button>
+            <button class="btn-template-cancel" data-template-id="${escapeHtml(t.id)}">キャンセル</button>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  html += '</div>';
+  panel.innerHTML = html;
+
+  // 編集ボタン（インライン編集フォームの表示切替）
+  panel.querySelectorAll('.btn-template-edit').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.templateId;
+      const form = panel.querySelector(`.template-edit-form[data-template-id="${id}"]`);
+      if (!form) return;
+      form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    };
+  });
+
+  // 保存ボタン
+  panel.querySelectorAll('.btn-template-save').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.templateId;
+      const form = panel.querySelector(`.template-edit-form[data-template-id="${id}"]`);
+      if (!form) return;
+      const newName = form.querySelector('.template-edit-name').value;
+      const newBody = form.querySelector('.template-edit-body').value;
+      try {
+        const res = await fetch(`/api/prompt-templates/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName, body: newBody }),
+        });
+        if (res.ok) {
+          const updated = await res.json();
+          promptTemplates[updated.id] = updated;
+          renderTemplateManagePanel(panel);
+          renderSessions();
+        }
+      } catch (e) {
+        console.error('Edit template error:', e);
+      }
+    };
+  });
+
+  // キャンセルボタン
+  panel.querySelectorAll('.btn-template-cancel').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.templateId;
+      const form = panel.querySelector(`.template-edit-form[data-template-id="${id}"]`);
+      if (form) form.style.display = 'none';
+    };
+  });
+
+  // 削除ボタン
+  panel.querySelectorAll('.btn-template-delete').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.templateId;
+      const template = promptTemplates[id];
+      if (!template) return;
+      if (!confirm(`テンプレート「${template.name}」を削除しますか？`)) return;
+      try {
+        const res = await fetch(`/api/prompt-templates/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          delete promptTemplates[id];
+          renderTemplateManagePanel(panel);
+          renderSessions();
+        }
+      } catch (e) {
+        console.error('Delete template error:', e);
+      }
+    };
+  });
+}
+
+function getHistoryKeyForSession(sessionId) {
+  const groupId = getSessionGroupId(sessionId);
+  return groupId ? `group:${groupId}` : `session:${sessionId}`;
+}
+
+function renderHistoryPopup(popup, sessionId) {
+  const key = getHistoryKeyForSession(sessionId);
+  const history = promptHistories[key] || [];
+  if (history.length === 0) {
+    popup.innerHTML = '<div class="history-empty">履歴なし</div>';
+    return;
+  }
+  let html = '<div class="history-list">';
+  // 最新順で表示
+  [...history].reverse().forEach((text, idx) => {
+    html += `<div class="history-item" data-history-index="${history.length - 1 - idx}">${escapeHtml(truncate(text, 50))}</div>`;
+  });
+  html += '</div>';
+  popup.innerHTML = html;
+
+  // クリックでテキストエリアに入力
+  popup.querySelectorAll('.history-item').forEach(item => {
+    item.onclick = () => {
+      const index = parseInt(item.dataset.historyIndex, 10);
+      const fullText = history[index];
+      const textarea = document.querySelector(`.send-keys-textarea[data-session-id="${sessionId}"]`);
+      if (textarea && fullText) textarea.value = fullText;
+      popup.style.display = 'none';
+    };
+  });
 }
 
 function bindCopyPathButtons() {
@@ -790,27 +1015,57 @@ async function sendKeys(sessionId, text) {
 
 async function fetchInitialState() {
   try {
-    const [sessRes, decRes, groupRes /* fetchTools: side-effect only */] = await Promise.all([
+    const [sessRes, decRes, groupRes, templatesRes /* fetchTools: side-effect only */] = await Promise.all([
       fetch('/api/sessions'),
       fetch('/api/decisions/pending'),
       fetch('/api/groups'),
+      fetch('/api/prompt-templates'),
       fetchTools(),
     ]);
     const sessList = await sessRes.json();
     const decList = await decRes.json();
     const groupList = await groupRes.json();
+    const templatesList = await templatesRes.json();
     sessions = {};
     sessList.forEach(s => { sessions[s.session_id] = s; });
     pendingDecisions = {};
     decList.forEach(d => { pendingDecisions[d.id] = d; });
     groups = {};
     groupList.forEach(g => { groups[g.id] = g; });
+    promptTemplates = {};
+    templatesList.forEach(t => { promptTemplates[t.id] = t; });
+
+    // プロンプト履歴をprefetch（可視セッションのグループ/セッション単位）
+    promptHistories = {};
+    const historyKeysToFetch = new Set();
+    sessList.forEach(s => {
+      const groupId = getSessionGroupId(s.session_id);
+      if (groupId) {
+        historyKeysToFetch.add(`group:${groupId}`);
+      } else {
+        historyKeysToFetch.add(`session:${s.session_id}`);
+      }
+    });
+    const historyFetches = Array.from(historyKeysToFetch).map(async (key) => {
+      const [type, id] = key.split(':', 2);
+      try {
+        const res = await fetch(`/api/prompt-history/${type}/${id}`);
+        if (res.ok) {
+          promptHistories[key] = await res.json();
+        }
+      } catch (e) {
+        console.error('Failed to fetch prompt history:', key, e);
+      }
+    });
+    await Promise.all(historyFetches);
+
     renderSidebar();
     renderSessions();
   } catch (e) {
     console.error('Failed to fetch initial state:', e);
   }
 }
+
 
 // --- Sidebar ---
 function renderSidebar() {
@@ -982,6 +1237,11 @@ function handleMessage(msg) {
       const group = payload;
       groups[group.id] = group;
       addLogEntry('group_update', '', group.name);
+      // グループの履歴を再取得
+      fetch(`/api/prompt-history/group/${group.id}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(history => { promptHistories[`group:${group.id}`] = history; })
+        .catch(() => {});
       renderSidebar();
       renderSessions();
       break;
@@ -990,10 +1250,29 @@ function handleMessage(msg) {
     case 'group_delete': {
       const { id: deletedId } = payload;
       delete groups[deletedId];
+      delete promptHistories[`group:${deletedId}`];
       if (selectedGroupId === deletedId) selectedGroupId = null;
       addLogEntry('group_delete', '', deletedId.substring(0, 8));
       renderSidebar();
       renderSessions();
+      break;
+    }
+
+    case 'prompt_template_update': {
+      promptTemplates[payload.id] = payload;
+      renderSessions();
+      break;
+    }
+
+    case 'prompt_template_delete': {
+      delete promptTemplates[payload.id];
+      renderSessions();
+      break;
+    }
+
+    case 'prompt_history_update': {
+      const histKey = `${payload.scope}:${payload.id}`;
+      promptHistories[histKey] = payload.history;
       break;
     }
   }
@@ -1011,6 +1290,34 @@ function truncate(str, max) {
   if (!str || str.length <= max) return str;
   return str.substring(0, max) + '...';
 }
+
+// --- ポップアップ外クリック/Escで閉じる ---
+document.addEventListener('click', (e) => {
+  const target = e.target instanceof Element ? e.target : null;
+  // 履歴ポップアップ
+  document.querySelectorAll('.prompt-history-popup').forEach(popup => {
+    if (popup.style.display !== 'none' && !popup.contains(target) && !target?.classList.contains('btn-history')) {
+      popup.style.display = 'none';
+    }
+  });
+  // テンプレート管理パネル
+  document.querySelectorAll('.template-manage-panel').forEach(panel => {
+    if (panel.style.display !== 'none' && !panel.contains(target) && !target?.classList.contains('btn-template-manage')) {
+      panel.style.display = 'none';
+    }
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.prompt-history-popup').forEach(popup => {
+      popup.style.display = 'none';
+    });
+    document.querySelectorAll('.template-manage-panel').forEach(panel => {
+      panel.style.display = 'none';
+    });
+  }
+});
 
 // --- Init ---
 connectWebSocket();

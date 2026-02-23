@@ -145,6 +145,15 @@ export interface LaunchResult {
 // tmux ペインID検証用正規表現（例: "%5"）
 export const TMUX_PANE_ID_RE = /^%\d+$/;
 
+// プロンプトテンプレート
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  body: string;
+  created_at: string; // ISO 8601
+  updated_at: string; // ISO 8601
+}
+
 // WebSocket メッセージ
 export type WSMessage =
   | { type: "session_update"; payload: Session }
@@ -152,4 +161,7 @@ export type WSMessage =
   | { type: "decision_resolved"; payload: Decision }
   | { type: "notification"; payload: { session_id: string; message: string; notification_type: string } }
   | { type: "group_update"; payload: Group }
-  | { type: "group_delete"; payload: { id: string } };
+  | { type: "group_delete"; payload: { id: string } }
+  | { type: "prompt_template_update"; payload: PromptTemplate }
+  | { type: "prompt_template_delete"; payload: { id: string } }
+  | { type: "prompt_history_update"; payload: { scope: "group" | "session"; id: string; history: string[] } };

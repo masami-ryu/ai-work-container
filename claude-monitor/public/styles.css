@@ -784,6 +784,261 @@ footer summary {
   cursor: not-allowed;
 }
 
+/* Send Keys Header Actions */
+.send-keys-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Template Select Dropdown */
+.template-select {
+  background: #2a2d3a;
+  color: #ccc;
+  border: 1px solid #3a3d4a;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  max-width: 180px;
+}
+
+/* Template Manage Button */
+.btn-template-manage {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 14px;
+  padding: 2px 6px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.btn-template-manage:hover {
+  color: #2196f3;
+}
+
+/* Template Save Button */
+.send-keys-footer {
+  margin-top: 6px;
+}
+
+.btn-save-template {
+  background: none;
+  border: 1px solid #3a3d4a;
+  color: #888;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-save-template:hover {
+  color: #2196f3;
+  border-color: #2196f3;
+}
+
+/* Template Manage Panel */
+.template-manage-panel {
+  background: #1e2130;
+  border: 1px solid #2a2d3a;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.template-manage-empty {
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+  padding: 8px;
+}
+
+.template-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.template-manage-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+}
+
+.template-manage-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.template-manage-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.template-manage-name {
+  font-size: 12px;
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.template-manage-body {
+  font-size: 11px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-manage-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.btn-template-edit,
+.btn-template-delete {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 13px;
+  padding: 2px 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.btn-template-edit:hover {
+  color: #2196f3;
+}
+
+.btn-template-delete:hover {
+  color: #f44336;
+}
+
+/* Template Edit Form */
+.template-edit-form {
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.template-edit-name {
+  background: #1a1d27;
+  border: 1px solid #3a3d4a;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 4px 8px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.template-edit-body {
+  background: #1a1d27;
+  border: 1px solid #3a3d4a;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 4px 8px;
+  font-size: 12px;
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.template-edit-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.template-edit-buttons button {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-template-save {
+  background: #2196f3;
+  color: #fff;
+}
+
+.btn-template-save:hover {
+  background: #1976d2;
+}
+
+.btn-template-cancel {
+  background: #444;
+  color: #ccc;
+}
+
+.btn-template-cancel:hover {
+  background: #555;
+}
+
+/* History Button */
+.btn-history {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 14px;
+  padding: 2px 6px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.btn-history:hover {
+  color: #2196f3;
+}
+
+/* History Popup */
+.prompt-history-popup {
+  background: #1e2130;
+  border: 1px solid #2a2d3a;
+  border-radius: 6px;
+  padding: 4px;
+  margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.history-empty {
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+  padding: 8px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history-item {
+  font-size: 12px;
+  color: #ccc;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item:hover {
+  background: rgba(33, 150, 243, 0.15);
+  color: #fff;
+}
+
 /* Responsive: hide sidebar on narrow screens */
 @media (max-width: 720px) {
   .sidebar {
