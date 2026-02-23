@@ -135,7 +135,11 @@ export class SessionStore {
         session.status = "idle";
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
-        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
+        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) {
+          session.tmux_pane = event.tmux_pane;
+        } else if (event.tmux_pane) {
+          console.warn(`Invalid tmux_pane format (expected %%N): ${event.tmux_pane}`);
+        }
         break;
 
       case "UserPromptSubmit": {
@@ -198,7 +202,11 @@ export class SessionStore {
       case "Stop":
         session.status = "idle";
         session.questions = [];
-        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) session.tmux_pane = event.tmux_pane;
+        if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) {
+          session.tmux_pane = event.tmux_pane;
+        } else if (event.tmux_pane) {
+          console.warn(`Invalid tmux_pane format (expected %%N): ${event.tmux_pane}`);
+        }
         if (event.last_message) {
           session.last_message = event.last_message;
           // アクティビティ蓄積

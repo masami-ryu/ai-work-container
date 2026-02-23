@@ -20,7 +20,7 @@ export interface Session {
   artifacts: string[]; // Write/Edit で検出された成果物ファイルパス
   title: string; // ユーザーの初回指示内容
   error_info: string;
-  tmux_pane: string; // tmux pane識別子（例: "main:0.1"）
+  tmux_pane: string; // tmux pane識別子（例: "%5"）
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
@@ -139,11 +139,11 @@ export interface LaunchRequest {
 // セッション起動結果
 export interface LaunchResult {
   ok: boolean;
-  tmux_pane: string;    // 作成されたペイン識別子（例: "main:1.2"）
+  tmux_pane: string;    // 作成されたペイン識別子（例: "%5"）
 }
 
-// tmux ペインID検証用正規表現（例: "main:1.2"）
-export const TMUX_PANE_ID_RE = /^[\w-]+:\d+\.\d+$/;
+// tmux ペインID検証用正規表現（例: "%5"）
+export const TMUX_PANE_ID_RE = /^%\d+$/;
 
 // WebSocket メッセージ
 export type WSMessage =

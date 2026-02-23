@@ -3,13 +3,9 @@
 set -euo pipefail
 INPUT=$(cat)
 
-# tmux pane情報を取得（tmux外ではスキップ）
-# $TMUX_PANE はペイン内の子プロセスに自動設定される（例: %0, %1）
-# -t で対象ペインを明示し、アクティブペインではなく実際のペインIDを取得する
-TMUX_PANE_INFO=""
-if [ -n "${TMUX_PANE:-}" ]; then
-  TMUX_PANE_INFO=$(tmux display-message -t "$TMUX_PANE" -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
-fi
+# tmux pane情報: $TMUX_PANE はtmuxがペイン内プロセスに自動設定する環境変数（%N形式、例: %0, %5）
+# ペインのライフサイクルを通じて一意かつ不変なため、そのまま使用する
+TMUX_PANE_INFO="${TMUX_PANE:-}"
 
 PAYLOAD=$(echo "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
   event_type: .hook_event_name,

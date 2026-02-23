@@ -560,7 +560,11 @@ function startPaneMonitor(): void {
     inFlight = true;
     try {
       const activePanes = await tmuxManager.listActivePanes();
-      // サーバー自身のペインが最低1つ存在するため、size===0はtmuxコマンドエラーと判断
+      if (!activePanes) {
+        return;
+      }
+      // null（エラー/管理不可）は上で除外済み。
+      // サーバー自身のペインが最低1つ存在するため、size===0は想定外の状態として警告する
       if (activePanes.size === 0) {
         console.warn("Pane monitor: no active panes detected, skipping check");
         return;

@@ -42,18 +42,10 @@ export class TmuxManager {
         return false;
       }
 
-      // $TMUX_PANE を使いサーバー自身のペインIDを取得
+      // $TMUX_PANE は既に%N形式（例: %0, %5）なのでそのまま使用
       const tmuxPane = process.env.TMUX_PANE;
-      if (tmuxPane) {
-        try {
-          const format = "#{session_name}:#{window_index}.#{pane_index}";
-          const { stdout: paneOut } = await execFileAsync("tmux", [
-            "display-message", "-t", tmuxPane, "-p", format,
-          ]);
-          this.selfPaneId = paneOut.trim() || null;
-        } catch (e) {
-          console.warn("Failed to resolve selfPaneId:", (e as Error).message);
-        }
+      if (tmuxPane && TMUX_PANE_ID_RE.test(tmuxPane)) {
+        this.selfPaneId = tmuxPane;
       }
       console.log(`TmuxManager initialized: session=${this.sessionName}, selfPane=${this.selfPaneId ?? "(unknown)"}`);
       return true;
@@ -103,19 +95,20 @@ export class TmuxManager {
   }
 
   // 全アクティブペインIDを取得（全tmuxセッション対象）
-  async listActivePanes(): Promise<Set<string>> {
+  // エラー時は null を返す（呼び出し側でスキップ判断）
+  async listActivePanes(): Promise<Set<string> | null> {
     if (!this.canManagePanes()) {
-      return new Set();
+      return null;
     }
     try {
-      const format = "#{session_name}:#{window_index}.#{pane_index}";
+      const format = "#{pane_id}";
       const { stdout } = await execFileAsync("tmux", [
         "list-panes", "-a", "-F", format,
       ]);
       return new Set(stdout.trim().split("\n").filter(Boolean));
     } catch (e) {
       console.warn("listActivePanes failed:", (e as Error).message);
-      return new Set();
+      return null;
     }
   }
 
@@ -208,7 +201,7 @@ export class TmuxManager {
 
   // 内部: ペインを作成してコマンド実行し、ペインIDを返す
   private async createPaneAndRun(windowIndex: number, command: string, cwd: string, windowAlreadyExists: boolean): Promise<string> {
-    const format = "#{session_name}:#{window_index}.#{pane_index}";
+    const format = "#{pane_id}";
     const target = `${this.sessionName}:${windowIndex}`;
 
     // -c オプションでcwdを指定し、コマンドは独立した引数として渡す
