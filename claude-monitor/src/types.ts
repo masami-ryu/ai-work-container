@@ -122,6 +122,26 @@ export interface DecisionResponse {
   decision: "allow" | "deny";
 }
 
+// CLIツール設定（将来のcopilot/codex対応用）
+export interface CliToolConfig {
+  id: string;           // "claude", "copilot", "codex"
+  label: string;        // "Claude Code"
+  command: string;      // "claude"
+  windowIndex: number;  // tmuxウィンドウ番号（claudeは1）
+}
+
+// セッション起動リクエスト
+export interface LaunchRequest {
+  tool_id: string;      // CliToolConfig.id
+  cwd?: string;         // 作業ディレクトリ（省略時は環境変数のデフォルト値）
+}
+
+// セッション起動結果
+export interface LaunchResult {
+  ok: boolean;
+  tmux_pane: string;    // 作成されたペイン識別子（例: "main:1.2"）
+}
+
 // WebSocket メッセージ
 export type WSMessage =
   | { type: "session_update"; payload: Session }

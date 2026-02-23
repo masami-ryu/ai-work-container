@@ -8,6 +8,7 @@ let ws = null;
 let reconnectDelay = 1000;
 let muted = false;
 let audioCtx = null;
+let availableTools = []; // GET /api/tools から取得
 
 // --- Audio ---
 function getAudioContext() {
@@ -80,6 +81,7 @@ const emptyMessage = document.getElementById('empty-message');
 const connectionStatus = document.getElementById('connection-status');
 const activeCount = document.getElementById('active-count');
 const muteBtn = document.getElementById('mute-btn');
+const launchBtn = document.getElementById('launch-session-btn');
 const notificationBtn = document.getElementById('notification-btn');
 const eventLog = document.getElementById('event-log');
 const logCount = document.getElementById('log-count');
@@ -99,6 +101,70 @@ notificationBtn.addEventListener('click', async () => {
     }
   } else if (Notification.permission === 'granted') {
     notificationBtn.textContent = '🔔 通知ON';
+  }
+});
+
+// --- Launch Session ---
+async function fetchTools() {
+  try {
+    const res = await fetch('/api/tools');
+    if (!res.ok) return;
+    availableTools = await res.json();
+    const hasAvailable = availableTools.some(t => t.available);
+    launchBtn.style.display = hasAvailable ? '' : 'none';
+  } catch (e) {
+    console.error('Failed to fetch tools:', e);
+  }
+}
+
+launchBtn.addEventListener('click', async () => {
+  const tools = availableTools.filter(t => t.available);
+  if (tools.length === 0) return;
+
+  let toolId;
+  if (tools.length === 1) {
+    toolId = tools[0].id;
+  } else {
+    // 複数ツール時はドロップダウン選択
+    const labels = tools.map((t, i) => `${i + 1}: ${t.label}`).join('\n');
+    const choice = prompt(`起動するツールを選択:\n${labels}`);
+    if (!choice) return;
+    const idx = parseInt(choice, 10) - 1;
+    if (idx < 0 || idx >= tools.length) return;
+    toolId = tools[idx].id;
+  }
+
+  launchBtn.disabled = true;
+  launchBtn.textContent = '起動中...';
+  try {
+    const res = await fetch('/api/sessions/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_id: toolId }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      addLogEntry('launch', '', `セッションを起動しました: ${data.tmux_pane}`);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      let msg;
+      if (res.status === 400) {
+        msg = `起動に失敗しました: ${data.error || 'パラメータが不正です'}`;
+      } else if (res.status === 409) {
+        msg = '起動に失敗しました: ペイン数が上限に達しています';
+      } else if (res.status === 503) {
+        msg = '起動に失敗しました: tmuxに接続されていません';
+      } else {
+        msg = '起動に失敗しました: 予期しないエラーが発生しました';
+      }
+      addLogEntry('launch-error', '', msg);
+    }
+  } catch (e) {
+    console.error('Launch session error:', e);
+    addLogEntry('launch-error', '', '起動に失敗しました: 通信エラー');
+  } finally {
+    launchBtn.disabled = false;
+    launchBtn.textContent = '＋ 新規セッション';
   }
 });
 
@@ -696,10 +762,11 @@ async function sendKeys(sessionId, text) {
 
 async function fetchInitialState() {
   try {
-    const [sessRes, decRes, groupRes] = await Promise.all([
+    const [sessRes, decRes, groupRes /* fetchTools: side-effect only */] = await Promise.all([
       fetch('/api/sessions'),
       fetch('/api/decisions/pending'),
       fetch('/api/groups'),
+      fetchTools(),
     ]);
     const sessList = await sessRes.json();
     const decList = await decRes.json();

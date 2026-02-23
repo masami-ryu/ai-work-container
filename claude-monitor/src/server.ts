@@ -3,13 +3,15 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { fileURLToPath } from "url";
 import path from "path";
+import fs from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
 import { GroupStore } from "./group-store.js";
+import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
-import type { HookEvent, DecisionRequest, DecisionResponse, WSMessage, Decision } from "./types.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision } from "./types.js";
 
 const PORT = 3456;
 const HOST = "127.0.0.1";
@@ -353,6 +355,93 @@ app.post("/api/groups/:id/sessions", validateOrigin, async (req, res) => {
   }
 });
 
+// --- TmuxManager ---
+const tmuxManager = new TmuxManager();
+
+// --- Tools API ---
+app.get("/api/tools", (_req, res) => {
+  const available = tmuxManager.isAvailable();
+  const tools = tmuxManager.getTools().map(t => ({
+    id: t.id,
+    label: t.label,
+    available,
+  }));
+  res.json(tools);
+});
+
+// --- Launch API ---
+const fsStatAsync = promisify(fs.stat);
+const fsRealpathAsync = promisify(fs.realpath);
+
+app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
+  const { tool_id, cwd } = req.body as LaunchRequest;
+
+  if (!tool_id || typeof tool_id !== "string") {
+    res.status(400).json({ error: "tool_id is required" });
+    return;
+  }
+
+  // ツールIDのホワイトリスト検証
+  const knownIds = new Set(tmuxManager.getTools().map(t => t.id));
+  if (!knownIds.has(tool_id)) {
+    res.status(400).json({ error: `Unknown tool_id: ${tool_id}` });
+    return;
+  }
+
+  if (!tmuxManager.isAvailable()) {
+    res.status(503).json({ error: "tmux is not available" });
+    return;
+  }
+
+  // cwdバリデーション
+  let resolvedCwd: string | undefined;
+  if (cwd && typeof cwd === "string") {
+    const workDir = process.env.CLAUDE_MONITOR_WORK_DIR;
+    if (!workDir) {
+      res.status(400).json({ error: "CLAUDE_MONITOR_WORK_DIR is not set" });
+      return;
+    }
+
+    const normalized = path.resolve(cwd);
+    try {
+      const stat = await fsStatAsync(normalized);
+      if (!stat.isDirectory()) {
+        res.status(400).json({ error: "cwd is not a directory" });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: "cwd does not exist" });
+      return;
+    }
+
+    try {
+      const realCwd = await fsRealpathAsync(normalized);
+      const realWorkDir = await fsRealpathAsync(workDir);
+      if (realCwd !== realWorkDir && !realCwd.startsWith(realWorkDir + "/")) {
+        res.status(400).json({ error: "cwd is outside of CLAUDE_MONITOR_WORK_DIR" });
+        return;
+      }
+      resolvedCwd = normalized;
+    } catch {
+      res.status(400).json({ error: "Failed to resolve cwd path" });
+      return;
+    }
+  }
+
+  try {
+    const result = await tmuxManager.launchSession(tool_id, resolvedCwd);
+    res.json(result);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.startsWith("Pane limit reached")) {
+      res.status(409).json({ error: msg });
+    } else {
+      console.error("Launch session failed:", msg);
+      res.status(500).json({ error: "Failed to launch session" });
+    }
+  }
+});
+
 // --- MCP handler ---
 const mcpHandler = createMcpHandler(sessionStore);
 app.post("/mcp", mcpHandler);
@@ -381,8 +470,11 @@ wss.on("connection", (ws) => {
   });
 });
 
-// グループデータをロードしてからサーバー起動
-groupStore.load().then(() => {
+// グループデータとTmuxManagerを並列初期化してからサーバー起動
+Promise.all([
+  groupStore.load(),
+  tmuxManager.initialize(),
+]).then(() => {
   server.listen(PORT, HOST, () => {
     console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
     console.log(`Listening on ${HOST}:${PORT}`);
@@ -391,6 +483,7 @@ groupStore.load().then(() => {
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
+  tmuxManager.destroy();
   sessionStore.destroy();
   decisionStore.destroy();
   wss.close();
@@ -398,6 +491,7 @@ process.on("SIGTERM", () => {
 });
 
 process.on("SIGINT", () => {
+  tmuxManager.destroy();
   sessionStore.destroy();
   decisionStore.destroy();
   wss.close();
