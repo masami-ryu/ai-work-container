@@ -21,7 +21,7 @@ export function createMcpHandler(
         return;
       }
       const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, req.body);
       if (req.method === "DELETE") {
         transports.delete(sessionId);
       }
@@ -31,7 +31,7 @@ export function createMcpHandler(
     // POST: 新規セッションまたは既存セッション
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, req.body);
       return;
     }
 
@@ -166,6 +166,6 @@ export function createMcpHandler(
     };
 
     await server.connect(transport);
-    await transport.handleRequest(req, res);
+    await transport.handleRequest(req, res, req.body);
   };
 }

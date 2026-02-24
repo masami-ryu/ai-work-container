@@ -889,7 +889,9 @@ function shutdown(): void {
   decisionStore.destroy();
   questionStore.destroy();
   wss.close();
-  server.close();
+  server.close(() => {
+    process.exit(0);
+  });
 }
 
 process.on("SIGTERM", shutdown);
