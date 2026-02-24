@@ -53,6 +53,24 @@ export interface QuestionOption {
   description: string;
 }
 
+// MCP ask_user 経由の質問管理
+export interface PendingQuestion {
+  id: string;                        // UUID
+  session_id: string;
+  questions: QuestionInput[];        // 質問一覧（AskUserQuestion と同じ構造）
+  status: "pending" | "answered" | "timeout";
+  answers?: Record<string, string>;  // question index ("0", "1", ...) → answer
+  created_at: string;                // ISO 8601
+  answered_at?: string;              // ISO 8601
+}
+
+export interface QuestionInput {
+  question: string;
+  header?: string;
+  options?: QuestionOption[];
+  multiSelect?: boolean;
+}
+
 // Hook から受信するイベント
 export type EventType =
   | "SessionStart"
@@ -167,4 +185,6 @@ export type WSMessage =
   | { type: "group_delete"; payload: { id: string } }
   | { type: "prompt_template_update"; payload: PromptTemplate }
   | { type: "prompt_template_delete"; payload: { id: string } }
-  | { type: "prompt_history_update"; payload: { scope: "group" | "session"; id: string; history: string[] } };
+  | { type: "prompt_history_update"; payload: { scope: "group" | "session"; id: string; history: string[] } }
+  | { type: "question_pending"; payload: PendingQuestion }
+  | { type: "question_answered"; payload: PendingQuestion };

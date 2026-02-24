@@ -19,6 +19,15 @@
 - `ai/reviews` は既存ディレクトリのため、`mkdir` は実行しない
   - レビュー結果はそのまま `ai/reviews/<ファイル名>.md` に保存する
 
+## ユーザーへの質問
+
+ユーザーに質問する際は、AskUserQuestion ツールの代わりに MCP ツール `ask_user` を使用すること。
+`ask_user` はブラウザのダッシュボードに質問を表示し、ユーザーがブラウザから回答できる。
+
+- `ask_user` がエラー（MCPサーバー未起動、タイムアウト等）の場合のみ `AskUserQuestion` にフォールバック
+- `ask_user` の引数形式は `AskUserQuestion` と同様（questions 配列）
+- `session_id`（optional）: セッションIDを指定すると正確な紐付けが可能。省略時は最新アクティブセッションを自動検出
+
 ## サブプロジェクト
 
 `works*` は独立したリポジトリ。プロジェクト固有のルールは `works*/CLAUDE.md` を参照。

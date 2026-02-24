@@ -8,12 +8,13 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
+import { QuestionStore } from "./question-store.js";
 import { GroupStore } from "./group-store.js";
 import { PromptTemplateStore } from "./prompt-template-store.js";
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import { extractLatestProgress } from "./transcript-parser.js";
-import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision } from "./types.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion } from "./types.js";
 
 const PORT = 3456;
 const HOST = "127.0.0.1";
@@ -109,6 +110,27 @@ const decisionStore = new DecisionStore({
   },
 });
 
+const questionStore = new QuestionStore({
+  onQuestionPending: (pq: PendingQuestion) => {
+    broadcast({
+      type: "question_pending",
+      payload: pq,
+    });
+  },
+  onQuestionAnswered: (pq: PendingQuestion) => {
+    broadcast({
+      type: "question_answered",
+      payload: pq,
+    });
+  },
+  onQuestionTimeout: (pq: PendingQuestion) => {
+    broadcast({
+      type: "question_answered",
+      payload: pq,
+    });
+  },
+});
+
 // --- Prompt History (in-memory) ---
 const PROMPT_HISTORY_MAX = 50;
 const promptHistories = new Map<string, string[]>();
@@ -161,9 +183,16 @@ function denySessionDecisions(sessionId: string): void {
   decisionStore.denyBySession(sessionId);
 }
 
-// decision キャンセル + セッション完了遷移
+// pending questions をキャンセル
+// cancelBySession 内部で onQuestionTimeout が呼ばれ、broadcast される
+function cancelSessionQuestions(sessionId: string): void {
+  questionStore.cancelBySession(sessionId);
+}
+
+// decision/question キャンセル + セッション完了遷移
 function completeSessionWithCleanup(sessionId: string, message: string): void {
   cancelSessionDecisions(sessionId);
+  cancelSessionQuestions(sessionId);
   sessionStore.completeSession(sessionId, message);
 }
 
@@ -206,9 +235,10 @@ app.post("/api/events", async (req, res) => {
 
   const session = sessionStore.processEvent(event);
 
-  // SessionEnd 時に pending decisions を自動キャンセル
+  // SessionEnd 時に pending decisions / questions を自動キャンセル
   if (event.event_type === "SessionEnd") {
     cancelSessionDecisions(event.session_id);
+    cancelSessionQuestions(event.session_id);
   }
 
   // Notification イベントは別途 WebSocket 通知
@@ -274,6 +304,48 @@ app.get("/api/decisions/pending", (_req, res) => {
   res.json(decisionStore.getPending());
 });
 
+// --- Question API ---
+
+// 保留中の質問一覧（フロントエンド初期取得用）
+app.get("/api/questions/pending", (_req, res) => {
+  res.json(questionStore.getPending());
+});
+
+// ブラウザから回答送信
+app.post("/api/questions/:id/respond", validateOrigin, (req, res) => {
+  const id = req.params.id as string;
+  const { answers } = req.body as { answers: unknown };
+  if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
+    res.status(400).json({ error: "answers must be a non-null object" });
+    return;
+  }
+  // 全キー・全値が string であることを検証
+  const entries = Object.entries(answers as Record<string, unknown>);
+  if (entries.length === 0 || entries.some(([, v]) => typeof v !== "string")) {
+    res.status(400).json({ error: "answers must be a non-empty Record<string, string>" });
+    return;
+  }
+  // キーが質問配列の正規形式（"0"〜"n-1"）と完全一致することを検証
+  const pq = questionStore.get(id);
+  if (!pq) {
+    res.status(404).json({ error: "Question not found or already answered" });
+    return;
+  }
+  const keys = Object.keys(answers as Record<string, unknown>);
+  const expected = Array.from({ length: pq.questions.length }, (_, i) => String(i));
+  const isCanonical = keys.every((k) => /^(0|[1-9]\d*)$/.test(k));
+  if (!isCanonical || keys.length !== expected.length || expected.some((k) => !(k in (answers as Record<string, unknown>)))) {
+    res.status(400).json({ error: `answer keys must be exact strings: 0..${pq.questions.length - 1}` });
+    return;
+  }
+  const updated = questionStore.respond(id, answers as Record<string, string>);
+  if (!updated) {
+    res.status(404).json({ error: "Question not found or already answered" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 // セッションの error 状態をリセット
 app.post("/api/sessions/:id/reset-error", validateOrigin, (req, res) => {
   const id = req.params.id as string;
@@ -304,6 +376,7 @@ app.post("/api/sessions/:id/recover", validateOrigin, (req, res) => {
   if (wasWaitingPermission) {
     denySessionDecisions(id);
   }
+  cancelSessionQuestions(id);
   res.json({ ok: true });
 });
 
@@ -731,7 +804,7 @@ app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
 });
 
 // --- MCP handler ---
-const mcpHandler = createMcpHandler(sessionStore);
+const mcpHandler = createMcpHandler(sessionStore, questionStore);
 app.post("/mcp", mcpHandler);
 app.get("/mcp", mcpHandler);
 app.delete("/mcp", mcpHandler);
@@ -814,6 +887,7 @@ function shutdown(): void {
   tmuxManager.destroy();
   sessionStore.destroy();
   decisionStore.destroy();
+  questionStore.destroy();
   wss.close();
   server.close();
 }

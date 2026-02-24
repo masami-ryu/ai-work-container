@@ -34,7 +34,8 @@
       "TodoWrite",
       "Skill",
       "mcp__context7",
-      "mcp__msdocs"
+      "mcp__msdocs",
+      "mcp__claude-monitor"
     ],
     "deny": [
       "Read(./.env)",

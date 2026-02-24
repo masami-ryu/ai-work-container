@@ -3,8 +3,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import type { Request, Response } from "express";
 import type { SessionStore } from "./session-store.js";
+import type { QuestionStore } from "./question-store.js";
 
-export function createMcpHandler(sessionStore: SessionStore): (req: Request, res: Response) => void {
+export function createMcpHandler(
+  sessionStore: SessionStore,
+  questionStore: QuestionStore,
+): (req: Request, res: Response) => void {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   return async (req: Request, res: Response) => {
@@ -78,6 +82,74 @@ export function createMcpHandler(sessionStore: SessionStore): (req: Request, res
           return { content: [{ type: "text" as const, text: `Milestone reported: ${milestone}` }] };
         }
         return { content: [{ type: "text" as const, text: "No active session found" }] };
+      }
+    );
+
+    // ask_user ツール
+    server.tool(
+      "ask_user",
+      "ユーザーに質問する。ブラウザのダッシュボードに質問が表示され、ユーザーが回答する。AskUserQuestionの代わりに使用する。タイムアウト（120秒）した場合はエラーが返るので、AskUserQuestionにフォールバックすること。",
+      {
+        session_id: z.string().optional().describe("対象セッションID。省略時は最新のアクティブセッションを自動検出"),
+        questions: z.array(z.object({
+          question: z.string().describe("質問文"),
+          header: z.string().max(12).optional().describe("短いラベル（最大12文字）"),
+          options: z.array(z.object({
+            label: z.string(),
+            description: z.string(),
+          })).optional().describe("選択肢"),
+          multiSelect: z.boolean().optional().describe("複数選択可否"),
+        })).min(1).max(4).describe("質問の配列（1-4個）"),
+      },
+      async ({ session_id, questions }) => {
+        // 1. セッション特定
+        let targetSessionId: string;
+        if (session_id) {
+          const session = sessionStore.get(session_id);
+          if (!session || (session.status !== "running" && session.status !== "idle")) {
+            return {
+              content: [{ type: "text" as const, text: `Session ${session_id} not found or not active. Use AskUserQuestion instead.` }],
+              isError: true,
+            };
+          }
+          targetSessionId = session_id;
+        } else {
+          // フォールバック: 最新のアクティブセッションを自動検出
+          const sessions = sessionStore.getAll();
+          const activeSession = sessions
+            .filter((s) => s.status === "running" || s.status === "idle")
+            .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
+
+          if (!activeSession) {
+            return {
+              content: [{ type: "text" as const, text: "No active session found. Use AskUserQuestion instead." }],
+              isError: true,
+            };
+          }
+          targetSessionId = activeSession.session_id;
+        }
+
+        // 2. QuestionStore に登録
+        const pq = questionStore.register(targetSessionId, questions);
+
+        // 3. 回答待ち（最大120秒）
+        const result = await questionStore.waitForAnswer(pq.id, 120_000);
+
+        // 4. 結果返却
+        if (result.resolved && result.answers) {
+          const answerText = pq.questions
+            .map((q, i) => `Q: ${q.question}\nA: ${result.answers?.[String(i)] ?? "(未回答)"}`)
+            .join("\n\n");
+          return {
+            content: [{ type: "text" as const, text: answerText }],
+          };
+        }
+
+        // 5. タイムアウト
+        return {
+          content: [{ type: "text" as const, text: "質問がタイムアウトしました（120秒）。AskUserQuestion にフォールバックしてください。" }],
+          isError: true,
+        };
       }
     );
 

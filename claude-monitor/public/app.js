@@ -1,6 +1,7 @@
 // --- State ---
 let sessions = {};
 let pendingDecisions = {};
+let pendingQuestions = {}; // id -> PendingQuestion（MCP ask_user 経由の質問）
 let groups = {};
 let promptTemplates = {}; // id -> PromptTemplate
 let promptHistories = {}; // "group:<id>" or "session:<id>" -> string[]
@@ -11,6 +12,7 @@ let reconnectDelay = 1000;
 let muted = false;
 let audioCtx = null;
 let availableTools = []; // GET /api/tools から取得
+const MCP_QUESTION_TIMEOUT_S = 120;
 
 // --- Audio ---
 function getAudioContext() {
@@ -251,9 +253,14 @@ function renderSessions() {
 
   // Sort: ステータス優先順位（第1キー）+ updated_at 降順（第2キー）の複合ソート
   const priority = { waiting_permission: 0, waiting_answer: 1, error: 2 };
+  const sessionsWithMcpQuestion = new Set(
+    Object.values(pendingQuestions)
+      .filter(pq => pq.status === 'pending')
+      .map(pq => pq.session_id)
+  );
   const sorted = ids.sort((a, b) => {
-    const pa = priority[sessions[a].status] ?? 9;
-    const pb = priority[sessions[b].status] ?? 9;
+    const pa = sessionsWithMcpQuestion.has(a) ? 1.5 : (priority[sessions[a].status] ?? 9);
+    const pb = sessionsWithMcpQuestion.has(b) ? 1.5 : (priority[sessions[b].status] ?? 9);
     if (pa !== pb) return pa - pb;
     return new Date(sessions[b].updated_at).getTime() - new Date(sessions[a].updated_at).getTime();
   });
@@ -280,6 +287,7 @@ function renderSessions() {
   bindSendKeysButtons();
   bindCopyPathButtons();
   bindCloseSessionButtons();
+  bindMcpQuestionButtons();
 
   // textarea入力値を復元
   Object.entries(savedTexts).forEach(([sid, val]) => {
@@ -359,6 +367,16 @@ function renderCard(session) {
   // 復帰ボタンはステータス基準で表示（decision未到着タイミングでも表示される）
   if (session.status === 'waiting_permission') {
     html += `<button class="btn-recover" data-session-id="${escapeHtml(session.session_id)}">↩ 復帰</button>`;
+  }
+
+  // MCP Question panel
+  const mcpQuestions = Object.values(pendingQuestions).filter(
+    pq => pq.session_id === session.session_id && pq.status === 'pending'
+  );
+  if (mcpQuestions.length > 0) {
+    mcpQuestions.forEach(pq => {
+      html += renderMcpQuestionPanel(pq);
+    });
   }
 
   // Question panel
@@ -552,6 +570,167 @@ function renderQuestionPanel(questions, sessionId) {
   html += `<button class="btn-recover" data-session-id="${escapeHtml(sessionId)}">↩ 復帰</button>`;
   html += `</div>`;
   return html;
+}
+
+function renderMcpQuestionPanel(pq) {
+  const elapsed = Math.floor((Date.now() - new Date(pq.created_at).getTime()) / 1000);
+  const remaining = Math.max(0, MCP_QUESTION_TIMEOUT_S - elapsed);
+
+  let html = `<div class="mcp-question-panel" data-question-id="${escapeHtml(pq.id)}">`;
+  html += `<h4>質問（MCP）</h4>`;
+
+  pq.questions.forEach((q, qIdx) => {
+    html += `<div class="mcp-question-item" data-question-idx="${qIdx}">`;
+    if (q.header) {
+      html += `<div class="question-header">${escapeHtml(q.header)}</div>`;
+    }
+    html += `<div class="question-text">${escapeHtml(q.question)}</div>`;
+
+    if (q.options && q.options.length > 0) {
+      if (q.multiSelect) {
+        html += `<div class="mcp-question-checkboxes">`;
+        q.options.forEach(opt => {
+          html += `<label class="mcp-checkbox-label">`;
+          html += `<input type="checkbox" class="mcp-checkbox" data-question-id="${escapeHtml(pq.id)}" data-question-idx="${qIdx}" data-label="${escapeHtml(opt.label)}" />`;
+          html += `<span class="opt-label">${escapeHtml(opt.label)}</span>`;
+          if (opt.description) {
+            html += `<span class="opt-desc">${escapeHtml(opt.description)}</span>`;
+          }
+          html += `</label>`;
+        });
+        html += `</div>`;
+      } else {
+        html += `<div class="mcp-question-buttons">`;
+        q.options.forEach(opt => {
+          html += `<button class="btn-mcp-option" data-question-id="${escapeHtml(pq.id)}" data-question-idx="${qIdx}" data-label="${escapeHtml(opt.label)}">${escapeHtml(opt.label)}</button>`;
+        });
+        html += `</div>`;
+      }
+      // 自由入力フォールバック（"Other" 相当）
+      html += `<div class="mcp-question-freetext">`;
+      html += `<input type="text" class="mcp-freetext-input" data-question-id="${escapeHtml(pq.id)}" data-question-idx="${qIdx}" placeholder="自由入力..." />`;
+      html += `</div>`;
+    } else {
+      html += `<div class="mcp-question-freetext">`;
+      html += `<textarea class="mcp-freetext-textarea" data-question-id="${escapeHtml(pq.id)}" data-question-idx="${qIdx}" placeholder="回答を入力..." rows="2"></textarea>`;
+      html += `</div>`;
+    }
+
+    html += `</div>`;
+  });
+
+  html += `<div class="mcp-question-actions">`;
+  html += `<button class="btn-mcp-submit" data-question-id="${escapeHtml(pq.id)}">送信</button>`;
+  html += `<span class="mcp-countdown" data-mcp-question-id="${escapeHtml(pq.id)}">残り ${remaining}s</span>`;
+  html += `</div>`;
+  html += `</div>`;
+
+  return html;
+}
+
+async function respondMcpQuestion(questionId, answers) {
+  try {
+    const res = await fetch(`/api/questions/${questionId}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    });
+    if (!res.ok) {
+      console.error('Question respond failed:', await res.text());
+    }
+  } catch (e) {
+    console.error('Question respond error:', e);
+  }
+}
+
+function bindMcpQuestionButtons() {
+  // 選択肢ボタン（単一選択）: クリックで選択状態をトグル
+  document.querySelectorAll('.btn-mcp-option').forEach(btn => {
+    btn.onclick = () => {
+      const panel = btn.closest('.mcp-question-item');
+      panel.querySelectorAll('.btn-mcp-option').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      // 選択時は自由入力をクリア
+      const freetextInput = panel.querySelector('.mcp-freetext-input');
+      if (freetextInput) freetextInput.value = '';
+    };
+  });
+
+  // 自由入力時に選択肢の選択状態を解除
+  document.querySelectorAll('.mcp-freetext-input, .mcp-freetext-textarea').forEach(input => {
+    input.oninput = () => {
+      const panel = input.closest('.mcp-question-item');
+      if (panel) panel.querySelectorAll('.btn-mcp-option').forEach(b => b.classList.remove('selected'));
+    };
+  });
+
+  // 送信ボタン: 全質問の回答を収集して一括送信
+  document.querySelectorAll('.btn-mcp-submit').forEach(btn => {
+    btn.onclick = () => {
+      const questionId = btn.dataset.questionId;
+      const pq = pendingQuestions[questionId];
+      if (!pq) return;
+
+      const answers = {};
+      pq.questions.forEach((q, qIdx) => {
+        const idx = String(qIdx);
+
+        // 単一選択ボタン
+        const selectedBtn = document.querySelector(
+          `.btn-mcp-option.selected[data-question-id="${questionId}"][data-question-idx="${qIdx}"]`
+        );
+        if (selectedBtn) {
+          answers[idx] = selectedBtn.dataset.label;
+          return;
+        }
+
+        // multiSelect チェックボックス
+        const checkboxes = document.querySelectorAll(
+          `.mcp-checkbox[data-question-id="${questionId}"][data-question-idx="${qIdx}"]:checked`
+        );
+        if (checkboxes.length > 0) {
+          answers[idx] = Array.from(checkboxes).map(cb => cb.dataset.label).join(', ');
+          return;
+        }
+
+        // freetext input
+        const freetextInput = document.querySelector(
+          `.mcp-freetext-input[data-question-id="${questionId}"][data-question-idx="${qIdx}"]`
+        );
+        if (freetextInput && freetextInput.value.trim()) {
+          answers[idx] = freetextInput.value.trim();
+          return;
+        }
+
+        // freetext textarea
+        const freetextArea = document.querySelector(
+          `.mcp-freetext-textarea[data-question-id="${questionId}"][data-question-idx="${qIdx}"]`
+        );
+        if (freetextArea && freetextArea.value.trim()) {
+          answers[idx] = freetextArea.value.trim();
+          return;
+        }
+      });
+
+      // 全問回答必須
+      if (Object.keys(answers).length === pq.questions.length) {
+        respondMcpQuestion(questionId, answers);
+      } else {
+        // 未回答の質問をハイライト
+        const panel = btn.closest('.mcp-question-panel');
+        if (panel) {
+          pq.questions.forEach((q, qIdx) => {
+            const item = panel.querySelector(
+              `.mcp-question-item[data-question-idx="${qIdx}"]`
+            );
+            if (item) {
+              item.classList.toggle('unanswered', !answers[String(qIdx)]);
+            }
+          });
+        }
+      }
+    };
+  });
 }
 
 function renderErrorPanel(session) {
@@ -1054,21 +1233,25 @@ async function sendKeys(sessionId, text) {
 
 async function fetchInitialState() {
   try {
-    const [sessRes, decRes, groupRes, templatesRes /* fetchTools: side-effect only */] = await Promise.all([
+    const [sessRes, decRes, groupRes, templatesRes, questionsRes /* fetchTools: side-effect only */] = await Promise.all([
       fetch('/api/sessions'),
       fetch('/api/decisions/pending'),
       fetch('/api/groups'),
       fetch('/api/prompt-templates'),
+      fetch('/api/questions/pending'),
       fetchTools(),
     ]);
     const sessList = await sessRes.json();
     const decList = await decRes.json();
     const groupList = await groupRes.json();
     const templatesList = await templatesRes.json();
+    const questionsList = await questionsRes.json();
     sessions = {};
     sessList.forEach(s => { sessions[s.session_id] = s; });
     pendingDecisions = {};
     decList.forEach(d => { pendingDecisions[d.id] = d; });
+    pendingQuestions = {};
+    questionsList.forEach(pq => { pendingQuestions[pq.id] = pq; });
     groups = {};
     groupList.forEach(g => { groups[g.id] = g; });
     promptTemplates = {};
@@ -1171,6 +1354,22 @@ setInterval(() => {
     if (!decision) return;
     const elapsed = Math.floor((Date.now() - new Date(decision.created_at).getTime()) / 1000);
     const remaining = Math.max(0, 280 - elapsed);
+    el.textContent = `残り ${remaining}s`;
+    if (remaining === 0) {
+      el.textContent = 'タイムアウト';
+      el.style.color = '#f44336';
+    }
+  });
+}, 1000);
+
+// --- MCP Question countdown timer ---
+setInterval(() => {
+  document.querySelectorAll('.mcp-countdown').forEach(el => {
+    const questionId = el.dataset.mcpQuestionId;
+    const pq = pendingQuestions[questionId];
+    if (!pq) return;
+    const elapsed = Math.floor((Date.now() - new Date(pq.created_at).getTime()) / 1000);
+    const remaining = Math.max(0, MCP_QUESTION_TIMEOUT_S - elapsed);
     el.textContent = `残り ${remaining}s`;
     if (remaining === 0) {
       el.textContent = 'タイムアウト';
@@ -1312,6 +1511,25 @@ function handleMessage(msg) {
     case 'prompt_history_update': {
       const histKey = `${payload.scope}:${payload.id}`;
       promptHistories[histKey] = payload.history;
+      break;
+    }
+
+    case 'question_pending': {
+      const pq = payload;
+      pendingQuestions[pq.id] = pq;
+      playQuestionSound();
+      const qText = pq.questions?.[0]?.question || 'MCP経由の質問が発生しました';
+      sendDesktopNotification('質問（MCP）', qText);
+      addLogEntry('question_pending', pq.session_id, qText);
+      renderSessions();
+      break;
+    }
+
+    case 'question_answered': {
+      const pq = payload;
+      delete pendingQuestions[pq.id];
+      addLogEntry('question_answered', pq.session_id, pq.status === 'answered' ? '回答済み' : 'タイムアウト');
+      renderSessions();
       break;
     }
   }
