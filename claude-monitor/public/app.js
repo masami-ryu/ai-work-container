@@ -6,6 +6,7 @@ let groups = {};
 let promptTemplates = {}; // id -> PromptTemplate
 let promptHistories = {}; // "group:<id>" or "session:<id>" -> string[]
 let selectedGroupId = null; // null=すべて, 'ungrouped'=未分類, string=グループID
+const selectedArtifacts = new Set(); // グループ成果物の選択状態
 let toggledSessions = new Set(); // デフォルト状態から反転されたセッション
 let ws = null;
 let reconnectDelay = 1000;
@@ -13,6 +14,12 @@ let muted = false;
 let audioCtx = null;
 let availableTools = []; // GET /api/tools から取得
 const MCP_QUESTION_TIMEOUT_S = 120;
+
+// selectedGroupId の共通更新関数（選択状態リセットを一元化）
+function setSelectedGroupId(nextId) {
+  selectedGroupId = nextId;
+  selectedArtifacts.clear();
+}
 
 // --- Audio ---
 function getAudioContext() {
@@ -85,7 +92,6 @@ const emptyMessage = document.getElementById('empty-message');
 const connectionStatus = document.getElementById('connection-status');
 const activeCount = document.getElementById('active-count');
 const muteBtn = document.getElementById('mute-btn');
-const launchBtn = document.getElementById('launch-session-btn');
 const notificationBtn = document.getElementById('notification-btn');
 const eventLog = document.getElementById('event-log');
 const logCount = document.getElementById('log-count');
@@ -114,14 +120,44 @@ async function fetchTools() {
     const res = await fetch('/api/tools');
     if (!res.ok) return;
     availableTools = await res.json();
-    const hasAvailable = availableTools.some(t => t.available);
-    launchBtn.style.display = hasAvailable ? '' : 'none';
+    renderGroupContentHeader();
   } catch (e) {
     console.error('Failed to fetch tools:', e);
   }
 }
 
-launchBtn.addEventListener('click', async () => {
+function renderGroupContentHeader() {
+  const header = document.getElementById('group-content-header');
+  if (!header) return;
+
+  let label = 'すべて';
+  if (selectedGroupId === 'ungrouped') {
+    label = '未分類';
+  } else if (selectedGroupId && groups[selectedGroupId]) {
+    label = groups[selectedGroupId].name;
+  }
+
+  const hasTools = availableTools.some(t => t.available);
+  const launchBtnHtml = hasTools
+    ? `<button class="btn-launch" id="group-launch-btn">＋ 新規セッション</button>`
+    : '';
+
+  header.innerHTML = `
+    <span class="group-content-title">${escapeHtml(label)}</span>
+    ${launchBtnHtml}
+  `;
+
+  const btn = document.getElementById('group-launch-btn');
+  if (btn) {
+    btn.onclick = () => {
+      const groupId = (selectedGroupId && selectedGroupId !== 'ungrouped')
+        ? selectedGroupId : null;
+      launchSession(groupId);
+    };
+  }
+}
+
+async function launchSession(groupId) {
   const tools = availableTools.filter(t => t.available);
   if (tools.length === 0) return;
 
@@ -129,7 +165,6 @@ launchBtn.addEventListener('click', async () => {
   if (tools.length === 1) {
     toolId = tools[0].id;
   } else {
-    // 複数ツール時はドロップダウン選択
     const labels = tools.map((t, i) => `${i + 1}: ${t.label}`).join('\n');
     const choice = prompt(`起動するツールを選択:\n${labels}`);
     if (!choice) return;
@@ -138,13 +173,15 @@ launchBtn.addEventListener('click', async () => {
     toolId = tools[idx].id;
   }
 
-  launchBtn.disabled = true;
-  launchBtn.textContent = '起動中...';
+  const btn = document.getElementById('group-launch-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '起動中...'; }
   try {
+    const body = { tool_id: toolId };
+    if (groupId) body.group_id = groupId;
     const res = await fetch('/api/sessions/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool_id: toolId }),
+      body: JSON.stringify(body),
     });
     if (res.ok) {
       const data = await res.json();
@@ -167,10 +204,9 @@ launchBtn.addEventListener('click', async () => {
     console.error('Launch session error:', e);
     addLogEntry('launch-error', '', '起動に失敗しました: 通信エラー');
   } finally {
-    launchBtn.disabled = false;
-    launchBtn.textContent = '＋ 新規セッション';
+    if (btn) { btn.disabled = false; btn.textContent = '＋ 新規セッション'; }
   }
-});
+}
 
 // --- Event Log ---
 let logEntries = 0;
@@ -212,7 +248,177 @@ function isCollapsed(session) {
   return defaultCollapsed ? !toggled : toggled;
 }
 
+// --- Group Artifacts ---
+function collectGroupArtifacts() {
+  let targetSessionIds = Object.keys(sessions);
+
+  if (selectedGroupId === 'ungrouped') {
+    targetSessionIds = targetSessionIds.filter(id => !getSessionGroupId(id));
+  } else if (selectedGroupId) {
+    const group = groups[selectedGroupId];
+    if (group) {
+      targetSessionIds = targetSessionIds.filter(
+        id => group.session_ids && group.session_ids.includes(id)
+      );
+    }
+  }
+
+  const artifactMap = new Map(); // path → { path, displayPath, sessions: [] }
+  targetSessionIds.forEach(sid => {
+    const session = sessions[sid];
+    if (!session.artifacts) return;
+    session.artifacts.forEach(p => {
+      if (!artifactMap.has(p)) {
+        artifactMap.set(p, {
+          path: p,
+          displayPath: toRelativePath(p, session.cwd),
+          sessions: [],
+        });
+      } else {
+        // 複数セッションが異なるcwdを持つ場合、最短の相対パスを採用
+        const candidate = toRelativePath(p, session.cwd);
+        const existing = artifactMap.get(p);
+        if (candidate.length < existing.displayPath.length) {
+          existing.displayPath = candidate;
+        }
+      }
+      artifactMap.get(p).sessions.push(session.session_id);
+    });
+  });
+
+  return Array.from(artifactMap.values())
+    .sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+}
+
+function renderGroupArtifactsPanel() {
+  const panel = document.getElementById('group-artifacts-panel');
+  if (!panel) return;
+
+  const artifacts = collectGroupArtifacts();
+  if (artifacts.length === 0) {
+    panel.innerHTML = '';
+    return;
+  }
+
+  const selectedCount = [...selectedArtifacts]
+    .filter(p => artifacts.some(a => a.path === p)).length;
+
+  let html = `
+    <div class="group-artifacts">
+      <div class="group-artifacts-header">
+        <span>成果物 (${artifacts.length})</span>
+        <div class="group-artifacts-actions">
+          <label class="select-all-label">
+            <input type="checkbox" id="select-all-artifacts"
+              ${selectedCount === artifacts.length ? 'checked' : ''}>
+            全選択
+          </label>
+          <button class="btn-copy-selected" id="copy-selected-btn"
+            ${selectedCount === 0 ? 'disabled' : ''}>
+            コピー (${selectedCount})
+          </button>
+        </div>
+      </div>
+      <ul class="group-artifacts-list">
+  `;
+
+  artifacts.forEach(a => {
+    const checked = selectedArtifacts.has(a.path) ? 'checked' : '';
+    html += `
+      <li>
+        <label class="artifact-checkbox-label">
+          <input type="checkbox" class="artifact-checkbox"
+            data-path="${escapeHtml(a.path)}" ${checked}>
+          <span class="artifact-path" title="${escapeHtml(a.path)}">
+            ${escapeHtml(a.displayPath)}
+          </span>
+        </label>
+      </li>
+    `;
+  });
+
+  html += `</ul></div>`;
+  panel.innerHTML = html;
+
+  // ステールエントリのクリーンアップ（存在しなくなったパスを除去）
+  const currentPaths = new Set(artifacts.map(a => a.path));
+  for (const p of selectedArtifacts) {
+    if (!currentPaths.has(p)) selectedArtifacts.delete(p);
+  }
+}
+
+function bindGroupArtifactEvents() {
+  const panel = document.getElementById('group-artifacts-panel');
+  if (!panel || panel.dataset.bound) return;
+  panel.dataset.bound = 'true';
+
+  // change イベント委譲（チェックボックス操作）
+  panel.addEventListener('change', (e) => {
+    const target = e.target;
+
+    // 個別チェックボックス
+    if (target.classList.contains('artifact-checkbox')) {
+      const path = target.dataset.path;
+      if (target.checked) {
+        selectedArtifacts.add(path);
+      } else {
+        selectedArtifacts.delete(path);
+      }
+      renderGroupArtifactsPanel();
+      return;
+    }
+
+    // 全選択/解除
+    if (target.id === 'select-all-artifacts') {
+      const artifacts = collectGroupArtifacts();
+      if (target.checked) {
+        artifacts.forEach(a => selectedArtifacts.add(a.path));
+      } else {
+        artifacts.forEach(a => selectedArtifacts.delete(a.path));
+      }
+      renderGroupArtifactsPanel();
+    }
+  });
+
+  // click イベント委譲（コピーボタン）
+  panel.addEventListener('click', async (e) => {
+    const target = e.target.closest('#copy-selected-btn');
+    if (!target || target.disabled) return;
+
+    const artifacts = collectGroupArtifacts();
+    const paths = artifacts
+      .filter(a => selectedArtifacts.has(a.path))
+      .map(a => a.path);
+    if (paths.length === 0) return;
+
+    const text = paths.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      target.textContent = 'コピーしました';
+      setTimeout(() => {
+        target.textContent = `コピー (${paths.length})`;
+      }, 1500);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      target.textContent = 'コピーしました';
+      setTimeout(() => {
+        target.textContent = `コピー (${paths.length})`;
+      }, 1500);
+    }
+  });
+}
+
 function renderSessions() {
+  // グループコンテンツヘッダーを更新
+  renderGroupContentHeader();
+
   // textarea入力値を退避
   const savedTexts = {};
   document.querySelectorAll('.send-keys-textarea').forEach(ta => {
@@ -277,6 +483,10 @@ function renderSessions() {
     card.className = `session-card status-${session.status}`;
     card.innerHTML = renderCard(session);
   });
+
+  // グループ成果物パネルを更新
+  renderGroupArtifactsPanel();
+  bindGroupArtifactEvents();
 
   // Bind event handlers
   bindDecisionButtons();
@@ -1318,7 +1528,7 @@ function renderSidebar() {
     item.onclick = (e) => {
       if (e.target.classList.contains('btn-delete-group')) return;
       const filter = item.dataset.groupFilter;
-      selectedGroupId = filter === '' ? null : filter;
+      setSelectedGroupId(filter === '' ? null : filter);
       renderSidebar();
       renderSessions();
     };
@@ -1336,7 +1546,7 @@ function renderSidebar() {
           return;
         }
         delete groups[groupId];
-        if (selectedGroupId === groupId) selectedGroupId = null;
+        if (selectedGroupId === groupId) setSelectedGroupId(null);
         renderSidebar();
         renderSessions();
       } catch (e) {
@@ -1489,7 +1699,7 @@ function handleMessage(msg) {
       const { id: deletedId } = payload;
       delete groups[deletedId];
       delete promptHistories[`group:${deletedId}`];
-      if (selectedGroupId === deletedId) selectedGroupId = null;
+      if (selectedGroupId === deletedId) setSelectedGroupId(null);
       addLogEntry('group_delete', '', deletedId.substring(0, 8));
       renderSidebar();
       renderSessions();

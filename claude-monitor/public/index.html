@@ -14,7 +14,6 @@
     </div>
     <div class="header-right">
       <span id="active-count">0 sessions</span>
-      <button id="launch-session-btn" class="btn-launch" style="display:none">＋ 新規セッション</button>
       <button id="notification-btn" title="デスクトップ通知を有効化">🔔 通知許可</button>
       <button id="mute-btn" title="通知音のミュート切替">🔊</button>
     </div>
@@ -23,6 +22,8 @@
   <main class="layout">
     <aside id="sidebar" class="sidebar"></aside>
     <div class="main-content">
+      <div id="group-content-header"></div>
+      <div id="group-artifacts-panel"></div>
       <div id="sessions-container">
         <p class="empty-message" id="empty-message">セッションなし</p>
       </div>

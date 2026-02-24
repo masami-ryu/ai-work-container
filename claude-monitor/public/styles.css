@@ -1194,6 +1194,96 @@ footer summary {
   color: #fff;
 }
 
+/* Group Content Header */
+#group-content-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #2a2d3a;
+}
+
+.group-content-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+/* Group Artifacts Panel */
+.group-artifacts {
+  background: #1a1d27;
+  border: 1px solid #2a2d3a;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.group-artifacts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #aaa;
+}
+
+.group-artifacts-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.select-all-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #888;
+  cursor: pointer;
+}
+
+.btn-copy-selected {
+  background: #1565c0;
+  color: #fff;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-copy-selected:disabled {
+  background: #37474f;
+  color: #666;
+  cursor: not-allowed;
+}
+
+.group-artifacts-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.group-artifacts-list li {
+  padding: 3px 8px;
+  margin: 2px 0;
+  background: rgba(33, 150, 243, 0.08);
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.artifact-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: #aaa;
+}
+
 /* Responsive: hide sidebar on narrow screens */
 @media (max-width: 720px) {
   .sidebar {

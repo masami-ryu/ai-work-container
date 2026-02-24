@@ -14,6 +14,8 @@ import { PromptTemplateStore } from "./prompt-template-store.js";
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import { extractLatestProgress } from "./transcript-parser.js";
+import { cleanupPendingAssignments } from "./pending-group-assignments.js";
+import type { PendingAssignment } from "./pending-group-assignments.js";
 import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion } from "./types.js";
 
 const PORT = 3456;
@@ -131,6 +133,10 @@ const questionStore = new QuestionStore({
   },
 });
 
+// --- Pending Group Assignments ---
+// tmux_pane → { groupId, createdAt } : launch時にgroup_idが指定された場合、SessionStartイベントでグループに自動追加する
+const pendingGroupAssignments = new Map<string, PendingAssignment>();
+
 // --- Prompt History (in-memory) ---
 const PROMPT_HISTORY_MAX = 50;
 const promptHistories = new Map<string, string[]>();
@@ -234,6 +240,37 @@ app.post("/api/events", async (req, res) => {
   }
 
   const session = sessionStore.processEvent(event);
+
+  // 新規セッションのグループ自動割り当て（SessionStart 時のみ実行）
+  if (event.event_type === "SessionStart" && session.tmux_pane && pendingGroupAssignments.has(session.tmux_pane)) {
+    const entry = pendingGroupAssignments.get(session.tmux_pane)!;
+    try {
+      const result = await groupStore.addSession(entry.groupId, session.session_id);
+      pendingGroupAssignments.delete(session.tmux_pane);
+      if (!result) {
+        console.warn("Auto group assignment skipped: group not found", entry.groupId);
+        broadcast({
+          type: "notification",
+          payload: {
+            session_id: session.session_id,
+            message: "グループ自動割り当てに失敗しました（グループ未存在）",
+            notification_type: "group_auto_assign_failed",
+          },
+        });
+      }
+    } catch (e) {
+      pendingGroupAssignments.delete(session.tmux_pane);
+      console.error("Auto group assignment failed (pending deleted):", e);
+      broadcast({
+        type: "notification",
+        payload: {
+          session_id: session.session_id,
+          message: "グループ自動割り当てに失敗しました（保存エラー）",
+          notification_type: "group_auto_assign_failed",
+        },
+      });
+    }
+  }
 
   // SessionEnd 時に pending decisions / questions を自動キャンセル
   if (event.event_type === "SessionEnd") {
@@ -735,7 +772,7 @@ const fsStatAsync = promisify(fs.stat);
 const fsRealpathAsync = promisify(fs.realpath);
 
 app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
-  const { tool_id, cwd } = req.body as LaunchRequest;
+  const { tool_id, cwd, group_id } = req.body as LaunchRequest;
 
   if (!tool_id || typeof tool_id !== "string") {
     res.status(400).json({ error: "tool_id is required" });
@@ -747,6 +784,14 @@ app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
   if (!knownIds.has(tool_id)) {
     res.status(400).json({ error: `Unknown tool_id: ${tool_id}` });
     return;
+  }
+
+  // group_id のバリデーション（指定時のみ）
+  if (group_id) {
+    if (typeof group_id !== "string" || !groupStore.get(group_id)) {
+      res.status(400).json({ error: "Invalid group_id" });
+      return;
+    }
   }
 
   if (!tmuxManager.isAvailable()) {
@@ -791,6 +836,11 @@ app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
 
   try {
     const result = await tmuxManager.launchSession(tool_id, resolvedCwd);
+    // stale entryの除去を常に先に行い、pane再利用時の誤割り当てを防止
+    pendingGroupAssignments.delete(result.tmux_pane);
+    if (group_id) {
+      pendingGroupAssignments.set(result.tmux_pane, { groupId: group_id, createdAt: Date.now() });
+    }
     res.json(result);
   } catch (e) {
     const msg = (e as Error).message;
@@ -853,6 +903,9 @@ function startPaneMonitor(): void {
         console.warn("Pane monitor: no active panes detected, skipping check");
         return;
       }
+
+      // pending group assignments のクリーンアップ
+      cleanupPendingAssignments(pendingGroupAssignments, activePanes);
 
       for (const session of sessionStore.getAll()) {
         if (!session.tmux_pane) continue;

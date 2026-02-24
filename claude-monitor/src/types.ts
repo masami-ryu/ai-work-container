@@ -155,6 +155,7 @@ export interface CliToolConfig {
 export interface LaunchRequest {
   tool_id: string;      // CliToolConfig.id
   cwd?: string;         // 作業ディレクトリ（省略時は環境変数のデフォルト値）
+  group_id?: string;    // 起動後に自動割り当てするグループID
 }
 
 // セッション起動結果
