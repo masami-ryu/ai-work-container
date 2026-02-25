@@ -13,11 +13,16 @@ export class SessionStore {
   private cleanupTimer: ReturnType<typeof setInterval>;
   private onChange: (session: Session) => void;
   private onDelete?: (sessionId: string) => void;
+  private onDeleteHooks: Array<(sessionId: string) => void> = [];
 
   constructor(onChange: (session: Session) => void, onDelete?: (sessionId: string) => void) {
     this.onChange = onChange;
     this.onDelete = onDelete;
     this.cleanupTimer = setInterval(() => this.cleanup(), CLEANUP_INTERVAL_MS);
+  }
+
+  addOnDeleteHook(hook: (sessionId: string) => void): void {
+    this.onDeleteHooks.push(hook);
   }
 
   getAll(): Session[] {
@@ -309,6 +314,9 @@ export class SessionStore {
         if (now - updatedAt > COMPLETED_TTL_MS) {
           this.sessions.delete(id);
           this.onDelete?.(id);
+          for (const hook of this.onDeleteHooks) {
+            hook(id);
+          }
         }
       } else if (session.status === "running" || session.status === "waiting_answer") {
         const updatedAt = new Date(session.updated_at).getTime();

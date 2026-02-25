@@ -5,6 +5,12 @@ import fs from "fs";
 import path from "path";
 import { TMUX_PANE_ID_RE, type CliToolConfig, type LaunchResult } from "./types.js";
 
+export interface PaneInfo {
+  paneId: string;
+  command: string;
+  currentPath: string;
+}
+
 const __filename_local = fileURLToPath(import.meta.url);
 const __dirname_local = path.dirname(__filename_local);
 
@@ -173,6 +179,27 @@ export class TmuxManager {
       return new Set(stdout.trim().split("\n").filter(Boolean));
     } catch (e) {
       console.warn("listActivePanes failed:", (e as Error).message);
+      return null;
+    }
+  }
+
+  // 全アクティブペインの詳細情報を取得（paneId, command, currentPath）
+  // エラー時は null を返す（呼び出し側でスキップ判断）
+  async listActivePanesDetailed(): Promise<PaneInfo[] | null> {
+    if (!this.canManagePanes()) {
+      return null;
+    }
+    try {
+      const format = "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}";
+      const { stdout } = await execFileAsync("tmux", [
+        "list-panes", "-a", "-F", format,
+      ]);
+      return stdout.trim().split("\n").filter(Boolean).map((line) => {
+        const [paneId, command, currentPath] = line.split("\t");
+        return { paneId, command: command || "", currentPath: currentPath || "" };
+      });
+    } catch (e) {
+      console.warn("listActivePanesDetailed failed:", (e as Error).message);
       return null;
     }
   }
@@ -373,7 +400,7 @@ export class TmuxManager {
   // MCP 設定ファイルを生成
   private async createMcpConfigFile(cwd: string): Promise<string | null> {
     try {
-      const configDir = path.join(cwd, ".github", "hooks");
+      const configDir = path.join(cwd, ".vscode");
       await fsMkdir(configDir, { recursive: true });
       const configPath = path.join(configDir, "claude-monitor-mcp.json");
       const config = {

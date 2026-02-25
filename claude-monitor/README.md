@@ -65,10 +65,11 @@ HOOKS_DIR="$(cd claude-monitor/hooks && pwd)"
 sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" claude-monitor/hooks/copilot-hooks.json > .github/hooks/claude-monitor.json
 ```
 
-MCP 接続設定を追加する場合:
+MCP 接続設定を追加する場合（`.github/hooks/` 配下には置かない）:
 
 ```bash
-cat > .github/hooks/claude-monitor-mcp.json << 'EOF'
+mkdir -p .vscode
+cat > .vscode/claude-monitor-mcp.json << 'EOF'
 {
   "mcpServers": {
     "claude-monitor": {
@@ -80,8 +81,10 @@ cat > .github/hooks/claude-monitor-mcp.json << 'EOF'
 EOF
 
 # Copilot CLI 起動時に指定
-copilot --additional-mcp-config @.github/hooks/claude-monitor-mcp.json
+copilot --additional-mcp-config @.vscode/claude-monitor-mcp.json
 ```
+
+`.github/hooks/` 配下の JSON は Hook 設定として検証されるため、`mcpServers` だけのファイルを置くと `Missing property "hooks"` 警告が表示される。
 
 #### Copilot CLI Hook イベント対応表
 
