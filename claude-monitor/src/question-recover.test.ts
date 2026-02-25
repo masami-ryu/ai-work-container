@@ -23,6 +23,7 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
     last_message: "",
     tmux_pane: "",
     reason: "",
+    cli_tool: "",
     transcript_path: "",
     progress_text: "",
     timestamp: new Date().toISOString(),

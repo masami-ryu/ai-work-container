@@ -165,8 +165,14 @@ async function launchSession(groupId) {
   if (tools.length === 1) {
     toolId = tools[0].id;
   } else {
-    const labels = tools.map((t, i) => `${i + 1}: ${t.label}`).join('\n');
-    const choice = prompt(`起動するツールを選択:\n${labels}`);
+    // 利用可能なツールと未インストールツールの情報を表示
+    const unavailable = availableTools.filter(t => !t.available);
+    let msg = `起動するツールを選択:\n`;
+    msg += tools.map((t, i) => `${i + 1}: ${t.label}`).join('\n');
+    if (unavailable.length > 0) {
+      msg += `\n---\n未インストール: ${unavailable.map(t => `${t.label} (${t.unavailable_reason || '不明'})`).join(', ')}`;
+    }
+    const choice = prompt(msg);
     if (!choice) return;
     const idx = parseInt(choice, 10) - 1;
     if (idx < 0 || idx >= tools.length) return;
@@ -186,6 +192,9 @@ async function launchSession(groupId) {
     if (res.ok) {
       const data = await res.json();
       addLogEntry('launch', '', `セッションを起動しました: ${data.tmux_pane}`);
+      if (data.warning) {
+        addLogEntry('launch-warning', '', data.warning);
+      }
     } else {
       const data = await res.json().catch(() => ({}));
       let msg;
@@ -521,9 +530,16 @@ function renderCard(session) {
     ? `<button class="btn-close-session" data-session-id="${escapeHtml(session.session_id)}" title="セッションを終了">×</button>`
     : '';
 
+  // CLI ツール種別バッジ
+  const cliTool = session.cli_tool || 'claude';
+  const cliToolBadge = cliTool === 'copilot'
+    ? '<span class="cli-tool-badge badge-copilot">Copilot</span>'
+    : '<span class="cli-tool-badge badge-claude">Claude</span>';
+
   let html = `
     <div class="card-header clickable" data-toggle-session="${escapeHtml(session.session_id)}">
       <div class="card-title-row">
+        ${cliToolBadge}
         <span class="session-title">${titleDisplay}</span>
         <span class="session-id">${shortId}</span>
       </div>

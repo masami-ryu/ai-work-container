@@ -1,6 +1,6 @@
 # Claude Monitor
 
-複数ターミナルで並行動作する Claude Code セッションの作業状況を Web ダッシュボードで一覧表示し、承認要求・質問・セッション終了時に通知音を鳴らすツール。
+複数ターミナルで並行動作する Claude Code / Copilot CLI セッションの作業状況を Web ダッシュボードで一覧表示し、承認要求・質問・セッション終了時に通知音を鳴らすツール。
 
 ## セットアップ
 
@@ -41,6 +41,65 @@ jq . .claude/settings.local.json
 }
 ```
 
+### 4. Copilot CLI Hooks 設定（任意）
+
+Copilot CLI セッションをダッシュボードで監視する場合の追加設定。ダッシュボードからセッションを起動すると自動的に hooks が配置されるため、手動設定は通常不要。
+
+#### 自動配置（推奨）
+
+ダッシュボードの「新規セッション」ボタンから Copilot CLI を起動すると、以下が自動的に行われる:
+
+1. `.github/hooks/claude-monitor.json` に hooks 設定を配置
+2. `--additional-mcp-config` で MCP 接続を自動注入
+
+#### 手動配置
+
+既存のプロジェクトで手動設定する場合は、`.github/hooks/` にフック設定ファイルを配置する:
+
+```bash
+# hooks ディレクトリを作成
+mkdir -p .github/hooks
+
+# テンプレートをコピーして絶対パスに展開
+HOOKS_DIR="$(cd claude-monitor/hooks && pwd)"
+sed "s|__HOOKS_DIR__|$HOOKS_DIR|g" claude-monitor/hooks/copilot-hooks.json > .github/hooks/claude-monitor.json
+```
+
+MCP 接続設定を追加する場合:
+
+```bash
+cat > .github/hooks/claude-monitor-mcp.json << 'EOF'
+{
+  "mcpServers": {
+    "claude-monitor": {
+      "type": "http",
+      "url": "http://localhost:3456/mcp"
+    }
+  }
+}
+EOF
+
+# Copilot CLI 起動時に指定
+copilot --additional-mcp-config @.github/hooks/claude-monitor-mcp.json
+```
+
+#### Copilot CLI Hook イベント対応表
+
+| Copilot イベント | claude-monitor イベント | スクリプト |
+|---|---|---|
+| sessionStart | SessionStart | copilot-notify.sh |
+| sessionEnd | SessionEnd | copilot-notify.sh |
+| userPromptSubmitted | UserPromptSubmit | copilot-notify.sh |
+| preToolUse | PreToolUse + Decision | copilot-decide.sh + copilot-notify.sh |
+| postToolUse | PostToolUse | copilot-notify.sh |
+| errorOccurred | Notification(error) | copilot-notify.sh |
+
+#### 注意事項
+
+- `CLAUDE_MONITOR_FORCE_HOOKS=1` 環境変数を設定すると、既存の hooks.json をバックアップして上書き
+- Copilot CLI セッションの session_id は `copilot-pane-<N>` 形式（tmux pane ID ベース）
+- 同一 pane で新規セッションを起動すると前回のデータは自動的にリセットされる
+
 ## 使い方
 
 ### サーバー起動
@@ -54,7 +113,7 @@ pnpm start
 
 ### ダッシュボードの機能
 
-- **セッション一覧**: 各 Claude Code セッションの状態を色分けで表示
+- **セッション一覧**: 各 Claude Code / Copilot CLI セッションの状態を色分けで表示（ツール種別バッジ付き）
   - 🟢 実行中 / 🟡 承認待ち / 🟠 質問待ち / 🔵 入力待ち / 🔴 エラー / ✅ 完了
 - **承認操作**: ブラウザから Allow/Deny をクリックしてターミナルの権限ダイアログをスキップ
 - **質問表示**: AskUserQuestion の内容を読み取り専用で表示（回答はターミナルで入力）
@@ -73,11 +132,14 @@ Claude Code が MCP 経由で作業内容を報告:
 ## アーキテクチャ
 
 ```
-Terminal (Claude Code) ── Hooks ──→ Dashboard Server ←─ WebSocket ─→ Browser
+Terminal (Claude Code)  ── Hooks ──→ Dashboard Server ←─ WebSocket ─→ Browser
                           │  ↑          │
                     notify.sh  decide.sh ├─ REST API
                    (async)    (blocking) ├─ MCP Endpoint
                                          └─ Static Files
+Terminal (Copilot CLI)  ── Hooks ──→
+                          │  ↑
+              copilot-notify.sh  copilot-decide.sh
 ```
 
 ## Hook イベント

@@ -18,6 +18,7 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
     questions: [],
     last_message: "",
     tmux_pane: "",
+    cli_tool: "",
     reason: "",
     transcript_path: "",
     progress_text: "",

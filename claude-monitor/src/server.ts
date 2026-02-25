@@ -758,13 +758,7 @@ const tmuxManager = new TmuxManager();
 
 // --- Tools API ---
 app.get("/api/tools", (_req, res) => {
-  const available = tmuxManager.isAvailable();
-  const tools = tmuxManager.getTools().map(t => ({
-    id: t.id,
-    label: t.label,
-    available,
-  }));
-  res.json(tools);
+  res.json(tmuxManager.getToolsWithAvailability());
 });
 
 // --- Launch API ---

@@ -8,7 +8,7 @@ if [ -n "${CLAUDE_MONITOR_HOOK_TOKEN:-}" ]; then
 fi
 INPUT=$(cat)
 
-EVENT_TYPE=$(echo "$INPUT" | jq -r '.hook_event_name')
+EVENT_TYPE=$(printf '%s\n' "$INPUT" | jq -r '.hook_event_name')
 CORRELATION_ID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
 
 # PermissionRequest 以外は対象外
@@ -17,13 +17,13 @@ if [ "$EVENT_TYPE" != "PermissionRequest" ]; then
 fi
 
 # AskUserQuestion はターミナル操作専用のため承認パネル不要
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""')
+TOOL_NAME=$(printf '%s\n' "$INPUT" | jq -r '.tool_name // ""')
 if [ "$TOOL_NAME" = "AskUserQuestion" ]; then
   exit 0
 fi
 
 # pending decision を登録
-PAYLOAD=$(echo "$INPUT" | jq -c \
+PAYLOAD=$(printf '%s\n' "$INPUT" | jq -c \
   --arg correlation_id "$CORRELATION_ID" \
   '{
     correlation_id: $correlation_id,

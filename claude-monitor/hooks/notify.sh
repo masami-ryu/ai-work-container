@@ -7,7 +7,7 @@ INPUT=$(cat)
 # ペインのライフサイクルを通じて一意かつ不変なため、そのまま使用する
 TMUX_PANE_INFO="${TMUX_PANE:-}"
 
-PAYLOAD=$(echo "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
+PAYLOAD=$(printf '%s\n' "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
   event_type: .hook_event_name,
   session_id: .session_id,
   cwd: .cwd,

@@ -1,9 +1,12 @@
-import { TMUX_PANE_ID_RE, type Session, type SessionStatus, type HookEvent, type Milestone, type Question, type Activity } from "./types.js";
+import { TMUX_PANE_ID_RE, type Session, type SessionStatus, type HookEvent, type Milestone, type Question, type Activity, type CliToolType } from "./types.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
 const STALENESS_TIMEOUT_MS = 10 * 60 * 1000; // running 状態で10分更新なしなら idle に遷移
 const MAX_ACTIVITIES = 30;
+
+// error 状態からの自動復帰対象イベント
+const ERROR_RECOVERY_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart"]);
 
 export class SessionStore {
   private sessions = new Map<string, Session>();
@@ -114,12 +117,15 @@ export class SessionStore {
   }
 
   private createSession(event: HookEvent): Session {
+    // cli_tool: 省略時（既存 Claude Code 経路）は "claude" をデフォルト補完
+    const cliTool: CliToolType = (event.cli_tool === "copilot") ? "copilot" : "claude";
     return {
       session_id: event.session_id,
       cwd: event.cwd || "",
       model: event.model || "",
       status: "idle",
       status_text: "",
+      cli_tool: cliTool,
       milestones: [],
       last_message: "",
       last_activity: "",
@@ -137,10 +143,11 @@ export class SessionStore {
   }
 
   private applyEvent(session: Session, event: HookEvent): void {
-    // error 状態からの自動復帰: 新しいイベントが来たら error をクリア
-    if (session.status === "error" && event.event_type !== "SessionEnd") {
+    // error 状態からの自動復帰: エージェント動作を示すイベントで error をクリア
+    if (session.status === "error" && ERROR_RECOVERY_EVENTS.has(event.event_type)) {
       session.error_info = "";
       session.error_at = "";
+      session.status = "running";
     }
 
     switch (event.event_type) {
@@ -153,6 +160,24 @@ export class SessionStore {
           session.tmux_pane = event.tmux_pane;
         } else if (event.tmux_pane) {
           console.warn(`Invalid tmux_pane format (expected %%N): ${event.tmux_pane}`);
+        }
+        // cli_tool の更新 + Copilot セッション再初期化
+        // Copilot は tmux pane ID ベースの固定 session_id を使うため、
+        // 同一 pane での連続起動時に前回データをクリアする必要がある。
+        // Claude Code は UUID ベースの一意 session_id のため再初期化不要。
+        if (event.cli_tool === "copilot") {
+          session.cli_tool = "copilot";
+          session.activities = [];
+          session.milestones = [];
+          session.artifacts = [];
+          session.title = "";
+          session.status_text = "";
+          session.last_activity = "";
+          session.last_message = "";
+          session.current_progress = "";
+          session.questions = [];
+          session.error_info = "";
+          session.error_at = "";
         }
         break;
 
@@ -183,6 +208,12 @@ export class SessionStore {
           if (event.questions && event.questions.length > 0) {
             session.questions = event.questions;
           }
+        }
+        // error 通知: MCP接続失敗等のエラーをセッションに反映
+        if (event.notification_type === "error") {
+          session.status = "error";
+          session.error_info = event.message || "不明なエラー";
+          session.error_at = event.timestamp || new Date().toISOString();
         }
         break;
 
@@ -237,6 +268,8 @@ export class SessionStore {
         session.status = "idle";
         session.current_progress = "";
         session.questions = [];
+        session.error_info = "";
+        session.error_at = "";
         if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) {
           session.tmux_pane = event.tmux_pane;
         } else if (event.tmux_pane) {

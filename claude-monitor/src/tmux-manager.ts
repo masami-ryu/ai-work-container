@@ -1,20 +1,43 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { fileURLToPath } from "url";
+import fs from "fs";
+import path from "path";
 import { TMUX_PANE_ID_RE, type CliToolConfig, type LaunchResult } from "./types.js";
 
+const __filename_local = fileURLToPath(import.meta.url);
+const __dirname_local = path.dirname(__filename_local);
+
 const execFileAsync = promisify(execFile);
+const fsReadFile = promisify(fs.readFile);
+const fsWriteFile = promisify(fs.writeFile);
+const fsMkdir = promisify(fs.mkdir);
+const fsCopyFile = promisify(fs.copyFile);
 
 const MAX_PANES_PER_WINDOW = 8;
 
 // デフォルトCLIツール定義
 const DEFAULT_TOOLS: CliToolConfig[] = [
   { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
+  { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
 ];
+
+// シェルコマンド文字列用のクォート（シングルクォート方式）
+function shellQuote(v: string): string {
+  return `'${v.replace(/'/g, "'\\''")}'`;
+}
+
+// hooks テンプレートの __HOOKS_DIR__ プレースホルダーを絶対パスに展開
+// テンプレート内でパスはシングルクォートされている前提
+function resolveHooksTemplate(templateJson: string, hooksDir: string): string {
+  return templateJson.replace(/__HOOKS_DIR__/g, hooksDir.replace(/'/g, "'\\''"));
+}
 
 export class TmuxManager {
   private sessionName: string | null = null;
   private selfPaneId: string | null = null;
   private tools: Map<string, CliToolConfig>;
+  private toolAvailability: Map<string, { available: boolean; unavailable_reason?: string }> = new Map();
   private defaultCwd: string | null;
   private launchQueue: Promise<void> = Promise.resolve();
   private destroyed = false;
@@ -47,12 +70,37 @@ export class TmuxManager {
       if (tmuxPane && TMUX_PANE_ID_RE.test(tmuxPane)) {
         this.selfPaneId = tmuxPane;
       }
+
+      // ツールの存在チェック
+      await this.checkToolAvailability();
+
       console.log(`TmuxManager initialized: session=${this.sessionName}, selfPane=${this.selfPaneId ?? "(unknown)"}`);
       return true;
     } catch (e) {
       console.warn("TmuxManager initialization failed:", (e as Error).message);
       return false;
     }
+  }
+
+  // 各CLIツールのコマンド存在を確認
+  private async checkToolAvailability(): Promise<void> {
+    for (const tool of this.tools.values()) {
+      try {
+        await execFileAsync("which", [tool.command]);
+        this.toolAvailability.set(tool.id, { available: true });
+      } catch {
+        this.toolAvailability.set(tool.id, {
+          available: false,
+          unavailable_reason: `${tool.command} command not found`,
+        });
+        console.warn(`Tool '${tool.id}' not available: ${tool.command} command not found`);
+      }
+    }
+  }
+
+  // ツール個別の利用可否を返す
+  isToolAvailable(toolId: string): { available: boolean; unavailable_reason?: string } {
+    return this.toolAvailability.get(toolId) || { available: false, unavailable_reason: "Unknown tool" };
   }
 
   // tmuxペイン操作（kill/list/exists）が可能か（sessionNameのみ必要）
@@ -65,9 +113,26 @@ export class TmuxManager {
     return this.sessionName !== null && this.defaultCwd !== null;
   }
 
-  // 利用可能なCLIツール一覧
+  // 利用可能なCLIツール一覧（availability情報付き）
   getTools(): CliToolConfig[] {
     return Array.from(this.tools.values());
+  }
+
+  // ツール一覧（availability情報付き）
+  getToolsWithAvailability(): Array<{ id: string; label: string; available: boolean; unavailable_reason?: string }> {
+    const tmuxAvailable = this.isAvailable();
+    return Array.from(this.tools.values()).map(t => {
+      if (!tmuxAvailable) {
+        return { id: t.id, label: t.label, available: false, unavailable_reason: "tmux or CLAUDE_MONITOR_WORK_DIR not available" };
+      }
+      const avail = this.toolAvailability.get(t.id);
+      return {
+        id: t.id,
+        label: t.label,
+        available: avail?.available ?? false,
+        unavailable_reason: avail?.unavailable_reason,
+      };
+    });
   }
 
   // tmuxペインをkillする（自ペイン保護付き）
@@ -162,11 +227,27 @@ export class TmuxManager {
     if (!tool) {
       throw new Error(`Unknown tool: ${toolId}`);
     }
+
+    // ツール存在チェック
+    const availability = this.isToolAvailable(toolId);
+    if (!availability.available) {
+      throw new Error(availability.unavailable_reason || `Tool ${toolId} is not available`);
+    }
+
     if (!this.isAvailable()) {
       throw new Error("TmuxManager is not available");
     }
 
     const resolvedCwd = cwd || this.defaultCwd!;
+
+    // Copilot 固有の前処理
+    let warning: string | undefined;
+    let command = tool.command;
+    if (toolId === "copilot") {
+      const result = await this.prepareCopilotLaunch(resolvedCwd);
+      warning = result.warning;
+      command = result.command;
+    }
 
     // ウィンドウが存在する場合、ペイン数上限チェック
     const exists = await this.windowExists(tool.windowIndex);
@@ -177,8 +258,138 @@ export class TmuxManager {
       }
     }
 
-    const paneId = await this.createPaneAndRun(tool.windowIndex, tool.command, resolvedCwd, exists);
-    return { ok: true, tmux_pane: paneId };
+    const paneId = await this.createPaneAndRun(tool.windowIndex, command, resolvedCwd, exists);
+    return { ok: true, tmux_pane: paneId, warning };
+  }
+
+  // Copilot 起動時の前処理: hooks.json 配置 + MCP 設定 + コマンド構築
+  private async prepareCopilotLaunch(cwd: string): Promise<{ command: string; warning?: string }> {
+    const hooksDir = path.resolve(__dirname_local, "../hooks");
+    const warnings: string[] = [];
+
+    // hooks.json 配置
+    const hooksWarning = await this.deployCopilotHooks(cwd, hooksDir);
+    if (hooksWarning) warnings.push(hooksWarning);
+
+    // MCP 設定ファイルを生成して --additional-mcp-config に渡す
+    const mcpConfigPath = await this.createMcpConfigFile(cwd);
+    let command = "copilot";
+    if (mcpConfigPath) {
+      command = `copilot --additional-mcp-config ${shellQuote(`@${mcpConfigPath}`)}`;
+    } else {
+      warnings.push("MCP設定ファイルの生成に失敗しました");
+    }
+
+    return {
+      command,
+      warning: warnings.length > 0 ? warnings.join("; ") : undefined,
+    };
+  }
+
+  // Copilot 用 hooks.json を .github/hooks/ に配置
+  private async deployCopilotHooks(cwd: string, hooksDir: string): Promise<string | undefined> {
+    const targetDir = path.join(cwd, ".github", "hooks");
+    const targetFile = path.join(targetDir, "claude-monitor.json");
+
+    try {
+      // テンプレートを読み込み、__HOOKS_DIR__ を絶対パスに展開
+      const templatePath = path.join(hooksDir, "copilot-hooks.json");
+      const templateContent = await fsReadFile(templatePath, "utf-8");
+      const resolvedContent = resolveHooksTemplate(templateContent, hooksDir);
+
+      // .github/hooks/ ディレクトリが存在しない場合は作成
+      await fsMkdir(targetDir, { recursive: true });
+
+      // 既存ファイルのチェック
+      let existingContent: string | null = null;
+      try {
+        existingContent = await fsReadFile(targetFile, "utf-8");
+      } catch {
+        // ファイルが存在しない場合は問題なし
+      }
+
+      if (existingContent !== null) {
+        // 既存ファイルと内容が同じなら何もしない（冪等性）
+        if (existingContent === resolvedContent) {
+          return undefined;
+        }
+
+        // _source チェック: 既存が claude-monitor 由来なら上書き
+        try {
+          const existing = JSON.parse(existingContent);
+          const isCmGenerated = this.isClaudeMonitorGenerated(existing);
+          if (isCmGenerated) {
+            // claude-monitor が生成したファイルなので上書き
+            await fsWriteFile(targetFile, resolvedContent, "utf-8");
+            return undefined;
+          }
+        } catch {
+          // JSON パースエラー
+        }
+
+        // ユーザー定義ファイルが存在する場合
+        if (process.env.CLAUDE_MONITOR_FORCE_HOOKS === "1") {
+          // opt-in 上書き: バックアップして新規生成
+          const backupFile = targetFile + ".bak";
+          await fsCopyFile(targetFile, backupFile);
+          await fsWriteFile(targetFile, resolvedContent, "utf-8");
+          return `既存 ${targetFile} をバックアップ（${backupFile}）して上書きしました`;
+        }
+
+        // デフォルト: スキップ + 手動マージ案内
+        return `既存 ${targetFile} を検知しました。claude-monitor のフックを有効にするには手動で hooks を追加するか、CLAUDE_MONITOR_FORCE_HOOKS=1 で再起動してください`;
+      }
+
+      // 新規配置
+      await fsWriteFile(targetFile, resolvedContent, "utf-8");
+      return undefined;
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.warn("Copilot hooks deployment failed:", msg);
+      return `hooks.json 配置に失敗しました: ${msg}`;
+    }
+  }
+
+  // hooks.json が claude-monitor が生成したものか判定
+  // 全エントリが _source: "claude-monitor" の場合のみ true（混在ファイルは false）
+  private isClaudeMonitorGenerated(json: unknown): boolean {
+    if (!json || typeof json !== "object") return false;
+    const hooks = (json as Record<string, unknown>).hooks;
+    if (!hooks || typeof hooks !== "object") return false;
+
+    let found = false;
+    for (const entries of Object.values(hooks as Record<string, unknown>)) {
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") continue;
+        const source = (entry as Record<string, unknown>)._source;
+        if (source !== "claude-monitor") return false; // 混在は自動管理扱いしない
+        found = true;
+      }
+    }
+    return found;
+  }
+
+  // MCP 設定ファイルを生成
+  private async createMcpConfigFile(cwd: string): Promise<string | null> {
+    try {
+      const configDir = path.join(cwd, ".github", "hooks");
+      await fsMkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "claude-monitor-mcp.json");
+      const config = {
+        mcpServers: {
+          "claude-monitor": {
+            type: "http",
+            url: "http://localhost:3456/mcp",
+          },
+        },
+      };
+      await fsWriteFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      return configPath;
+    } catch (e) {
+      console.warn("MCP config file creation failed:", (e as Error).message);
+      return null;
+    }
   }
 
   // 内部: ウィンドウが存在するか確認
@@ -223,3 +434,4 @@ export class TmuxManager {
     return paneId;
   }
 }
+

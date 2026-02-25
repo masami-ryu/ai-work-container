@@ -7,6 +7,9 @@ export type SessionStatus =
   | "error"
   | "completed";
 
+// CLIツール種別
+export type CliToolType = "claude" | "copilot";
+
 // セッション
 export interface Session {
   session_id: string;
@@ -14,6 +17,7 @@ export interface Session {
   model: string;
   status: SessionStatus;
   status_text: string; // MCP update_status で更新される作業内容
+  cli_tool: CliToolType; // セッション起動元のCLIツール種別
   milestones: Milestone[];
   last_message: string;
   last_activity: string; // 直近のツール操作情報（PostToolUse: tool_name + file_path）
@@ -85,7 +89,9 @@ export type NotificationType =
   | "idle_prompt"
   | "permission_prompt"
   | "auth_success"
-  | "elicitation_dialog";
+  | "elicitation_dialog"
+  | "error"
+  | "group_auto_assign_failed";
 
 export interface HookEvent {
   event_type: EventType;
@@ -93,7 +99,7 @@ export interface HookEvent {
   cwd: string;
   model: string;
   title: string;
-  notification_type: string;
+  notification_type: NotificationType | "";
   message: string;
   tool_name: string;
   file_path: string; // PostToolUse 時のファイルパス
@@ -104,6 +110,7 @@ export interface HookEvent {
   reason: string;
   transcript_path: string; // Claude Code のトランスクリプト JSONL パス
   progress_text: string; // サーバー側でトランスクリプトから抽出した作業工程テキスト（notify.sh からは送信されない）
+  cli_tool: CliToolType | ""; // セッション起動元のCLIツール種別（省略時は"claude"をデフォルト補完）
   timestamp: string; // ISO 8601
 }
 
@@ -162,6 +169,7 @@ export interface LaunchRequest {
 export interface LaunchResult {
   ok: boolean;
   tmux_pane: string;    // 作成されたペイン識別子（例: "%5"）
+  warning?: string;     // 起動時の警告メッセージ（hooks.json配置失敗等）
 }
 
 // tmux ペインID検証用正規表現（例: "%5"）
@@ -181,7 +189,7 @@ export type WSMessage =
   | { type: "session_update"; payload: Session }
   | { type: "decision_pending"; payload: Decision }
   | { type: "decision_resolved"; payload: Decision }
-  | { type: "notification"; payload: { session_id: string; message: string; notification_type: string } }
+  | { type: "notification"; payload: { session_id: string; message: string; notification_type: NotificationType | "" } }
   | { type: "group_update"; payload: Group }
   | { type: "group_delete"; payload: { id: string } }
   | { type: "prompt_template_update"; payload: PromptTemplate }
