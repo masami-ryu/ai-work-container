@@ -124,6 +124,7 @@ export class SessionStore {
   private createSession(event: HookEvent): Session {
     // cli_tool: 省略時（既存 Claude Code 経路）は "claude" をデフォルト補完
     const cliTool: CliToolType = (event.cli_tool === "copilot") ? "copilot" : "claude";
+    const now = event.timestamp || new Date().toISOString();
     return {
       session_id: event.session_id,
       cwd: event.cwd || "",
@@ -139,10 +140,13 @@ export class SessionStore {
       title: "",
       activities: [],
       tmux_pane: "",
+      last_hook_at: "",
+      last_init_at: now,
+      first_prompt_sent: false,
       error_info: "",
       error_at: "",
-      created_at: event.timestamp || new Date().toISOString(),
-      updated_at: event.timestamp || new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
       questions: [],
     };
   }
@@ -183,6 +187,9 @@ export class SessionStore {
           session.questions = [];
           session.error_info = "";
           session.error_at = "";
+          session.last_hook_at = "";
+          session.last_init_at = event.timestamp || new Date().toISOString();
+          session.first_prompt_sent = false;
         }
         break;
 

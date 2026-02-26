@@ -12,12 +12,49 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SESSION_ID=$("$SCRIPT_DIR/copilot-session-id.sh")
 CORRELATION_ID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
 
+# fail-closed/open モード（デフォルト: closed）
+FAIL_MODE="${COPILOT_DECISION_FAIL_MODE:-closed}"
+# 値を正規化・検証（未知値は fail-closed にフォールバック）
+mode_lc="$(printf '%s' "$FAIL_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$mode_lc" in
+  closed|open) FAIL_MODE="$mode_lc" ;;
+  *)
+    echo "Invalid COPILOT_DECISION_FAIL_MODE='$FAIL_MODE', fallback to closed" >&2
+    FAIL_MODE="closed"
+    ;;
+esac
+
+# 通信失敗時のフォールバック関数
+fail_fallback() {
+  local reason="${1:-Server communication failed}"
+  if [ "$FAIL_MODE" = "closed" ]; then
+    jq -n --arg reason "${reason} (fail-closed mode)" \
+      '{permissionDecision:"deny", permissionDecisionReason:$reason}'
+    exit 0
+  else
+    # fail-open: 出力なし = Copilot デフォルト動作
+    exit 0
+  fi
+}
+
 # preToolUse の stdin JSON から DecisionRequest を構築
 TOOL_NAME=$(printf '%s\n' "$INPUT" | jq -r '.toolName // ""')
 
-# Bash 以外のツールは承認不要（安全なツールでの待機を回避）
+# 承認対象ツールリスト（環境変数で上書き可能、デフォルト: bash）
+APPROVAL_TOOLS="${COPILOT_APPROVAL_TOOLS:-bash}"
 TOOL_NAME_LC="$(printf '%s' "$TOOL_NAME" | tr '[:upper:]' '[:lower:]')"
-if [ "$TOOL_NAME_LC" != "bash" ]; then
+
+# 承認対象でないツールはスキップ（安全なツールでの待機を回避）
+MATCH=0
+IFS=',' read -ra TOOLS <<< "$APPROVAL_TOOLS"
+for t in "${TOOLS[@]}"; do
+  t_lc="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | xargs)"
+  if [ "$TOOL_NAME_LC" = "$t_lc" ]; then
+    MATCH=1
+    break
+  fi
+done
+if [ "$MATCH" = "0" ]; then
   exit 0
 fi
 
@@ -40,9 +77,10 @@ REGISTER_RESULT=$(curl -s -X POST "$BASE_URL/api/decisions" \
   "${headers[@]}" \
   -d "$PAYLOAD" -w "%{http_code}" -o /dev/null 2>/dev/null || echo "000")
 
-# fail-safe: 登録失敗時は通常の Copilot 挙動へフォールバック（decide.sh と同様 fail-open）
+# 登録失敗時はフォールバック
 if [ "$REGISTER_RESULT" = "000" ] || { [ "$REGISTER_RESULT" != "200" ] && [ "$REGISTER_RESULT" != "201" ]; }; then
-  exit 0
+  echo "Decision registration failed (HTTP $REGISTER_RESULT)" >&2
+  fail_fallback "Decision registration failed"
 fi
 
 # long-poll でブラウザ応答を待機（最大 280 秒）
@@ -51,19 +89,22 @@ RESPONSE=$(curl -s --max-time 280 \
 
 # タイムアウト時はフォールバック
 if [ -z "$RESPONSE" ]; then
-  exit 0
+  echo "Decision wait timed out" >&2
+  fail_fallback "Decision wait timed out"
 fi
 
 # JSON パース検証
 RESOLVED=$(echo "$RESPONSE" | jq -r '.resolved' 2>/dev/null || echo "")
 if [ -z "$RESOLVED" ] || [ "$RESOLVED" != "true" ]; then
-  exit 0
+  echo "Decision not resolved (resolved=$RESOLVED)" >&2
+  fail_fallback "Decision not resolved"
 fi
 
 # 決定結果を Copilot CLI 形式で出力
 DECISION=$(echo "$RESPONSE" | jq -r '.decision' 2>/dev/null || echo "")
 if [ -z "$DECISION" ]; then
-  exit 0
+  echo "Decision response missing decision field" >&2
+  fail_fallback "Invalid decision response"
 fi
 
 REASON=$([ "$DECISION" = "allow" ] && echo "Approved via dashboard" || echo "Denied via dashboard")

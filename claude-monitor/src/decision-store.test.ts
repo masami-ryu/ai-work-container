@@ -118,3 +118,74 @@ describe("DecisionStore.cancelBySession", () => {
     store.destroy();
   });
 });
+
+describe("DecisionStore.cleanup stale pending", () => {
+  it("register 後に waitForDecision 未実行のまま DECISION_TIMEOUT_MS 超過で pending が timeout 化される", () => {
+    const onTimeout = vi.fn();
+    const store = createStore({ onDecisionTimeout: onTimeout });
+
+    // 古い timestamp で decision を register（waitForDecision は呼ばない）
+    const oldTimestamp = new Date(Date.now() - 301_000).toISOString(); // 301秒前 > DECISION_TIMEOUT_MS(300秒)
+    store.register(makeRequest({ correlation_id: "stale-1", timestamp: oldTimestamp }));
+
+    // pending であることを確認
+    expect(store.getPending()).toHaveLength(1);
+
+    // cleanup を発火（private メソッドなので interval 経由: vi.advanceTimersByTime で模擬）
+    vi.useFakeTimers();
+    // cleanup は 30 秒間隔で実行される。手動で呼ぶために新しい store を作成
+    vi.useRealTimers();
+
+    // 代替策: cleanup は setInterval で呼ばれるため、直接テスト用に内部 cleanup を発火させる
+    // setInterval の callback を手動実行するため、時間を進める
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onTimeout2 = vi.fn();
+    const store2 = new DecisionStore({
+      onDecisionPending: vi.fn(),
+      onDecisionResolved: vi.fn(),
+      onDecisionTimeout: onTimeout2,
+    });
+    store2.register(makeRequest({
+      correlation_id: "stale-2",
+      timestamp: new Date(Date.now() - 301_000).toISOString(),
+    }));
+    expect(store2.getPending()).toHaveLength(1);
+
+    // 30秒進めて cleanup interval を発火
+    vi.advanceTimersByTime(30_000);
+
+    expect(store2.getPending()).toHaveLength(0);
+    expect(onTimeout2).toHaveBeenCalledOnce();
+    const timedOut = store2.get("stale-2");
+    expect(timedOut!.status).toBe("timeout");
+    expect(timedOut!.resolved_at).toBeDefined();
+
+    store.destroy();
+    store2.destroy();
+    vi.useRealTimers();
+  });
+
+  it("DECISION_TIMEOUT_MS 未満の pending は cleanup で保持される", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onTimeout = vi.fn();
+    const store = new DecisionStore({
+      onDecisionPending: vi.fn(),
+      onDecisionResolved: vi.fn(),
+      onDecisionTimeout: onTimeout,
+    });
+
+    // 新しい pending decision（timeout 未到達）
+    store.register(makeRequest({ correlation_id: "fresh-1" }));
+    expect(store.getPending()).toHaveLength(1);
+
+    // cleanup 発火
+    vi.advanceTimersByTime(30_000);
+
+    // まだ pending のまま
+    expect(store.getPending()).toHaveLength(1);
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    store.destroy();
+    vi.useRealTimers();
+  });
+});

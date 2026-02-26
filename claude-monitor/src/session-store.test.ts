@@ -369,6 +369,43 @@ describe("SessionStore SessionStart 再初期化", () => {
     store.destroy();
   });
 
+  it("Copilot セッション再初期化時に last_hook_at, last_init_at, first_prompt_sent がリセットされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    const session = store.get("copilot-pane-5")!;
+    // 値を手動設定して再初期化でリセットされることを検証
+    session.last_hook_at = "2026-01-01T00:00:00Z";
+    session.first_prompt_sent = true;
+    const oldInitAt = session.last_init_at;
+
+    // 少し遅延を入れて再初期化
+    const laterTimestamp = new Date(Date.now() + 1000).toISOString();
+    store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      timestamp: laterTimestamp,
+    }));
+    const reinit = store.get("copilot-pane-5")!;
+    expect(reinit.last_hook_at).toBe("");
+    expect(reinit.first_prompt_sent).toBe(false);
+    expect(reinit.last_init_at).toBe(laterTimestamp);
+    expect(reinit.last_init_at).not.toBe(oldInitAt);
+    store.destroy();
+  });
+
+  it("新規 Copilot セッション作成時に last_hook_at が空文字列で初期化される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-3", cli_tool: "copilot" }));
+    const session = store.get("copilot-pane-3")!;
+    expect(session.last_hook_at).toBe("");
+    expect(session.last_init_at).toBeTruthy();
+    expect(session.first_prompt_sent).toBe(false);
+    store.destroy();
+  });
+
   it("Claude セッションで SessionStart 再受信時にデータが保持される", () => {
     const onChange = vi.fn();
     const store = new SessionStore(onChange);

@@ -26,6 +26,9 @@ export interface Session {
   title: string; // ユーザーの初回指示内容
   error_info: string;
   tmux_pane: string; // tmux pane識別子（例: "%5"）
+  last_hook_at: string; // ISO 8601 — 最終フック通信時刻（空文字列で初期化）
+  last_init_at: string; // ISO 8601 — 最終初期化時刻（SessionStart/再初期化時に更新）
+  first_prompt_sent: boolean; // Copilot: 初回プロンプト送信済みフラグ
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601

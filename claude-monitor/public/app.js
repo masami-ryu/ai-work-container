@@ -1446,7 +1446,11 @@ async function sendKeys(sessionId, text) {
       const data = await res.json();
       console.error('send-keys failed:', data.error);
       if (res.status === 403) {
-        addLogEntry('send-keys-error', sessionId, 'セッションがidle状態ではありません');
+        addLogEntry('send-keys-error', sessionId, 'セッションがアクティブではありません');
+      } else if (res.status === 409) {
+        addLogEntry('send-keys-error', sessionId, 'Copilot 起動中です。しばらくお待ちください。');
+      } else if (res.status === 500) {
+        addLogEntry('send-keys-error', sessionId, '送信に失敗しました');
       } else {
         addLogEntry('send-keys-error', sessionId, data.error || 'エラー');
       }

@@ -143,8 +143,20 @@ export class DecisionStore {
   private cleanup(): void {
     const now = Date.now();
     for (const [id, decision] of this.decisions) {
-      if (decision.status !== "pending") {
-        const createdAt = new Date(decision.created_at).getTime();
+      const createdAt = new Date(decision.created_at).getTime();
+      if (decision.status === "pending" && now - createdAt > DECISION_TIMEOUT_MS) {
+        // stale pending: waitForDecision() が呼ばれないまま放置された decision を timeout 化
+        decision.status = "timeout";
+        decision.resolved_at = new Date().toISOString();
+        // waiter が存在すれば解放
+        const waiter = this.waiters.get(id);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          waiter.resolve({ resolved: false });
+          this.waiters.delete(id);
+        }
+        this.onDecisionTimeout(decision);
+      } else if (decision.status !== "pending") {
         if (now - createdAt > DECISION_TIMEOUT_MS) {
           this.decisions.delete(id);
         }

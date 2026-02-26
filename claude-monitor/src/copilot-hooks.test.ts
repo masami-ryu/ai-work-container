@@ -225,48 +225,134 @@ describe("createMcpConfigFile JSON スキーマ検証", () => {
   });
 });
 
-describe("copilot-decide.sh toolName 大文字小文字", () => {
-  it("toolName が 'bash' (小文字) のとき exit 0 せず処理を続行する", async () => {
-    // copilot-decide.sh の toolName 判定部分だけを抽出してテスト
-    // bash 小文字 → 承認フローに進むべき（exit 0 しない）
+describe("copilot-decide.sh fail-closed/open モード", () => {
+  // fail_fallback 関数のロジックを抽出してテスト
+  function makeFailFallbackScript(failMode: string, reason: string): string {
+    return `
+      FAIL_MODE="${failMode}"
+      fail_fallback() {
+        local reason="\${1:-Server communication failed}"
+        if [ "$FAIL_MODE" = "closed" ]; then
+          echo "{\\"permissionDecision\\":\\"deny\\",\\"permissionDecisionReason\\":\\"\${reason} (fail-closed mode)\\"}"
+          exit 0
+        else
+          exit 0
+        fi
+      }
+      fail_fallback "${reason}"
+    `;
+  }
+
+  const failModeTests = [
+    {
+      mode: "closed",
+      reason: "Server communication failed",
+      expectOutput: true,
+      desc: "fail-closed: deny を出力",
+    },
+    {
+      mode: "open",
+      reason: "Server communication failed",
+      expectOutput: false,
+      desc: "fail-open: 出力なし",
+    },
+  ];
+
+  for (const tc of failModeTests) {
+    it(tc.desc, async () => {
+      const { stdout } = await execFileAsync("bash", ["-c", makeFailFallbackScript(tc.mode, tc.reason)]);
+      if (tc.expectOutput) {
+        const parsed = JSON.parse(stdout.trim());
+        expect(parsed.permissionDecision).toBe("deny");
+        expect(parsed.permissionDecisionReason).toContain("fail-closed mode");
+      } else {
+        expect(stdout.trim()).toBe("");
+      }
+    });
+  }
+
+  it("正常応答時は permissionDecision/permissionDecisionReason JSON 契約を維持", async () => {
+    // 正常応答パスのJSONフォーマット検証
     const script = `
-      TOOL_NAME="bash"
-      TOOL_NAME_LC="$(printf '%s' "$TOOL_NAME" | tr '[:upper:]' '[:lower:]')"
-      if [ "$TOOL_NAME_LC" != "bash" ]; then
-        echo "SKIPPED"
-      else
-        echo "PROCEED"
-      fi
+      DECISION="allow"
+      REASON="Approved via dashboard"
+      jq -n --arg decision "$DECISION" --arg reason "$REASON" \
+        '{permissionDecision: $decision, permissionDecisionReason: $reason}'
     `;
     const { stdout } = await execFileAsync("bash", ["-c", script]);
-    expect(stdout.trim()).toBe("PROCEED");
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed).toHaveProperty("permissionDecision");
+    expect(parsed).toHaveProperty("permissionDecisionReason");
+    expect(parsed.permissionDecision).toBe("allow");
   });
 
-  it("toolName が 'Bash' (大文字) のとき exit 0 せず処理を続行する", async () => {
+  it("deny 応答時も permissionDecision/permissionDecisionReason JSON 契約を維持", async () => {
     const script = `
-      TOOL_NAME="Bash"
-      TOOL_NAME_LC="$(printf '%s' "$TOOL_NAME" | tr '[:upper:]' '[:lower:]')"
-      if [ "$TOOL_NAME_LC" != "bash" ]; then
-        echo "SKIPPED"
-      else
-        echo "PROCEED"
-      fi
+      DECISION="deny"
+      REASON="Denied via dashboard"
+      jq -n --arg decision "$DECISION" --arg reason "$REASON" \
+        '{permissionDecision: $decision, permissionDecisionReason: $reason}'
     `;
     const { stdout } = await execFileAsync("bash", ["-c", script]);
-    expect(stdout.trim()).toBe("PROCEED");
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.permissionDecision).toBe("deny");
+    expect(parsed.permissionDecisionReason).toBe("Denied via dashboard");
   });
+});
 
-  it("toolName が 'read' のとき承認フローをスキップする", async () => {
-    const script = `
-      TOOL_NAME="read"
+describe("copilot-decide.sh 承認対象ツール判定", () => {
+  // 承認対象ツール判定ロジックの抽出テスト（テーブル駆動）
+  function makeToolCheckScript(toolName: string, approvalTools?: string): string {
+    const envPrefix = approvalTools !== undefined
+      ? `COPILOT_APPROVAL_TOOLS="${approvalTools}"`
+      : "";
+    return `
+      ${envPrefix}
+      APPROVAL_TOOLS="\${COPILOT_APPROVAL_TOOLS:-bash}"
+      TOOL_NAME="${toolName}"
       TOOL_NAME_LC="$(printf '%s' "$TOOL_NAME" | tr '[:upper:]' '[:lower:]')"
-      if [ "$TOOL_NAME_LC" != "bash" ]; then
+      MATCH=0
+      IFS=',' read -ra TOOLS <<< "$APPROVAL_TOOLS"
+      for t in "\${TOOLS[@]}"; do
+        t_lc="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | xargs)"
+        if [ "$TOOL_NAME_LC" = "$t_lc" ]; then
+          MATCH=1
+          break
+        fi
+      done
+      if [ "$MATCH" = "0" ]; then
         echo "SKIPPED"
       else
         echo "PROCEED"
       fi
     `;
-    const { stdout } = await execFileAsync("bash", ["-c", script]);
-    expect(stdout.trim()).toBe("SKIPPED");
-  });
+  }
+
+  const defaultToolTests = [
+    { toolName: "bash", expected: "PROCEED", desc: "bash (小文字) → 承認対象" },
+    { toolName: "Bash", expected: "PROCEED", desc: "Bash (大文字) → 承認対象" },
+    { toolName: "read", expected: "SKIPPED", desc: "read → 非対象" },
+    { toolName: "Write", expected: "SKIPPED", desc: "Write → 非対象" },
+    { toolName: "Edit", expected: "SKIPPED", desc: "Edit → 非対象" },
+  ];
+
+  for (const tc of defaultToolTests) {
+    it(`デフォルト設定: ${tc.desc}`, async () => {
+      const { stdout } = await execFileAsync("bash", ["-c", makeToolCheckScript(tc.toolName)]);
+      expect(stdout.trim()).toBe(tc.expected);
+    });
+  }
+
+  const customToolTests = [
+    { toolName: "bash", approvalTools: "bash,write", expected: "PROCEED", desc: "bash → 承認対象" },
+    { toolName: "Write", approvalTools: "bash,write", expected: "PROCEED", desc: "Write → 承認対象" },
+    { toolName: "read", approvalTools: "bash,write", expected: "SKIPPED", desc: "read → 非対象" },
+  ];
+
+  for (const tc of customToolTests) {
+    it(`COPILOT_APPROVAL_TOOLS="${tc.approvalTools}": ${tc.desc}`, async () => {
+      const { stdout } = await execFileAsync("bash", ["-c", makeToolCheckScript(tc.toolName, tc.approvalTools)]);
+      expect(stdout.trim()).toBe(tc.expected);
+    });
+  }
 });

@@ -39,17 +39,29 @@ export interface ServerDeps {
 export interface PaneMonitorDeps {
   tmuxManager: TmuxManager;
   sessionStore: SessionStore;
+  decisionStore: DecisionStore;
   pendingGroupAssignments: Map<string, PendingAssignment>;
   completeSessionWithCleanup: (sessionId: string, message: string) => void;
   loggedUnknownCommands: Set<string>;
 }
 
-// Copilot 検出対象コマンド名（環境差分に備え将来拡張可能）
-export const COPILOT_DETECT_COMMANDS = ["copilot"];
+// Copilot Pane Monitor タイムアウト定数
+export const COPILOT_HOOK_TIMEOUT_MS = 60_000;     // フック通信途絶時の完了判定（60秒）
+export const COPILOT_NO_HOOK_TIMEOUT_MS = 120_000; // hooks 未到達時のフォールバック完了判定（120秒）
+export const COPILOT_NO_HOOK_HARD_TIMEOUT_MS = 10 * 60_000; // hooks 未到達時の最終上限（10分、commandAlive でも適用）
+export const COPILOT_GRACE_PERIOD_MS = 30_000;     // プレセッション作成後のグレースピリオド（30秒）
+
+// Copilot コマンド検出定数（用途別に分離）
+// 自動プレセッション作成用: 確実にCopilotと識別できるコマンドのみ（誤検出防止）
+const _parsedCopilotCommands = process.env.COPILOT_COMMANDS?.split(",").map(s => s.trim()).filter(Boolean);
+export const COPILOT_AUTO_DETECT_COMMANDS: readonly string[] =
+  _parsedCopilotCommands && _parsedCopilotCommands.length > 0 ? _parsedCopilotCommands : ["copilot"];
+// 既存Copilotセッションの生存判定用: フック通信ベース判定と併用するため広めの集合を許容
+export const COPILOT_ALIVE_COMMANDS: readonly string[] = ["copilot", "node"];
 
 // --- Pane Monitor Tick ロジック（テスト可能な独立関数） ---
 export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
-  const { tmuxManager, sessionStore, pendingGroupAssignments, completeSessionWithCleanup, loggedUnknownCommands } = deps;
+  const { tmuxManager, sessionStore, decisionStore, pendingGroupAssignments, completeSessionWithCleanup, loggedUnknownCommands } = deps;
   const panes = await tmuxManager.listActivePanesDetailed();
   if (!panes) return;
   if (panes.length === 0) {
@@ -71,16 +83,71 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
   }
 
   // copilot プロセス終了検出（pane は存続しているがコマンドが変わった場合）
-  const copilotPaneIds = new Set(
-    panes.filter((p) => COPILOT_DETECT_COMMANDS.includes(p.command)).map((p) => p.paneId)
-  );
+  // フック通信ベース + DecisionStore pending ベースの判定
+  const paneCommandMap = new Map(panes.map((p) => [p.paneId, p.command]));
   for (const session of sessionStore.getAll()) {
     if (session.cli_tool !== "copilot") continue;
     if (session.status === "completed") continue;
     if (!session.tmux_pane) continue;
     if (!activePaneIds.has(session.tmux_pane)) continue; // pane消失は上のループで処理済み
-    if (copilotPaneIds.has(session.tmux_pane)) continue; // まだ copilot 実行中
-    completeSessionWithCleanup(session.session_id, "copilot プロセス終了を検出しました");
+
+    const paneCommand = paneCommandMap.get(session.tmux_pane) || "";
+    const commandAlive = COPILOT_ALIVE_COMMANDS.includes(paneCommand);
+    const sessionId = session.session_id;
+
+    // グレースピリオド: last_init_at から一定時間はスキップ
+    const sinceInit = Date.now() - new Date(session.last_init_at).getTime();
+    if (sinceInit < COPILOT_GRACE_PERIOD_MS) {
+      console.debug(`Copilot session ${sessionId}: grace period (${sinceInit}ms < ${COPILOT_GRACE_PERIOD_MS}ms), skipping`);
+      continue;
+    }
+
+    // 条件 0: DecisionStore に pending decision → 承認待ち中のため完了抑止
+    const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === sessionId);
+    if (pendingDecisions.length > 0) {
+      console.debug(`Copilot session ${sessionId}: ${pendingDecisions.length} pending decision(s), keeping active`);
+      continue;
+    }
+
+    // 条件 1: コマンドが COPILOT_ALIVE_COMMANDS に含まれる
+    // フック通信ベース判定と併用: 直近フック通信がある場合のみアクティブ維持
+    const now = Date.now();
+    if (commandAlive) {
+      const isFreshByHook = session.last_hook_at
+        ? (now - new Date(session.last_hook_at).getTime()) < COPILOT_HOOK_TIMEOUT_MS
+        : false;
+      if (isFreshByHook) {
+        continue;
+      }
+      // フック通信途絶/未到達 → 条件2のタイムアウト判定に移行
+    }
+
+    // 条件 2: コマンドがalive commandでない、またはフック通信が途絶している場合
+    if (session.last_hook_at) {
+      // 2a: last_hook_at 設定済み → フックタイムアウト判定
+      const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+      if (sinceLastHook >= COPILOT_HOOK_TIMEOUT_MS) {
+        console.debug(`Copilot session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${COPILOT_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
+        continue;
+      }
+    } else {
+      // 2b: last_hook_at 未設定 → no-hook フォールバック
+      // hard timeout: commandAlive に関係なく最終上限で完了
+      if (sinceInit >= COPILOT_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.warn(`Copilot session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
+        completeSessionWithCleanup(sessionId, "copilot フック未到達タイムアウト");
+        continue;
+      }
+      // soft timeout: commandAlive でないプロセスは早期に完了
+      if (!commandAlive && sinceInit >= COPILOT_NO_HOOK_TIMEOUT_MS) {
+        console.warn(`Copilot session ${sessionId}: no hooks received after ${sinceInit}ms, completing`);
+        completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
+        continue;
+      }
+    }
+    // 条件 3: タイムアウト未到達 → アクティブ維持
+    console.debug(`Copilot session ${sessionId}: command='${paneCommand}', commandAlive=${commandAlive}, waiting for timeout`);
   }
 
   // copilot 手動起動の自動検出
@@ -92,7 +159,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
   );
 
   for (const pane of panes) {
-    if (!COPILOT_DETECT_COMMANDS.includes(pane.command)) {
+    if (!COPILOT_AUTO_DETECT_COMMANDS.includes(pane.command)) {
       // 検出対象外のコマンドはスキップ（デバッグ用: 未知のコマンドを初回のみログ出力）
       if (pane.command && !["bash", "zsh", "fish", "claude", "node"].includes(pane.command)) {
         if (!loggedUnknownCommands.has(pane.command)) {
@@ -196,6 +263,10 @@ export function createApp(deps: ServerDeps): CreateAppResult {
   }
 
   function completeSessionWithCleanup(sessionId: string, message: string): void {
+    const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === sessionId);
+    if (pendingDecisions.length > 0) {
+      console.warn(`Completing session ${sessionId} with ${pendingDecisions.length} pending decision(s): ${message}`);
+    }
     cancelSessionDecisions(sessionId);
     cancelSessionQuestions(sessionId);
     sessionStore.completeSession(sessionId, message);
@@ -239,6 +310,11 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     }
 
     const session = sessionStore.processEvent(event);
+
+    // Copilot セッション: フック通信時刻を更新（Pane Monitor の生存判定で使用）
+    if (session.cli_tool === "copilot") {
+      session.last_hook_at = event.timestamp || new Date().toISOString();
+    }
 
     // 新規セッションのグループ自動割り当て（SessionStart 時のみ実行）
     if (event.event_type === "SessionStart" && session.tmux_pane) {
@@ -391,6 +467,8 @@ export function createApp(deps: ServerDeps): CreateAppResult {
   // --- Send Keys API ---
   const execFileAsync = promisify(execFile);
 
+  const COPILOT_HOOKS_TIMEOUT_MS = 120_000;
+
   app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
     const id = req.params.id as string;
     const session = sessionStore.get(id);
@@ -406,6 +484,23 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       res.status(403).json({ error: "Session is not idle" });
       return;
     }
+
+    // Copilot 固有チェック: 起動状態に応じた制御
+    if (session.cli_tool === "copilot") {
+      if (!session.first_prompt_sent) {
+        // 初回送信は許可（Copilot CLI 起動トリガー）
+      } else if (!session.last_hook_at) {
+        // 2回目以降: Copilot がまだ起動中（フック通信なし）
+        const elapsed = Date.now() - new Date(session.last_init_at).getTime();
+        if (elapsed < COPILOT_HOOKS_TIMEOUT_MS) {
+          res.status(409).json({ error: "Copilot CLI is still starting up. Please wait." });
+          return;
+        }
+        // hooks 不成立のフォールバック: 一定時間経過後は送信を許可
+        console.warn(`Copilot session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
+      }
+    }
+
     const { text } = req.body as { text: unknown };
     if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
       res.status(400).json({ error: "text must be a string between 1 and 4096 characters" });
@@ -418,6 +513,11 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
+
+      // tmux send-keys 一連成功後に first_prompt_sent を更新
+      if (session.cli_tool === "copilot" && !session.first_prompt_sent) {
+        session.first_prompt_sent = true;
+      }
 
       const historyKey = getPromptHistoryKey(id);
       addPromptHistory(historyKey, text);
@@ -1031,6 +1131,7 @@ if (!process.env.VITEST) {
         await runPaneMonitorTick({
           tmuxManager,
           sessionStore,
+          decisionStore,
           pendingGroupAssignments,
           completeSessionWithCleanup,
           loggedUnknownCommands,
