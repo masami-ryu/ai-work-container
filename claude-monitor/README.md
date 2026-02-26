@@ -97,6 +97,33 @@ copilot --additional-mcp-config @.vscode/claude-monitor-mcp.json
 | postToolUse | PostToolUse | copilot-notify.sh |
 | errorOccurred | Notification(error) | copilot-notify.sh |
 
+#### Copilot SessionEnd の reason ベースステータス遷移
+
+Copilot CLI の `sessionEnd` フックは各ターン完了時に発火する。`reason` フィールドに基づいてステータスを決定:
+
+| reason | ステータス遷移 | 説明 |
+|--------|---------------|------|
+| `complete` | → idle | ターン完了、次のプロンプト入力可能 |
+| `user_exit` / `user_quit` | → completed | ユーザーによるセッション終了 |
+| `error` / `abort` / `timeout` | → completed | エラー・中断によるセッション終了 |
+| 空 / 未知の値 | → completed | 保守的デフォルト（warning ログ出力） |
+
+Claude Code の `SessionEnd` は従来通り常に `completed` に遷移する。
+
+#### Copilot 承認フロー
+
+ダッシュボードで「Allow」をクリックすると、サーバーが tmux send-keys で Copilot CLI のネイティブ承認プロンプトに自動応答する。`copilot-decide.sh` は `allow` 時に出力なしで即座に終了し、サーバー側の自動承認に委譲する。
+
+#### 環境変数
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `COPILOT_CONFIRM_DELAY_MS` | `500` | Allow 後、tmux send-keys 実行までの遅延（ms） |
+| `COPILOT_CONFIRM_RESPONSE` | `y` | Copilot ネイティブ承認プロンプトへの応答文字列 |
+| `COPILOT_ENTER_METHOD` | `c-m`（Copilot） | Enter 送信方式: `c-m` / `enter-delay` / `double-enter` |
+| `COPILOT_DECISION_FAIL_MODE` | `closed` | 通信失敗時の動作: `closed`（deny）/ `open`（デフォルト動作） |
+| `COPILOT_APPROVAL_TOOLS` | `bash` | 承認対象ツール（カンマ区切り） |
+
 #### 注意事項
 
 - `CLAUDE_MONITOR_FORCE_HOOKS=1` 環境変数を設定すると、既存の hooks.json をバックアップして上書き
@@ -155,7 +182,7 @@ Terminal (Copilot CLI)  ── Hooks ──→
 | PreToolUse(AskUserQuestion) | notify.sh (async) | 質問内容の通知 |
 | PermissionRequest | decide.sh (blocking) | 承認要求 → ブラウザ応答待ち |
 | Stop | notify.sh (async) | idle 遷移 |
-| SessionEnd | notify.sh (async) | completed 遷移 + 通知音 |
+| SessionEnd | notify.sh (async) | completed 遷移 + 通知音（Copilot: `reason=complete` → idle 遷移） |
 
 ## セキュリティ
 

@@ -429,3 +429,145 @@ describe("SessionStore SessionStart 再初期化", () => {
     store.destroy();
   });
 });
+
+describe("Copilot SessionEnd reason ベースステータス遷移", () => {
+  it("TEST-001: Copilot SessionEnd reason=complete → idle", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "cp1", cli_tool: "copilot", prompt: "hello" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "complete" }));
+    expect(session.status).toBe("idle");
+    expect(session.current_progress).toBe("");
+    expect(session.questions).toEqual([]);
+    store.destroy();
+  });
+
+  it("TEST-002: Copilot SessionEnd reason=user_exit → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "user_exit" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("TEST-003: Copilot SessionEnd reason='' (空) → completed（保守的デフォルト）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("TEST-006: Claude SessionEnd は従来通り completed に遷移", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "s1", reason: "complete" }));
+    // Claude Code では reason に関係なく常に completed
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("TEST-014: Copilot SessionEnd 未知 reason → completed + warning ログ", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "unknown_value" }));
+    expect(session.status).toBe("completed");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unknown reason"));
+    warnSpy.mockRestore();
+    store.destroy();
+  });
+
+  it("TEST-015: Copilot SessionEnd reason=user_quit → user_exit に正規化 → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "user_quit" }));
+    expect(session.status).toBe("completed");
+    // user_quit は user_exit に正規化されるため、warning は出ない
+    store.destroy();
+  });
+
+  it("Copilot SessionEnd reason=error → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "error" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("Copilot SessionEnd reason=abort → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "abort" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("Copilot SessionEnd reason=timeout → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "timeout" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+});
+
+describe("Copilot idle → running 復帰", () => {
+  it("TEST-004: Copilot idle + PreToolUse(non-AskUserQuestion) → running", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    expect(store.get("cp1")!.status).toBe("idle");
+
+    const session = store.processEvent(makeEvent({ event_type: "PreToolUse", session_id: "cp1", cli_tool: "copilot", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    store.destroy();
+  });
+
+  it("TEST-005: Copilot idle + PostToolUse → running", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    expect(store.get("cp1")!.status).toBe("idle");
+
+    const session = store.processEvent(makeEvent({ event_type: "PostToolUse", session_id: "cp1", cli_tool: "copilot", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    store.destroy();
+  });
+
+  it("Claude idle + PreToolUse → idle のまま（Copilot 固有ロジックは適用されない）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    expect(store.get("s1")!.status).toBe("idle");
+
+    // Claude では idle + PreToolUse(non-AskUserQuestion) は状態変更なし
+    const session = store.processEvent(makeEvent({ event_type: "PreToolUse", session_id: "s1", tool_name: "Read" }));
+    expect(session.status).toBe("idle");
+    store.destroy();
+  });
+
+  it("Copilot idle + PreToolUse(AskUserQuestion) → waiting_answer（idle→running 復帰はスキップ）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp1", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      session_id: "cp1",
+      cli_tool: "copilot",
+      tool_name: "AskUserQuestion",
+      questions: [{ question: "Q?", header: "h", options: [], multiSelect: false }],
+    }));
+    expect(session.status).toBe("waiting_answer");
+    store.destroy();
+  });
+});

@@ -109,6 +109,14 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
       continue;
     }
 
+    // 条件 0.5: idle 状態 + コマンド生存 → 次のプロンプト入力待ちのためフックタイムアウトをスキップ
+    // SessionEnd(reason=complete) 後の idle セッションはフック通信が発生しないため、
+    // コマンド生存中はタイムアウト対象外とする（プロセス終了は commandAlive で検出）
+    if (session.status === "idle" && commandAlive) {
+      console.debug(`Copilot session ${sessionId}: idle with alive command ('${paneCommand}'), skipping hook timeout`);
+      continue;
+    }
+
     // 条件 1: コマンドが COPILOT_ALIVE_COMMANDS に含まれる
     // フック通信ベース判定と併用: 直近フック通信がある場合のみアクティブ維持
     const now = Date.now();
@@ -210,6 +218,27 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     promptTemplateStore, tmuxManager, pendingGroupAssignments,
     broadcast, hookToken, allowedOrigins, publicDir,
   } = deps;
+
+  const execFileAsync = promisify(execFile);
+
+  // --- tmux Enter 送信共通ヘルパー ---
+  async function sendEnterKey(pane: string, enterMethod: string): Promise<void> {
+    switch (enterMethod) {
+      case "c-m":
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "C-m"]);
+        break;
+      case "enter-delay":
+        await new Promise(r => setTimeout(r, 100));
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        break;
+      case "double-enter":
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        break;
+      default:
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+    }
+  }
 
   // --- Prompt History (in-memory, app 単位) ---
   const PROMPT_HISTORY_MAX = 50;
@@ -371,6 +400,40 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     res.json(result);
   });
 
+  // Copilot 自動承認: tmux send-keys で Copilot ネイティブプロンプトに応答
+  async function copilotAutoApprove(session: import("./types.js").Session): Promise<void> {
+    const delayMs = parseInt(process.env.COPILOT_CONFIRM_DELAY_MS || "500", 10);
+    const response = process.env.COPILOT_CONFIRM_RESPONSE || "y";
+    const maxRetries = 3;
+    const retryIntervalMs = 500;
+    const enterMethod = process.env.COPILOT_ENTER_METHOD || "c-m";
+
+    await new Promise(r => setTimeout(r, delayMs));
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", response]);
+        await sendEnterKey(session.tmux_pane, enterMethod);
+        console.log(`Copilot auto-approve: sent '${response}' + ${enterMethod} to ${session.tmux_pane}`);
+        return;
+      } catch (e) {
+        const err = e as { stderr?: string; message?: string };
+        console.error(`Copilot auto-approve attempt ${attempt}/${maxRetries} failed:`, err.stderr || err.message);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, retryIntervalMs));
+        }
+      }
+    }
+
+    // 全リトライ失敗: waiting_permission 状態を維持
+    console.error(`Copilot auto-approve: all ${maxRetries} attempts failed for ${session.tmux_pane}`);
+    if (session.status === "running") {
+      session.status = "waiting_permission";
+      session.updated_at = new Date().toISOString();
+      broadcast({ type: "session_update", payload: session });
+    }
+  }
+
   // ブラウザから決定結果を送信（Origin 検証付き）
   app.post("/api/decisions/:id/respond", validateOrigin, (req, res) => {
     const id = req.params.id as string;
@@ -384,6 +447,17 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       res.status(404).json({ error: "Decision not found or already resolved" });
       return;
     }
+
+    // Copilot auto-approve: allow 決定時に tmux send-keys で自動承認
+    if (decision === "allow") {
+      const session = sessionStore.get(updated.session_id);
+      if (session && session.cli_tool === "copilot" && session.tmux_pane) {
+        copilotAutoApprove(session).catch(e =>
+          console.error("Copilot auto-approve error:", e)
+        );
+      }
+    }
+
     res.json({ ok: true });
   });
 
@@ -465,8 +539,6 @@ export function createApp(deps: ServerDeps): CreateAppResult {
   });
 
   // --- Send Keys API ---
-  const execFileAsync = promisify(execFile);
-
   const COPILOT_HOOKS_TIMEOUT_MS = 120_000;
 
   app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
@@ -510,9 +582,17 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     const sanitizedText = text.replace(/\r?\n/g, " ");
 
     try {
+      console.log(`send-keys [${session.session_id}]: clearing line (C-u)`);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
+
+      console.log(`send-keys [${session.session_id}]: sending text (${sanitizedText.length} chars)`);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
-      await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "Enter"]);
+
+      // Enter 送信方式: Copilot はデフォルト C-m、Claude は Enter
+      const enterMethod = process.env.COPILOT_ENTER_METHOD
+        || (session.cli_tool === "copilot" ? "c-m" : "enter");
+      console.log(`send-keys [${session.session_id}]: sending Enter (method: ${enterMethod})`);
+      await sendEnterKey(session.tmux_pane, enterMethod);
 
       // tmux send-keys 一連成功後に first_prompt_sent を更新
       if (session.cli_tool === "copilot" && !session.first_prompt_sent) {
@@ -527,10 +607,11 @@ export function createApp(deps: ServerDeps): CreateAppResult {
         payload: { scope: historyScope, id: historyId, history: getPromptHistory(historyKey) },
       });
 
+      console.log(`send-keys [${session.session_id}]: completed successfully`);
       res.json({ ok: true });
     } catch (e: unknown) {
       const err = e as { stderr?: string; message?: string };
-      console.error("tmux send-keys failed:", err.stderr || err.message);
+      console.error(`send-keys [${session.session_id}] failed:`, err.stderr || err.message);
       res.status(500).json({ error: "Failed to send keys" });
     }
   });

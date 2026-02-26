@@ -100,15 +100,22 @@ if [ -z "$RESOLVED" ] || [ "$RESOLVED" != "true" ]; then
   fail_fallback "Decision not resolved"
 fi
 
-# 決定結果を Copilot CLI 形式で出力
+# 決定結果を取得
 DECISION=$(echo "$RESPONSE" | jq -r '.decision' 2>/dev/null || echo "")
 if [ -z "$DECISION" ]; then
   echo "Decision response missing decision field" >&2
   fail_fallback "Invalid decision response"
 fi
 
-REASON=$([ "$DECISION" = "allow" ] && echo "Approved via dashboard" || echo "Denied via dashboard")
-jq -n --arg decision "$DECISION" --arg reason "$REASON" \
-  '{permissionDecision: $decision, permissionDecisionReason: $reason}'
+if [ "$DECISION" = "allow" ]; then
+  # allow: 出力なしで即座に終了
+  # Copilot CLI は permissionDecision "allow" を無視するため、
+  # サーバー側の自動承認（tmux send-keys）に委譲する
+  exit 0
+fi
+
+# deny: Copilot CLI 形式で出力
+jq -n --arg reason "Denied via dashboard" \
+  '{permissionDecision: "deny", permissionDecisionReason: $reason}'
 
 exit 0

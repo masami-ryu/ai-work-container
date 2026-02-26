@@ -440,7 +440,7 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
     session = deps.sessionStore.get("copilot-pane-5")!;
     expect(session.status).toBe("idle");
 
-    // 9. /api/events で SessionEnd → completed
+    // 9. /api/events で SessionEnd reason=user_quit → completed
     await request(app)
       .post("/api/events")
       .send(makeEvent({
@@ -452,6 +452,42 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
 
     session = deps.sessionStore.get("copilot-pane-5")!;
     expect(session.status).toBe("completed");
+  });
+
+  it("TEST-013: Copilot SessionEnd reason=complete → idle（ターン完了後に次のプロンプト入力可能）", async () => {
+    // 1. Launch API でプレセッション作成
+    await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "copilot" });
+
+    // 2. SessionStart + UserPromptSubmit + PostToolUse の模擬
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+    }));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix the bug",
+    }));
+
+    // 3. SessionEnd reason=complete → idle
+    await request(app)
+      .post("/api/events")
+      .send(makeEvent({
+        event_type: "SessionEnd",
+        session_id: "copilot-pane-5",
+        cli_tool: "copilot",
+        reason: "complete",
+      }));
+
+    const session = deps.sessionStore.get("copilot-pane-5")!;
+    expect(session.status).toBe("idle");
+    expect(session.last_message).toBe("complete");
   });
 
   it("send-keys: Copilot 初回送信は idle チェックを通過し first_prompt_sent が更新される", async () => {

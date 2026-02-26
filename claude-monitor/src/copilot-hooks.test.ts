@@ -271,19 +271,18 @@ describe("copilot-decide.sh fail-closed/open モード", () => {
     });
   }
 
-  it("正常応答時は permissionDecision/permissionDecisionReason JSON 契約を維持", async () => {
-    // 正常応答パスのJSONフォーマット検証
+  it("TEST-012: allow 応答時は stdout 出力なし（サーバー側自動承認に委譲）", async () => {
+    // allow 決定時は permissionDecision を出力せず即座に終了する新仕様
     const script = `
       DECISION="allow"
-      REASON="Approved via dashboard"
-      jq -n --arg decision "$DECISION" --arg reason "$REASON" \
-        '{permissionDecision: $decision, permissionDecisionReason: $reason}'
+      if [ "$DECISION" = "allow" ]; then
+        exit 0
+      fi
+      jq -n --arg reason "Denied via dashboard" \
+        '{permissionDecision: "deny", permissionDecisionReason: $reason}'
     `;
     const { stdout } = await execFileAsync("bash", ["-c", script]);
-    const parsed = JSON.parse(stdout.trim());
-    expect(parsed).toHaveProperty("permissionDecision");
-    expect(parsed).toHaveProperty("permissionDecisionReason");
-    expect(parsed.permissionDecision).toBe("allow");
+    expect(stdout.trim()).toBe("");
   });
 
   it("deny 応答時も permissionDecision/permissionDecisionReason JSON 契約を維持", async () => {

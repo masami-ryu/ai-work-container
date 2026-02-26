@@ -230,6 +230,10 @@ export class SessionStore {
         break;
 
       case "PreToolUse":
+        // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
+        if (session.cli_tool === "copilot" && session.status === "idle" && event.tool_name !== "AskUserQuestion") {
+          session.status = "running";
+        }
         if (event.tool_name === "AskUserQuestion") {
           session.status = "waiting_answer";
           if (event.questions && event.questions.length > 0) {
@@ -253,6 +257,10 @@ export class SessionStore {
         break;
 
       case "PostToolUse":
+        // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
+        if (session.cli_tool === "copilot" && session.status === "idle") {
+          session.status = "running";
+        }
         // waiting_answer 状態で PostToolUse が来たら running に復帰（質問回答済み）
         if (session.status === "waiting_answer") {
           session.status = "running";
@@ -295,14 +303,30 @@ export class SessionStore {
         }
         break;
 
-      case "SessionEnd":
-        session.status = "completed";
+      case "SessionEnd": {
+        // Copilot CLI: reason に基づいてステータスを決定
+        // - "complete" → idle（ターン完了、次のプロンプト入力可能）
+        // - その他 → completed（セッション終了）
+        // Claude Code: 従来通り常に completed
+        if (session.cli_tool === "copilot") {
+          const rawReason = event.reason || "";
+          const COPILOT_REASON_ALIASES: Record<string, string> = { user_quit: "user_exit" };
+          const normalizedReason = COPILOT_REASON_ALIASES[rawReason] || rawReason;
+          const COPILOT_KNOWN_REASONS = new Set(["complete", "error", "abort", "timeout", "user_exit", ""]);
+          if (!COPILOT_KNOWN_REASONS.has(normalizedReason)) {
+            console.warn(`Copilot SessionEnd: unknown reason "${rawReason}", treating as session end`);
+          }
+          session.status = normalizedReason === "complete" ? "idle" : "completed";
+        } else {
+          session.status = "completed";
+        }
         session.current_progress = "";
         session.questions = [];
         if (event.reason) {
           session.last_message = event.reason;
         }
         break;
+      }
     }
   }
 

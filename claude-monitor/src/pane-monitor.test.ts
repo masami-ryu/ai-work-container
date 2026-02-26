@@ -293,7 +293,7 @@ describe("runPaneMonitorTick copilot 自動検出", () => {
     sessionStore.destroy();
   });
 
-  it("pane_current_command が 'node' + フック通信タイムアウト → セッションを完了にする", async () => {
+  it("pane_current_command が 'node' + running + フック通信タイムアウト → セッションを完了にする", async () => {
     const onChange = vi.fn();
     const sessionStore = new SessionStore(onChange);
     const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 1000).toISOString();
@@ -302,6 +302,13 @@ describe("runPaneMonitorTick copilot 自動検出", () => {
       tmux_pane: "%5",
       cli_tool: "copilot",
       timestamp: oldTime,
+    }));
+    // running 状態にする（idle + commandAlive はスキップされるため）
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix bug",
     }));
     // node コマンドだがフック通信が途絶 → タイムアウト判定で完了
     const session = sessionStore.get("copilot-pane-5")!;
@@ -429,7 +436,7 @@ describe("runPaneMonitorTick copilot 自動検出", () => {
     sessionStore.destroy();
   });
 
-  it("last_hook_at 未設定 + commandAlive (node) + COPILOT_NO_HOOK_HARD_TIMEOUT_MS 経過でセッション完了", async () => {
+  it("last_hook_at 未設定 + commandAlive (node) + running + COPILOT_NO_HOOK_HARD_TIMEOUT_MS 経過でセッション完了", async () => {
     const onChange = vi.fn();
     const sessionStore = new SessionStore(onChange);
     const oldTime = new Date(Date.now() - COPILOT_NO_HOOK_HARD_TIMEOUT_MS - 1000).toISOString();
@@ -438,6 +445,13 @@ describe("runPaneMonitorTick copilot 自動検出", () => {
       tmux_pane: "%5",
       cli_tool: "copilot",
       timestamp: oldTime,
+    }));
+    // running 状態にする（idle + commandAlive はスキップされるため）
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix bug",
     }));
     const deps = createDeps({
       tmuxManager: createMockTmuxManager([
@@ -584,6 +598,148 @@ describe("runPaneMonitorTick copilot 自動検出", () => {
   it("COPILOT_ALIVE_COMMANDS に copilot と node が含まれる", () => {
     expect(COPILOT_ALIVE_COMMANDS).toContain("copilot");
     expect(COPILOT_ALIVE_COMMANDS).toContain("node");
+  });
+});
+
+describe("idle Copilot セッションの pane monitor フックタイムアウトスキップ", () => {
+  it("idle + commandAlive (copilot) + フックタイムアウト超過 → 完了しない（次のプロンプト待ち）", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    // SessionEnd(reason=complete) 後の idle 状態を再現
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix bug",
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "SessionEnd",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      reason: "complete",
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    expect(session.status).toBe("idle");
+    // フック通信は SessionEnd 時点で止まっている（タイムアウト超過を模擬）
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "copilot", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+
+  it("idle + commandAlive (node) + フックタイムアウト超過 → 完了しない", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "SessionEnd",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      reason: "complete",
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "node", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+
+  it("idle + コマンド不一致 (bash) + フックタイムアウト超過 → 完了する（プロセス終了検出）", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "SessionEnd",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      reason: "complete",
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "bash", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "copilot-pane-5",
+      "copilot プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
+  });
+
+  it("running + commandAlive + フックタイムアウト超過 → 完了する（idle スキップは適用されない）", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix bug",
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    expect(session.status).toBe("running");
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "copilot", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "copilot-pane-5",
+      "copilot プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
   });
 });
 
