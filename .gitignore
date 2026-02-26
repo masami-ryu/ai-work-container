@@ -26,3 +26,5 @@ slack-bridge/audit.db
 slack-bridge/session.db
 
 ai/**/*
+
+.vscode/claude-monitor-mcp.json
