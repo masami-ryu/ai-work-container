@@ -582,15 +582,21 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     const sanitizedText = text.replace(/\r?\n/g, " ");
 
     try {
-      console.log(`send-keys [${session.session_id}]: clearing line (C-u)`);
-      await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
+      // Copilot セッションでは行クリア（C-u）を送信しない
+      // Copilot CLI v0.0.418 では C-u → text → Enter のシーケンスで実行が開始されないため
+      if (session.cli_tool !== "copilot") {
+        console.log(`send-keys [${session.session_id}]: clearing line (C-u)`);
+        await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
+      }
 
       console.log(`send-keys [${session.session_id}]: sending text (${sanitizedText.length} chars)`);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
 
-      // Enter 送信方式: Copilot はデフォルト C-m、Claude は Enter
-      const enterMethod = process.env.COPILOT_ENTER_METHOD
-        || (session.cli_tool === "copilot" ? "c-m" : "enter");
+      // Enter 送信方式: Copilot は COPILOT_PROMPT_ENTER_METHOD > COPILOT_ENTER_METHOD > "enter"
+      // 非 Copilot（Claude 等）は常に "enter"
+      const enterMethod = session.cli_tool === "copilot"
+        ? (process.env.COPILOT_PROMPT_ENTER_METHOD || process.env.COPILOT_ENTER_METHOD || "enter")
+        : "enter";
       console.log(`send-keys [${session.session_id}]: sending Enter (method: ${enterMethod})`);
       await sendEnterKey(session.tmux_pane, enterMethod);
 
