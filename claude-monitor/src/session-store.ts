@@ -33,6 +33,16 @@ export class SessionStore {
     return this.sessions.get(sessionId);
   }
 
+  setPromptReady(sessionId: string, ready: boolean): Session | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    if (session.prompt_ready === ready) return session;
+    session.prompt_ready = ready;
+    session.updated_at = new Date().toISOString();
+    this.onChange(session);
+    return session;
+  }
+
   processEvent(event: HookEvent): Session {
     let session = this.sessions.get(event.session_id);
 
@@ -77,6 +87,7 @@ export class SessionStore {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     session.status = "error";
+    session.prompt_ready = false;
     session.error_info = errorInfo;
     session.error_at = new Date().toISOString();
     session.updated_at = new Date().toISOString();
@@ -87,6 +98,7 @@ export class SessionStore {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;
     session.status = "completed";
+    session.prompt_ready = false;
     session.last_message = message;
     session.updated_at = new Date().toISOString();
     this.onChange(session);
@@ -97,6 +109,7 @@ export class SessionStore {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== "error") return undefined;
     session.status = "idle";
+    session.prompt_ready = true;
     session.error_info = "";
     session.error_at = "";
     session.updated_at = new Date().toISOString();
@@ -111,6 +124,7 @@ export class SessionStore {
       return undefined;
     }
     session.status = "idle";
+    session.prompt_ready = true;
     session.questions = [];
     session.updated_at = new Date().toISOString();
     this.onChange(session);
@@ -130,6 +144,7 @@ export class SessionStore {
       cwd: event.cwd || "",
       model: event.model || "",
       status: "idle",
+      prompt_ready: true,
       status_text: "",
       cli_tool: cliTool,
       milestones: [],
@@ -157,12 +172,15 @@ export class SessionStore {
       session.error_info = "";
       session.error_at = "";
       session.status = "running";
+      session.prompt_ready = false;
     }
 
     switch (event.event_type) {
       case "SessionStart":
-        // 初期状態はidle（プロンプト入力可能）。UserPromptSubmitでrunningに遷移する。
+        // status は表示状態、prompt_ready は送信可能状態を表す（Copilot では分離制御）
+        // 初期状態は idle + prompt_ready=true（初回プロンプト入力可能）。
         session.status = "idle";
+        session.prompt_ready = true;
         if (event.cwd) session.cwd = event.cwd;
         if (event.model) session.model = event.model;
         if (event.tmux_pane && TMUX_PANE_ID_RE.test(event.tmux_pane)) {
@@ -190,12 +208,14 @@ export class SessionStore {
           session.last_hook_at = "";
           session.last_init_at = event.timestamp || new Date().toISOString();
           session.first_prompt_sent = false;
+          session.prompt_ready = true;
         }
         break;
 
       case "UserPromptSubmit": {
         // idle → running 復帰
         session.status = "running";
+        session.prompt_ready = false;
         session.current_progress = "";
         session.questions = [];
         // 初回プロンプトをタイトルとして保存（スラッシュコマンドは除外）
@@ -217,6 +237,7 @@ export class SessionStore {
         // elicitation_dialog は質問発生の通知
         if (event.notification_type === "elicitation_dialog") {
           session.status = "waiting_answer";
+          session.prompt_ready = false;
           if (event.questions && event.questions.length > 0) {
             session.questions = event.questions;
           }
@@ -224,6 +245,7 @@ export class SessionStore {
         // error 通知: MCP接続失敗等のエラーをセッションに反映
         if (event.notification_type === "error") {
           session.status = "error";
+          session.prompt_ready = false;
           session.error_info = event.message || "不明なエラー";
           session.error_at = event.timestamp || new Date().toISOString();
         }
@@ -233,15 +255,18 @@ export class SessionStore {
         // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
         if (session.cli_tool === "copilot" && session.status === "idle" && event.tool_name !== "AskUserQuestion") {
           session.status = "running";
+          session.prompt_ready = false;
         }
         if (event.tool_name === "AskUserQuestion") {
           session.status = "waiting_answer";
+          session.prompt_ready = false;
           if (event.questions && event.questions.length > 0) {
             session.questions = event.questions;
           }
         } else if (session.status === "waiting_answer") {
           // AskUserQuestion 以外のツールが来た場合、質問は終了している
           session.status = "running";
+          session.prompt_ready = false;
           session.questions = [];
         }
         // 作業工程テキストの更新（デデュプリケーション付き）
@@ -260,10 +285,12 @@ export class SessionStore {
         // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
         if (session.cli_tool === "copilot" && session.status === "idle") {
           session.status = "running";
+          session.prompt_ready = false;
         }
         // waiting_answer 状態で PostToolUse が来たら running に復帰（質問回答済み）
         if (session.status === "waiting_answer") {
           session.status = "running";
+          session.prompt_ready = false;
           session.questions = [];
         }
         // Write/Edit 時にファイルパスを成果物として記録 + last_activity を更新
@@ -286,6 +313,7 @@ export class SessionStore {
 
       case "Stop":
         session.status = "idle";
+        session.prompt_ready = true;
         session.current_progress = "";
         session.questions = [];
         session.error_info = "";
@@ -305,7 +333,7 @@ export class SessionStore {
 
       case "SessionEnd": {
         // Copilot CLI: reason に基づいてステータスを決定
-        // - "complete" → idle（ターン完了、次のプロンプト入力可能）
+        // - "complete" → idle + prompt_ready=false（次入力は pane monitor の安定判定で再許可）
         // - その他 → completed（セッション終了）
         // Claude Code: 従来通り常に completed
         if (session.cli_tool === "copilot") {
@@ -317,8 +345,10 @@ export class SessionStore {
             console.warn(`Copilot SessionEnd: unknown reason "${rawReason}", treating as session end`);
           }
           session.status = normalizedReason === "complete" ? "idle" : "completed";
+          session.prompt_ready = false;
         } else {
           session.status = "completed";
+          session.prompt_ready = false;
         }
         session.current_progress = "";
         session.questions = [];
@@ -353,6 +383,7 @@ export class SessionStore {
         const updatedAt = new Date(session.updated_at).getTime();
         if (now - updatedAt > STALENESS_TIMEOUT_MS) {
           session.status = "idle";
+          session.prompt_ready = true;
           session.updated_at = new Date().toISOString();
           this.onChange(session);
         }

@@ -50,6 +50,7 @@ export const COPILOT_HOOK_TIMEOUT_MS = 60_000;     // フック通信途絶時�
 export const COPILOT_NO_HOOK_TIMEOUT_MS = 120_000; // hooks 未到達時のフォールバック完了判定（120秒）
 export const COPILOT_NO_HOOK_HARD_TIMEOUT_MS = 10 * 60_000; // hooks 未到達時の最終上限（10分、commandAlive でも適用）
 export const COPILOT_GRACE_PERIOD_MS = 30_000;     // プレセッション作成後のグレースピリオド（30秒）
+export const COPILOT_PROMPT_READY_DELAY_MS = 5_000; // SessionEnd(complete) 後に再送信を許可する静穏期間
 
 // Copilot コマンド検出定数（用途別に分離）
 // 自動プレセッション作成用: 確実にCopilotと識別できるコマンドのみ（誤検出防止）
@@ -109,17 +110,25 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
       continue;
     }
 
-    // 条件 0.5: idle 状態 + コマンド生存 → 次のプロンプト入力待ちのためフックタイムアウトをスキップ
-    // SessionEnd(reason=complete) 後の idle セッションはフック通信が発生しないため、
-    // コマンド生存中はタイムアウト対象外とする（プロセス終了は commandAlive で検出）
+    const now = Date.now();
+
+    // 条件 0.5: idle + コマンド生存時はタイムアウトをスキップする。
+    // ただし Copilot は status(表示状態) と prompt_ready(送信可否) を分離するため、
+    // SessionEnd(reason=complete) 直後は prompt_ready=false のまま一定静穏期間待機し、後段で true に戻す。
     if (session.status === "idle" && commandAlive) {
+      if (!session.prompt_ready && session.last_hook_at) {
+        const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+        if (sinceLastHook >= COPILOT_PROMPT_READY_DELAY_MS) {
+          sessionStore.setPromptReady(sessionId, true);
+          console.debug(`Copilot session ${sessionId}: prompt_ready=true after quiet period (${sinceLastHook}ms)`);
+        }
+      }
       console.debug(`Copilot session ${sessionId}: idle with alive command ('${paneCommand}'), skipping hook timeout`);
       continue;
     }
 
     // 条件 1: コマンドが COPILOT_ALIVE_COMMANDS に含まれる
     // フック通信ベース判定と併用: 直近フック通信がある場合のみアクティブ維持
-    const now = Date.now();
     if (commandAlive) {
       const isFreshByHook = session.last_hook_at
         ? (now - new Date(session.last_hook_at).getTime()) < COPILOT_HOOK_TIMEOUT_MS
@@ -550,6 +559,10 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     }
     if (!session.tmux_pane) {
       res.status(400).json({ error: "tmux_pane not registered" });
+      return;
+    }
+    if (session.cli_tool === "copilot" && !session.prompt_ready) {
+      res.status(403).json({ error: "Copilot session is not ready for prompt input", errorCode: "PROMPT_NOT_READY" });
       return;
     }
     if (session.status !== "idle") {

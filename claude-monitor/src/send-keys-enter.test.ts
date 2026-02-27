@@ -189,6 +189,30 @@ describe("send-keys Enter 方式テスト", () => {
       .send({ text });
   }
 
+  it("Copilot prompt_ready=false: 403(PROMPT_NOT_READY) を返し send-keys は実行されない", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+
+    await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "copilot" });
+
+    const session = deps.sessionStore.get("copilot-pane-5")!;
+    session.prompt_ready = false;
+
+    mockExecFile.mockClear();
+
+    const res = await request(app)
+      .post("/api/sessions/copilot-pane-5/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text: "hello" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.errorCode).toBe("PROMPT_NOT_READY");
+    expect(getSendKeysCalls().length).toBe(0);
+  });
+
   // === Copilot セッション: C-u なしで送信 ===
 
   // TEST-001: Copilot send-keys 既定送信方式

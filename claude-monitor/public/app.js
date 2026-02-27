@@ -623,39 +623,52 @@ function renderCard(session) {
     html += renderErrorPanel(session);
   }
 
-  // Send Keys パネル（idle状態のみ）
+  // Send Keys パネル（idle + 送信可能状態のみ）
   if (session.status === 'idle') {
     if (session.tmux_pane) {
-      const templateList = Object.values(promptTemplates);
-      let templateOptions = `<option value="">-- テンプレート選択 --</option>`;
-      templateList.forEach(t => {
-        templateOptions += `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`;
-      });
+      const isCopilot = session.cli_tool === 'copilot';
+      const promptReady = !isCopilot || session.prompt_ready;
+      if (promptReady) {
+        const templateList = Object.values(promptTemplates);
+        let templateOptions = `<option value="">-- テンプレート選択 --</option>`;
+        templateList.forEach(t => {
+          templateOptions += `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`;
+        });
 
-      html += `
-        <div class="send-keys-panel" data-session-id="${escapeHtml(session.session_id)}">
-          <div class="send-keys-header">
-            <span>プロンプト入力</span>
-            <div class="send-keys-header-actions">
-              <button class="btn-history" data-session-id="${escapeHtml(session.session_id)}" title="送信履歴">&#128336;</button>
-              <select class="template-select" data-session-id="${escapeHtml(session.session_id)}">
-                ${templateOptions}
-              </select>
-              <button class="btn-template-manage" data-session-id="${escapeHtml(session.session_id)}" title="テンプレート管理">&#9881;</button>
+        html += `
+          <div class="send-keys-panel" data-session-id="${escapeHtml(session.session_id)}">
+            <div class="send-keys-header">
+              <span>プロンプト入力</span>
+              <div class="send-keys-header-actions">
+                <button class="btn-history" data-session-id="${escapeHtml(session.session_id)}" title="送信履歴">&#128336;</button>
+                <select class="template-select" data-session-id="${escapeHtml(session.session_id)}">
+                  ${templateOptions}
+                </select>
+                <button class="btn-template-manage" data-session-id="${escapeHtml(session.session_id)}" title="テンプレート管理">&#9881;</button>
+              </div>
+            </div>
+            <div class="prompt-history-popup" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
+            <div class="template-manage-panel" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
+            <div class="send-keys-input-row">
+              <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
+                        placeholder="プロンプトを入力（改行はスペースに変換されます）" rows="2"></textarea>
+              <button class="btn-send-keys" data-session-id="${escapeHtml(session.session_id)}">送信</button>
+            </div>
+            <div class="send-keys-footer">
+              <button class="btn-save-template" data-session-id="${escapeHtml(session.session_id)}">テンプレートとして保存</button>
             </div>
           </div>
-          <div class="prompt-history-popup" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
-          <div class="template-manage-panel" data-session-id="${escapeHtml(session.session_id)}" style="display:none;"></div>
-          <div class="send-keys-input-row">
-            <textarea class="send-keys-textarea" data-session-id="${escapeHtml(session.session_id)}"
-                      placeholder="プロンプトを入力（改行はスペースに変換されます）" rows="2"></textarea>
-            <button class="btn-send-keys" data-session-id="${escapeHtml(session.session_id)}">送信</button>
+        `;
+      } else {
+        const waitMessage = session.first_prompt_sent && !session.last_hook_at
+          ? 'Copilot 起動中です。しばらくお待ちください。'
+          : 'Copilot が処理中です。完了後に送信できます。';
+        html += `
+          <div class="send-keys-panel disabled">
+            <span class="tmux-not-connected">${escapeHtml(waitMessage)}</span>
           </div>
-          <div class="send-keys-footer">
-            <button class="btn-save-template" data-session-id="${escapeHtml(session.session_id)}">テンプレートとして保存</button>
-          </div>
-        </div>
-      `;
+        `;
+      }
     } else {
       html += `
         <div class="send-keys-panel disabled">
@@ -1446,7 +1459,11 @@ async function sendKeys(sessionId, text) {
       const data = await res.json();
       console.error('send-keys failed:', data.error);
       if (res.status === 403) {
-        addLogEntry('send-keys-error', sessionId, 'セッションがアクティブではありません');
+        if (data.errorCode === 'PROMPT_NOT_READY') {
+          addLogEntry('send-keys-error', sessionId, 'Copilot が処理中です。完了後に送信してください。');
+        } else {
+          addLogEntry('send-keys-error', sessionId, 'セッションがアクティブではありません');
+        }
       } else if (res.status === 409) {
         addLogEntry('send-keys-error', sessionId, 'Copilot 起動中です。しばらくお待ちください。');
       } else if (res.status === 422) {
@@ -1672,13 +1689,17 @@ function handleMessage(msg) {
           playQuestionSound();
           const qText = session.questions?.[0]?.question || '質問が発生しました';
           sendDesktopNotification('質問', qText);
-        } else if (session.status === 'idle') {
-          playIdleSound();
-          sendDesktopNotification('入力待ち', `セッション ${session.session_id.substring(0, 8)} が入力待ちです`);
         } else if (session.status === 'completed') {
           playCompletedSound();
           sendDesktopNotification('完了', `セッション ${session.session_id.substring(0, 8)} が完了しました`);
         }
+      }
+
+      const isIdleReady = session.status === 'idle' && (session.cli_tool !== 'copilot' || session.prompt_ready);
+      const wasIdleReady = !!prev && prev.status === 'idle' && (prev.cli_tool !== 'copilot' || prev.prompt_ready);
+      if (isIdleReady && !wasIdleReady) {
+        playIdleSound();
+        sendDesktopNotification('入力待ち', `セッション ${session.session_id.substring(0, 8)} が入力待ちです`);
       }
 
       addLogEntry(session.status, session.session_id, '');

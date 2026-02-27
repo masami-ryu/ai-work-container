@@ -627,6 +627,7 @@ describe("idle Copilot セッションの pane monitor フックタイムアウ�
     }));
     const session = sessionStore.get("copilot-pane-5")!;
     expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(false);
     // フック通信は SessionEnd 時点で止まっている（タイムアウト超過を模擬）
     session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
 
@@ -639,6 +640,7 @@ describe("idle Copilot セッションの pane monitor フックタイムアウ�
 
     await runPaneMonitorTick(deps);
     expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    expect(session.prompt_ready).toBe(true);
     sessionStore.destroy();
   });
 
@@ -659,6 +661,7 @@ describe("idle Copilot セッションの pane monitor フックタイムアウ�
       reason: "complete",
     }));
     const session = sessionStore.get("copilot-pane-5")!;
+    expect(session.prompt_ready).toBe(false);
     session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
 
     const deps = createDeps({
@@ -670,6 +673,7 @@ describe("idle Copilot セッションの pane monitor フックタイムアウ�
 
     await runPaneMonitorTick(deps);
     expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    expect(session.prompt_ready).toBe(true);
     sessionStore.destroy();
   });
 

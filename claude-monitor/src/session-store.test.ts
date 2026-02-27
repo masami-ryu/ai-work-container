@@ -377,6 +377,7 @@ describe("SessionStore SessionStart 再初期化", () => {
     // 値を手動設定して再初期化でリセットされることを検証
     session.last_hook_at = "2026-01-01T00:00:00Z";
     session.first_prompt_sent = true;
+    session.prompt_ready = false;
     const oldInitAt = session.last_init_at;
 
     // 少し遅延を入れて再初期化
@@ -390,6 +391,7 @@ describe("SessionStore SessionStart 再初期化", () => {
     const reinit = store.get("copilot-pane-5")!;
     expect(reinit.last_hook_at).toBe("");
     expect(reinit.first_prompt_sent).toBe(false);
+    expect(reinit.prompt_ready).toBe(true);
     expect(reinit.last_init_at).toBe(laterTimestamp);
     expect(reinit.last_init_at).not.toBe(oldInitAt);
     store.destroy();
@@ -403,6 +405,7 @@ describe("SessionStore SessionStart 再初期化", () => {
     expect(session.last_hook_at).toBe("");
     expect(session.last_init_at).toBeTruthy();
     expect(session.first_prompt_sent).toBe(false);
+    expect(session.prompt_ready).toBe(true);
     store.destroy();
   });
 
@@ -438,6 +441,7 @@ describe("Copilot SessionEnd reason ベースステータス遷移", () => {
     store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "cp1", cli_tool: "copilot", prompt: "hello" }));
     const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp1", cli_tool: "copilot", reason: "complete" }));
     expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(false);
     expect(session.current_progress).toBe("");
     expect(session.questions).toEqual([]);
     store.destroy();
@@ -568,6 +572,38 @@ describe("Copilot idle → running 復帰", () => {
       questions: [{ question: "Q?", header: "h", options: [], multiSelect: false }],
     }));
     expect(session.status).toBe("waiting_answer");
+    store.destroy();
+  });
+});
+
+describe("Copilot prompt_ready 遷移", () => {
+  it("SessionStart は prompt_ready=true で初期化される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp-ready-1", cli_tool: "copilot" }));
+    expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(true);
+    store.destroy();
+  });
+
+  it("UserPromptSubmit 後は prompt_ready=false になる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp-ready-2", cli_tool: "copilot" }));
+    const session = store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "cp-ready-2", cli_tool: "copilot", prompt: "hello" }));
+    expect(session.status).toBe("running");
+    expect(session.prompt_ready).toBe(false);
+    store.destroy();
+  });
+
+  it("問題シーケンス: UserPromptSubmit → SessionEnd(complete) でも prompt_ready は false を維持する", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "cp-ready-3", cli_tool: "copilot" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "cp-ready-3", cli_tool: "copilot", prompt: "hello" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "cp-ready-3", cli_tool: "copilot", reason: "complete" }));
+    expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(false);
     store.destroy();
   });
 });
