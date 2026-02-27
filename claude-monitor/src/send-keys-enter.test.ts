@@ -47,7 +47,10 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
   };
 }
 
-function createMockTmuxManager(): TmuxManager {
+function createMockTmuxManager(overrides?: {
+  checkPaneMode?: ReturnType<typeof vi.fn>;
+  cancelCopyMode?: ReturnType<typeof vi.fn>;
+}): TmuxManager {
   return {
     getTools: vi.fn().mockReturnValue([
       { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
@@ -59,6 +62,8 @@ function createMockTmuxManager(): TmuxManager {
     launchSession: vi.fn().mockResolvedValue({ ok: true, tmux_pane: "%5" }),
     killPane: vi.fn(),
     paneExists: vi.fn(),
+    checkPaneMode: overrides?.checkPaneMode ?? vi.fn().mockResolvedValue(false),
+    cancelCopyMode: overrides?.cancelCopyMode ?? vi.fn().mockResolvedValue(true),
     listActivePanes: vi.fn(),
     listActivePanesDetailed: vi.fn(),
     initialize: vi.fn(),
@@ -139,8 +144,11 @@ describe("send-keys Enter 方式テスト", () => {
   });
 
   /** Copilot idle セッションを準備し send-keys を送信。モック履歴クリア後に send-keys の呼び出しのみ検証可能。 */
-  async function sendKeysToCopilot(text: string): Promise<request.Response> {
-    deps = createTestDeps();
+  async function sendKeysToCopilot(text: string, tmuxOverrides?: {
+    checkPaneMode?: ReturnType<typeof vi.fn>;
+    cancelCopyMode?: ReturnType<typeof vi.fn>;
+  }): Promise<request.Response> {
+    deps = createTestDeps(tmuxOverrides ? { tmuxManager: createMockTmuxManager(tmuxOverrides) } : undefined);
     ({ app } = createApp(deps));
 
     // Copilot プレセッション作成（idle 状態）
@@ -303,6 +311,77 @@ describe("send-keys Enter 方式テスト", () => {
     expect(sendKeysCalls.length).toBe(3);
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%10", "C-u"]);
     expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%10", "-l", "world"]);
+    expect(sendKeysCalls[2][1]).toEqual(["send-keys", "-t", "%10", "Enter"]);
+  });
+
+  // === copy-mode ガードテスト ===
+
+  // Copilot 通常送信（pane_in_mode=0）: ガードを通過して text + Enter が送信される
+  it("Copilot pane_in_mode=0: ガード通過し text + Enter を送信する", async () => {
+    delete process.env.COPILOT_PROMPT_ENTER_METHOD;
+    delete process.env.COPILOT_ENTER_METHOD;
+
+    const checkPaneMode = vi.fn().mockResolvedValue(false);
+    const res = await sendKeysToCopilot("hello", { checkPaneMode });
+    expect(res.status).toBe(200);
+
+    expect(checkPaneMode).toHaveBeenCalledWith("%5");
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(2);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
+  });
+
+  // copy-mode 復帰成功時: cancel 後に text + Enter が送信される
+  it("Copilot copy-mode 復帰成功: cancelCopyMode 後に text + Enter を送信する", async () => {
+    delete process.env.COPILOT_PROMPT_ENTER_METHOD;
+    delete process.env.COPILOT_ENTER_METHOD;
+
+    const checkPaneMode = vi.fn().mockResolvedValue(true);
+    const cancelCopyMode = vi.fn().mockResolvedValue(true);
+    const res = await sendKeysToCopilot("hello", { checkPaneMode, cancelCopyMode });
+    expect(res.status).toBe(200);
+
+    expect(checkPaneMode).toHaveBeenCalledWith("%5");
+    expect(cancelCopyMode).toHaveBeenCalledWith("%5");
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(2);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
+  });
+
+  // copy-mode 復帰失敗時: 422 を返し、text/Enter の send-keys は実行されない
+  it("Copilot copy-mode 復帰失敗: 422 + COPY_MODE_STUCK を返し send-keys は実行されない", async () => {
+    delete process.env.COPILOT_PROMPT_ENTER_METHOD;
+    delete process.env.COPILOT_ENTER_METHOD;
+
+    const checkPaneMode = vi.fn().mockResolvedValue(true);
+    const cancelCopyMode = vi.fn().mockResolvedValue(false);
+    const res = await sendKeysToCopilot("hello", { checkPaneMode, cancelCopyMode });
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      error: "Pane is in copy-mode and recovery failed",
+      errorCode: "COPY_MODE_STUCK",
+    });
+
+    // text/Enter の send-keys は実行されない
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(0);
+  });
+
+  // 非 Copilot セッションでは copy-mode ガードが適用されない（回帰テスト）
+  it("非 Copilot (Claude) セッション: copy-mode ガードは適用されず C-u + text + Enter を維持する", async () => {
+    delete process.env.COPILOT_PROMPT_ENTER_METHOD;
+    delete process.env.COPILOT_ENTER_METHOD;
+
+    // checkPaneMode を true にしても非 Copilot には影響しないことを確認
+    const res = await sendKeysToClaude("hello");
+    expect(res.status).toBe(200);
+
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(3);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%10", "C-u"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%10", "-l", "hello"]);
     expect(sendKeysCalls[2][1]).toEqual(["send-keys", "-t", "%10", "Enter"]);
   });
 });

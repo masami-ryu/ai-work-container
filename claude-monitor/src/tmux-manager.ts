@@ -223,6 +223,53 @@ export class TmuxManager {
     }
   }
 
+  // 指定ペインが copy-mode 等の入力不可状態か確認
+  // true = copy-mode 中、false = 通常状態
+  // pane未検出時は false、tmux実行エラー時は例外を送出（paneExists パターン準拠）
+  async checkPaneMode(paneId: string): Promise<boolean> {
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      return false;
+    }
+    try {
+      const { stdout } = await execFileAsync("tmux", [
+        "display-message", "-t", paneId, "-p", "#{pane_in_mode}",
+      ]);
+      return stdout.trim() === "1";
+    } catch (e: unknown) {
+      const stderr = (e as { stderr?: string }).stderr ?? "";
+      const msg = stderr || (e as Error).message || "";
+      if (/can.t find|no such|not found/i.test(msg)) {
+        return false;
+      }
+      throw e;
+    }
+  }
+
+  // copy-mode を解除し、再判定で通常状態に復帰したか確認
+  // true = 復帰成功（再判定で pane_in_mode=0）、false = 復帰失敗
+  // pane未検出時は false、tmux実行エラー時は例外を送出（paneExists パターン準拠）
+  async cancelCopyMode(paneId: string): Promise<boolean> {
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      return false;
+    }
+    try {
+      await execFileAsync("tmux", ["send-keys", "-t", paneId, "-X", "cancel"]);
+    } catch (e: unknown) {
+      const stderr = (e as { stderr?: string }).stderr ?? "";
+      const msg = stderr || (e as Error).message || "";
+      if (/can.t find|no such|not found/i.test(msg)) {
+        return false;
+      }
+      // レースで既に通常モードへ戻っている場合は再判定へ進める
+      if (/not in (?:a )?mode/i.test(msg)) {
+        return !(await this.checkPaneMode(paneId));
+      }
+      throw e;
+    }
+    // 再判定: cancel 後に copy-mode が解除されたか確認
+    return !(await this.checkPaneMode(paneId));
+  }
+
   // shutdown時にフラグを立て、以降のlaunchSessionを拒否する
   destroy(): void {
     this.destroyed = true;
@@ -461,4 +508,3 @@ export class TmuxManager {
     return paneId;
   }
 }
-

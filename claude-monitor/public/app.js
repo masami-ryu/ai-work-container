@@ -1449,6 +1449,12 @@ async function sendKeys(sessionId, text) {
         addLogEntry('send-keys-error', sessionId, 'セッションがアクティブではありません');
       } else if (res.status === 409) {
         addLogEntry('send-keys-error', sessionId, 'Copilot 起動中です。しばらくお待ちください。');
+      } else if (res.status === 422) {
+        if (data.errorCode === 'COPY_MODE_STUCK') {
+          addLogEntry('send-keys-error', sessionId, 'tmux が copy-mode のため送信できません。手動で q キーを押して解除してください。');
+        } else {
+          addLogEntry('send-keys-error', sessionId, data.error || 'ペイン状態異常で送信できません');
+        }
       } else if (res.status === 500) {
         addLogEntry('send-keys-error', sessionId, '送信に失敗しました');
       } else {

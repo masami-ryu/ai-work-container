@@ -582,6 +582,21 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     const sanitizedText = text.replace(/\r?\n/g, " ");
 
     try {
+      // Copilot セッション: pane mode ガード（copy-mode 等の入力不可状態を検出・復帰）
+      if (session.cli_tool === "copilot") {
+        const inMode = await tmuxManager.checkPaneMode(session.tmux_pane);
+        if (inMode) {
+          console.log(`send-keys [${session.session_id}]: pane in copy-mode, attempting recovery`);
+          const recovered = await tmuxManager.cancelCopyMode(session.tmux_pane);
+          if (!recovered) {
+            console.warn(`send-keys [${session.session_id}]: copy-mode recovery failed`);
+            res.status(422).json({ error: "Pane is in copy-mode and recovery failed", errorCode: "COPY_MODE_STUCK" });
+            return;
+          }
+          console.log(`send-keys [${session.session_id}]: copy-mode recovery succeeded`);
+        }
+      }
+
       // Copilot セッションでは行クリア（C-u）を送信しない
       // Copilot CLI v0.0.418 では C-u → text → Enter のシーケンスで実行が開始されないため
       if (session.cli_tool !== "copilot") {
