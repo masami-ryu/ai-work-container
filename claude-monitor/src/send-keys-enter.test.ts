@@ -245,7 +245,7 @@ describe("send-keys Enter 方式テスト", () => {
   // === Copilot セッション: C-u なしで送信 ===
 
   // TEST-001: Copilot send-keys 既定送信方式
-  it("Copilot デフォルト: C-u なしで text + C-m を送信する", async () => {
+  it("Copilot デフォルト: C-u なしで text + Enter を送信する", async () => {
     delete process.env.COPILOT_PROMPT_ENTER_METHOD;
     delete process.env.COPILOT_ENTER_METHOD;
 
@@ -253,12 +253,12 @@ describe("send-keys Enter 方式テスト", () => {
     expect(res.status).toBe(200);
 
     const sendKeysCalls = getSendKeysCalls();
-    // テキスト送信 + C-m 送信 = 2 呼び出し（C-u なし）
+    // テキスト送信 + Enter 送信 = 2 呼び出し（C-u なし）
     expect(sendKeysCalls.length).toBe(2);
     // 1番目がテキスト送信
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
-    // 2番目が C-m 送信
-    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "C-m"]);
+    // 2番目が Enter 送信
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
   });
 
   // TEST-001: COPILOT_PROMPT_ENTER_METHOD=c-m 指定時
@@ -275,8 +275,8 @@ describe("send-keys Enter 方式テスト", () => {
     expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "C-m"]);
   });
 
-  // フォールバック: COPILOT_ENTER_METHOD のみ設定時
-  it("Copilot COPILOT_ENTER_METHOD のみ設定: C-u なしでフォールバック値を使用する", async () => {
+  // COPILOT_ENTER_METHOD のみ設定時: send-keys は Enter を維持（auto-approve 専用設定）
+  it("Copilot COPILOT_ENTER_METHOD のみ設定: send-keys は Enter を使用する", async () => {
     delete process.env.COPILOT_PROMPT_ENTER_METHOD;
     process.env.COPILOT_ENTER_METHOD = "c-m";
 
@@ -286,7 +286,7 @@ describe("send-keys Enter 方式テスト", () => {
     const sendKeysCalls = getSendKeysCalls();
     expect(sendKeysCalls.length).toBe(2);
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
-    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "C-m"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
   });
 
   // 責務分離の非干渉検証
@@ -411,8 +411,8 @@ describe("send-keys Enter 方式テスト", () => {
 
   // === copy-mode ガードテスト ===
 
-  // Copilot 通常送信（pane_in_mode=0）: ガードを通過して text + C-m が送信される
-  it("Copilot pane_in_mode=0: ガード通過し text + C-m を送信する", async () => {
+  // Copilot 通常送信（pane_in_mode=0）: ガードを通過して text + Enter が送信される
+  it("Copilot pane_in_mode=0: ガード通過し text + Enter を送信する", async () => {
     delete process.env.COPILOT_PROMPT_ENTER_METHOD;
     delete process.env.COPILOT_ENTER_METHOD;
 
@@ -424,11 +424,11 @@ describe("send-keys Enter 方式テスト", () => {
     const sendKeysCalls = getSendKeysCalls();
     expect(sendKeysCalls.length).toBe(2);
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
-    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "C-m"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
   });
 
-  // copy-mode 復帰成功時: cancel 後に text + C-m が送信される
-  it("Copilot copy-mode 復帰成功: cancelCopyMode 後に text + C-m を送信する", async () => {
+  // copy-mode 復帰成功時: cancel 後に text + Enter が送信される
+  it("Copilot copy-mode 復帰成功: cancelCopyMode 後に text + Enter を送信する", async () => {
     delete process.env.COPILOT_PROMPT_ENTER_METHOD;
     delete process.env.COPILOT_ENTER_METHOD;
 
@@ -442,7 +442,7 @@ describe("send-keys Enter 方式テスト", () => {
     const sendKeysCalls = getSendKeysCalls();
     expect(sendKeysCalls.length).toBe(2);
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
-    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "C-m"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
   });
 
   // copy-mode 復帰失敗時: 422 を返し、text/Enter の send-keys は実行されない

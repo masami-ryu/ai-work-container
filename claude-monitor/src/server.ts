@@ -717,11 +717,12 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
 
       // Enter 送信方式
-      // - Copilot: COPILOT_PROMPT_ENTER_METHOD > COPILOT_ENTER_METHOD > "c-m"
+      // - Copilot(send-keys): COPILOT_PROMPT_ENTER_METHOD > "enter"
+      //   ※ COPILOT_ENTER_METHOD は auto-approve 専用
       // - Codex: CODEX_PROMPT_ENTER_METHOD > CODEX_ENTER_METHOD > "enter-delay"
       // - 非 Copilot/Codex（Claude 等）: 常に "enter"
       const enterMethod = session.cli_tool === "copilot"
-        ? (process.env.COPILOT_PROMPT_ENTER_METHOD || process.env.COPILOT_ENTER_METHOD || "c-m")
+        ? (process.env.COPILOT_PROMPT_ENTER_METHOD || "enter")
         : session.cli_tool === "codex"
         ? (process.env.CODEX_PROMPT_ENTER_METHOD || process.env.CODEX_ENTER_METHOD || "enter-delay")
         : "enter";
