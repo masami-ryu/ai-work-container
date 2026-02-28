@@ -848,6 +848,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       console.warn("killPane skipped: pane already absent");
     }
 
+    console.log(`[manual_close] session ${id}: manual close requested`);
     completeSessionWithCleanup(id, "セッションを手動で終了しました");
     res.json({ ok: true });
   });

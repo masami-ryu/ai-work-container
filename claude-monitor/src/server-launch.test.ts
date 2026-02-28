@@ -1,4 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// child_process.execFile をモック（server.ts 内の promisify(execFile) に影響）
+const { mockExecFile } = vi.hoisted(() => ({
+  mockExecFile: vi.fn(),
+}));
+vi.mock("child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("child_process")>();
+  return {
+    ...actual,
+    execFile: mockExecFile,
+  };
+});
+
 import request from "supertest";
 import { createApp, type ServerDeps, type CreateAppResult } from "./server.js";
 import { SessionStore } from "./session-store.js";
@@ -46,6 +59,8 @@ function createMockTmuxManager(): TmuxManager {
     launchSession: vi.fn().mockResolvedValue({ ok: true, tmux_pane: "%5" }),
     killPane: vi.fn(),
     paneExists: vi.fn(),
+    checkPaneMode: vi.fn().mockResolvedValue(false),
+    cancelCopyMode: vi.fn().mockResolvedValue(true),
     listActivePanes: vi.fn(),
     listActivePanesDetailed: vi.fn(),
     initialize: vi.fn(),
@@ -538,7 +553,8 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
   });
 
   it("send-keys: Copilot 初回送信は idle チェックを通過し first_prompt_sent が更新される", async () => {
-    // tmux send-keys は成功するようにモック
+    setupExecFileSuccess();
+
     const mockTmux = createMockTmuxManager();
     deps = createTestDeps({ tmuxManager: mockTmux });
     ({ app } = createApp(deps));
@@ -552,16 +568,16 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
     const session = deps.sessionStore.get("copilot-pane-5")!;
     expect(session.first_prompt_sent).toBe(false);
 
-    // send-keys は tmux を呼ぶが、テスト環境では tmux がないため 500 になる
-    // ただし Copilot 固有チェック（409）は通過することを確認
     const res = await request(app)
       .post("/api/sessions/copilot-pane-5/send-keys")
       .set("Origin", "http://localhost:3456")
       .send({ text: "hello" });
 
-    // tmux がないため 500 だが、403 や 409 ではないことを確認
-    expect(res.status).not.toBe(403);
-    expect(res.status).not.toBe(409);
+    // tmux モック成功により 200 が返り、first_prompt_sent が更新される
+    expect(res.status).toBe(200);
+    expect(session.first_prompt_sent).toBe(true);
+
+    mockExecFile.mockReset();
   });
 
   it("/api/events で last_hook_at が更新される", async () => {
@@ -609,11 +625,24 @@ function createMockTmuxManagerWithCodex(): TmuxManager {
     launchSession: vi.fn().mockResolvedValue({ ok: true, tmux_pane: "%8" }),
     killPane: vi.fn(),
     paneExists: vi.fn(),
+    checkPaneMode: vi.fn().mockResolvedValue(false),
+    cancelCopyMode: vi.fn().mockResolvedValue(true),
     listActivePanes: vi.fn(),
     listActivePanesDetailed: vi.fn(),
     initialize: vi.fn(),
     destroy: vi.fn(),
   } as unknown as TmuxManager;
+}
+
+/** execFile 成功モックを設定 */
+function setupExecFileSuccess(): void {
+  mockExecFile.mockImplementation((...args: unknown[]) => {
+    const cb = args[args.length - 1];
+    if (typeof cb === "function") {
+      (cb as (err: null, stdout: string, stderr: string) => void)(null, "", "");
+    }
+    return { on: vi.fn(), kill: vi.fn() };
+  });
 }
 
 describe("Launch API codex バリデーション", () => {
@@ -712,6 +741,8 @@ describe("Codex send-keys last_run_started_at 更新", () => {
   });
 
   it("TASK-013: send-keys で idle → running 遷移した際に last_run_started_at が設定される", async () => {
+    setupExecFileSuccess();
+
     // Codex プレセッション作成
     await request(app)
       .post("/api/sessions/launch")
@@ -722,31 +753,23 @@ describe("Codex send-keys last_run_started_at 更新", () => {
     expect(session.status).toBe("idle");
     expect(session.last_run_started_at).toBe("");
 
-    // send-keys を実行（tmux がないため 500 になるが、前段チェック通過を確認）
     const beforeSend = Date.now();
     const res = await request(app)
       .post("/api/sessions/codex-pane-8/send-keys")
       .set("Origin", "http://localhost:3456")
       .send({ text: "fix the bug" });
 
-    // tmux 未接続で 500 だが、send-keys の合成状態更新は tmux 操作の後なので
-    // 403/409 でないことを確認（前段チェック通過）
-    expect(res.status).not.toBe(403);
-    expect(res.status).not.toBe(409);
+    // tmux モック成功により 200 が返る
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
 
-    // tmux 操作が成功した場合の動作を検証するため、直接合成状態更新をテスト
-    // send-keys 成功時の状態更新ロジックを直接検証
-    if (session.status === "idle") {
-      // tmux が失敗した場合、idle のまま → 手動で合成状態更新を模擬
-      session.status = "running";
-      session.prompt_ready = false;
-      session.last_run_started_at = new Date().toISOString();
-      session.updated_at = new Date().toISOString();
-    }
-
+    // SUT の合成状態更新ロジックにより running に遷移している
     expect(session.status).toBe("running");
+    expect(session.prompt_ready).toBe(false);
     expect(session.last_run_started_at).toBeTruthy();
     const runStartedAt = new Date(session.last_run_started_at).getTime();
     expect(runStartedAt).toBeGreaterThanOrEqual(beforeSend);
+
+    mockExecFile.mockReset();
   });
 });
