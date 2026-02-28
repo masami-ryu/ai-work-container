@@ -179,11 +179,55 @@ async function launchSession(groupId) {
     toolId = tools[idx].id;
   }
 
+  // Codex モード選択
+  let codexMode = undefined;
+  let codexTarget = undefined;
+  let codexAll = undefined;
+  if (toolId === 'codex') {
+    const modeChoice = prompt('Codex 起動モードを選択:\n1: new（新規）\n2: resume（再開）\n3: fork（分岐）');
+    if (!modeChoice) return;
+    const modeMap = { '1': 'new', '2': 'resume', '3': 'fork' };
+    codexMode = modeMap[modeChoice];
+    if (!codexMode) return;
+
+    if (codexMode === 'resume' || codexMode === 'fork') {
+      // セッション一覧を取得して選択
+      try {
+        const sessRes = await fetch('/api/codex/sessions');
+        if (sessRes.ok) {
+          const codexSessions = await sessRes.json();
+          if (codexSessions.length > 0) {
+            let pickMsg = `対象セッションを選択（空欄で --last）:\n`;
+            pickMsg += codexSessions.slice(0, 10).map((s, i) =>
+              `${i + 1}: ${s.id.substring(0, 12)}... (${s.cwd || '?'}) ${s.timestamp}`
+            ).join('\n');
+            const pickChoice = prompt(pickMsg);
+            if (pickChoice) {
+              const pickIdx = parseInt(pickChoice, 10) - 1;
+              if (pickIdx >= 0 && pickIdx < codexSessions.length) {
+                codexTarget = codexSessions[pickIdx].id;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch codex sessions:', e);
+      }
+
+      // --all フラグ
+      const useAll = confirm('--all フラグを使用しますか？（CWDスコープを無視して全セッションを対象にします）');
+      if (useAll) codexAll = true;
+    }
+  }
+
   const btn = document.getElementById('group-launch-btn');
   if (btn) { btn.disabled = true; btn.textContent = '起動中...'; }
   try {
     const body = { tool_id: toolId };
     if (groupId) body.group_id = groupId;
+    if (codexMode) body.codex_mode = codexMode;
+    if (codexTarget) body.codex_target = codexTarget;
+    if (codexAll) body.codex_all = codexAll;
     const res = await fetch('/api/sessions/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -534,6 +578,8 @@ function renderCard(session) {
   const cliTool = session.cli_tool || 'claude';
   const cliToolBadge = cliTool === 'copilot'
     ? '<span class="cli-tool-badge badge-copilot">Copilot</span>'
+    : cliTool === 'codex'
+    ? '<span class="cli-tool-badge badge-codex">Codex</span>'
     : '<span class="cli-tool-badge badge-claude">Claude</span>';
 
   let html = `
@@ -623,11 +669,16 @@ function renderCard(session) {
     html += renderErrorPanel(session);
   }
 
+  // external_session_id 表示（Codex thread-id）
+  if (session.external_session_id) {
+    html += `<div class="card-info"><span class="label">Thread ID:</span>${escapeHtml(session.external_session_id)}</div>`;
+  }
+
   // Send Keys パネル（idle + 送信可能状態のみ）
   if (session.status === 'idle') {
     if (session.tmux_pane) {
-      const isCopilot = session.cli_tool === 'copilot';
-      const promptReady = !isCopilot || session.prompt_ready;
+      const needsPromptReady = session.cli_tool === 'copilot' || session.cli_tool === 'codex';
+      const promptReady = !needsPromptReady || session.prompt_ready;
       if (promptReady) {
         const templateList = Object.values(promptTemplates);
         let templateOptions = `<option value="">-- テンプレート選択 --</option>`;
@@ -660,9 +711,10 @@ function renderCard(session) {
           </div>
         `;
       } else {
+        const toolLabel = session.cli_tool === 'codex' ? 'Codex' : 'Copilot';
         const waitMessage = session.first_prompt_sent && !session.last_hook_at
-          ? 'Copilot 起動中です。しばらくお待ちください。'
-          : 'Copilot が処理中です。完了後に送信できます。';
+          ? `${toolLabel} 起動中です。しばらくお待ちください。`
+          : `${toolLabel} が処理中です。完了後に送信できます。`;
         html += `
           <div class="send-keys-panel disabled">
             <span class="tmux-not-connected">${escapeHtml(waitMessage)}</span>
@@ -1460,12 +1512,12 @@ async function sendKeys(sessionId, text) {
       console.error('send-keys failed:', data.error);
       if (res.status === 403) {
         if (data.errorCode === 'PROMPT_NOT_READY') {
-          addLogEntry('send-keys-error', sessionId, 'Copilot が処理中です。完了後に送信してください。');
+          addLogEntry('send-keys-error', sessionId, 'CLI が処理中です。完了後に送信してください。');
         } else {
           addLogEntry('send-keys-error', sessionId, 'セッションがアクティブではありません');
         }
       } else if (res.status === 409) {
-        addLogEntry('send-keys-error', sessionId, 'Copilot 起動中です。しばらくお待ちください。');
+        addLogEntry('send-keys-error', sessionId, 'CLI 起動中です。しばらくお待ちください。');
       } else if (res.status === 422) {
         if (data.errorCode === 'COPY_MODE_STUCK') {
           addLogEntry('send-keys-error', sessionId, 'tmux が copy-mode のため送信できません。手動で q キーを押して解除してください。');
@@ -1695,8 +1747,10 @@ function handleMessage(msg) {
         }
       }
 
-      const isIdleReady = session.status === 'idle' && (session.cli_tool !== 'copilot' || session.prompt_ready);
-      const wasIdleReady = !!prev && prev.status === 'idle' && (prev.cli_tool !== 'copilot' || prev.prompt_ready);
+      const needsPromptReady = session.cli_tool === 'copilot' || session.cli_tool === 'codex';
+      const isIdleReady = session.status === 'idle' && (!needsPromptReady || session.prompt_ready);
+      const prevNeedsPromptReady = !!prev && (prev.cli_tool === 'copilot' || prev.cli_tool === 'codex');
+      const wasIdleReady = !!prev && prev.status === 'idle' && (!prevNeedsPromptReady || prev.prompt_ready);
       if (isIdleReady && !wasIdleReady) {
         playIdleSound();
         sendDesktopNotification('入力待ち', `セッション ${session.session_id.substring(0, 8)} が入力待ちです`);

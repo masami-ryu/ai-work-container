@@ -137,7 +137,9 @@ export class SessionStore {
 
   private createSession(event: HookEvent): Session {
     // cli_tool: 省略時（既存 Claude Code 経路）は "claude" をデフォルト補完
-    const cliTool: CliToolType = (event.cli_tool === "copilot") ? "copilot" : "claude";
+    const cliTool: CliToolType = (event.cli_tool === "copilot") ? "copilot"
+      : (event.cli_tool === "codex") ? "codex"
+      : "claude";
     const now = event.timestamp || new Date().toISOString();
     return {
       session_id: event.session_id,
@@ -158,6 +160,7 @@ export class SessionStore {
       last_hook_at: "",
       last_init_at: now,
       first_prompt_sent: false,
+      external_session_id: "",
       error_info: "",
       error_at: "",
       created_at: now,
@@ -188,12 +191,12 @@ export class SessionStore {
         } else if (event.tmux_pane) {
           console.warn(`Invalid tmux_pane format (expected %%N): ${event.tmux_pane}`);
         }
-        // cli_tool の更新 + Copilot セッション再初期化
-        // Copilot は tmux pane ID ベースの固定 session_id を使うため、
+        // cli_tool の更新 + Copilot/Codex セッション再初期化
+        // Copilot/Codex は tmux pane ID ベースの固定 session_id を使うため、
         // 同一 pane での連続起動時に前回データをクリアする必要がある。
         // Claude Code は UUID ベースの一意 session_id のため再初期化不要。
-        if (event.cli_tool === "copilot") {
-          session.cli_tool = "copilot";
+        if (event.cli_tool === "copilot" || event.cli_tool === "codex") {
+          session.cli_tool = event.cli_tool;
           session.activities = [];
           session.milestones = [];
           session.artifacts = [];
@@ -208,6 +211,7 @@ export class SessionStore {
           session.last_hook_at = "";
           session.last_init_at = event.timestamp || new Date().toISOString();
           session.first_prompt_sent = false;
+          session.external_session_id = "";
           session.prompt_ready = true;
         }
         break;
@@ -252,8 +256,8 @@ export class SessionStore {
         break;
 
       case "PreToolUse":
-        // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
-        if (session.cli_tool === "copilot" && session.status === "idle" && event.tool_name !== "AskUserQuestion") {
+        // Copilot/Codex: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
+        if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && session.status === "idle" && event.tool_name !== "AskUserQuestion") {
           session.status = "running";
           session.prompt_ready = false;
         }
@@ -282,8 +286,8 @@ export class SessionStore {
         break;
 
       case "PostToolUse":
-        // Copilot: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
-        if (session.cli_tool === "copilot" && session.status === "idle") {
+        // Copilot/Codex: idle → running 復帰（sessionEnd(complete)→idle 後のツール使用）
+        if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && session.status === "idle") {
           session.status = "running";
           session.prompt_ready = false;
         }
@@ -335,7 +339,7 @@ export class SessionStore {
         // Copilot CLI: reason に基づいてステータスを決定
         // - "complete" → idle + prompt_ready=false（次入力は pane monitor の安定判定で再許可）
         // - その他 → completed（セッション終了）
-        // Claude Code: 従来通り常に completed
+        // Claude Code / Codex: 従来通り常に completed
         if (session.cli_tool === "copilot") {
           const rawReason = event.reason || "";
           const COPILOT_REASON_ALIASES: Record<string, string> = { user_quit: "user_exit" };

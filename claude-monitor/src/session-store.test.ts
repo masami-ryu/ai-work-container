@@ -607,3 +607,201 @@ describe("Copilot prompt_ready 遷移", () => {
     store.destroy();
   });
 });
+
+// ============================================================
+// Codex CLI 統合テスト
+// ============================================================
+
+describe("Codex createSession with cli_tool", () => {
+  it("createSession with cli_tool='codex' sets cli_tool correctly", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }));
+    expect(session.cli_tool).toBe("codex");
+    expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(true);
+    expect(session.external_session_id).toBe("");
+    expect(session.last_hook_at).toBe("");
+    expect(session.first_prompt_sent).toBe(false);
+    store.destroy();
+  });
+});
+
+describe("Codex SessionStart 再初期化", () => {
+  it("Codex セッションで SessionStart 再受信時にデータがクリアされる（external_session_id 含む）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // 初回起動
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "fix bug" }));
+    store.processEvent(makeEvent({ event_type: "PostToolUse", session_id: "codex-pane-7", cli_tool: "codex", tool_name: "Write", file_path: "/tmp/test.ts" }));
+    store.processEvent(makeEvent({ event_type: "Stop", session_id: "codex-pane-7", cli_tool: "codex", last_message: "完了" }));
+
+    const before = store.get("codex-pane-7")!;
+    expect(before.title).toBe("fix bug");
+    expect(before.artifacts.length).toBe(1);
+    // external_session_id を手動設定（フック経由で設定される想定）
+    before.external_session_id = "thread-abc-123";
+
+    // 同一 pane で Codex 再起動
+    const session = store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(session.status).toBe("idle");
+    expect(session.title).toBe("");
+    expect(session.artifacts).toEqual([]);
+    expect(session.activities).toEqual([]);
+    expect(session.milestones).toEqual([]);
+    expect(session.last_message).toBe("");
+    expect(session.external_session_id).toBe("");
+    store.destroy();
+  });
+});
+
+describe("Codex SessionEnd は常に completed に遷移", () => {
+  it("Codex SessionEnd reason=complete → completed（Copilot のように idle にはならない）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "hello" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "codex-pane-7", cli_tool: "codex", reason: "complete" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("Codex SessionEnd reason=user_exit → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "codex-pane-7", cli_tool: "codex", reason: "user_exit" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+
+  it("Codex SessionEnd reason='' → completed", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    const session = store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "codex-pane-7", cli_tool: "codex", reason: "" }));
+    expect(session.status).toBe("completed");
+    store.destroy();
+  });
+});
+
+describe("Codex idle → running 復帰", () => {
+  it("Codex idle + PreToolUse(non-AskUserQuestion) → running", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(store.get("codex-pane-7")!.status).toBe("idle");
+
+    const session = store.processEvent(makeEvent({ event_type: "PreToolUse", session_id: "codex-pane-7", cli_tool: "codex", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    store.destroy();
+  });
+
+  it("Codex idle + PostToolUse → running", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(store.get("codex-pane-7")!.status).toBe("idle");
+
+    const session = store.processEvent(makeEvent({ event_type: "PostToolUse", session_id: "codex-pane-7", cli_tool: "codex", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    store.destroy();
+  });
+
+  it("Codex idle + PreToolUse(AskUserQuestion) → waiting_answer（idle→running 復帰はスキップ）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    const session = store.processEvent(makeEvent({
+      event_type: "PreToolUse",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      tool_name: "AskUserQuestion",
+      questions: [{ question: "Q?", header: "h", options: [], multiSelect: false }],
+    }));
+    expect(session.status).toBe("waiting_answer");
+    store.destroy();
+  });
+});
+
+describe("Codex error → recovery via ERROR_RECOVERY_EVENTS", () => {
+  it("Codex error + PreToolUse → running（自動復帰）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "hello" }));
+    store.processEvent(makeEvent({ event_type: "Notification", session_id: "codex-pane-7", notification_type: "error", message: "MCP接続失敗" }));
+    expect(store.get("codex-pane-7")!.status).toBe("error");
+
+    const session = store.processEvent(makeEvent({ event_type: "PreToolUse", session_id: "codex-pane-7", cli_tool: "codex", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    expect(session.error_info).toBe("");
+    expect(session.error_at).toBe("");
+    store.destroy();
+  });
+
+  it("Codex error + PostToolUse → running（自動復帰）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "hello" }));
+    store.processEvent(makeEvent({ event_type: "Notification", session_id: "codex-pane-7", notification_type: "error", message: "エラー" }));
+    expect(store.get("codex-pane-7")!.status).toBe("error");
+
+    const session = store.processEvent(makeEvent({ event_type: "PostToolUse", session_id: "codex-pane-7", cli_tool: "codex", tool_name: "Read" }));
+    expect(session.status).toBe("running");
+    expect(session.error_info).toBe("");
+    store.destroy();
+  });
+
+  it("Codex error + UserPromptSubmit → running（復帰する）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "Notification", session_id: "codex-pane-7", notification_type: "error", message: "エラー" }));
+    expect(store.get("codex-pane-7")!.status).toBe("error");
+
+    const session = store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "retry" }));
+    expect(session.status).toBe("running");
+    expect(session.error_info).toBe("");
+    store.destroy();
+  });
+
+  it("Codex error + SessionStart → idle（復帰する）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "Notification", session_id: "codex-pane-7", notification_type: "error", message: "エラー" }));
+    expect(store.get("codex-pane-7")!.status).toBe("error");
+
+    const session = store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(session.status).toBe("idle");
+    expect(session.error_info).toBe("");
+    store.destroy();
+  });
+});
+
+describe("Codex 同一 pane 再起動で external_session_id がリセットされる", () => {
+  it("same pane re-launch resets external_session_id", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // 初回セッション作成
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    const session = store.get("codex-pane-7")!;
+    // フック経由で external_session_id が設定される想定
+    session.external_session_id = "thread-xyz-456";
+    expect(session.external_session_id).toBe("thread-xyz-456");
+
+    // 同一 pane で再起動（SessionStart 再受信）
+    const reInitSession = store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(reInitSession.external_session_id).toBe("");
+    expect(reInitSession.status).toBe("idle");
+    expect(reInitSession.first_prompt_sent).toBe(false);
+    store.destroy();
+  });
+});

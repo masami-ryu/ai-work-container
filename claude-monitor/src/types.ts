@@ -8,7 +8,7 @@ export type SessionStatus =
   | "completed";
 
 // CLIツール種別
-export type CliToolType = "claude" | "copilot";
+export type CliToolType = "claude" | "copilot" | "codex";
 
 // セッション
 export interface Session {
@@ -30,6 +30,7 @@ export interface Session {
   last_init_at: string; // ISO 8601 — 最終初期化時刻（SessionStart/再初期化時に更新）
   first_prompt_sent: boolean; // Copilot: 初回プロンプト送信済みフラグ
   prompt_ready: boolean; // 送信UI/APIの共通判定フラグ（Copilotはstatusとは独立して制御）
+  external_session_id: string; // Codex thread-id 等、CLI固有のセッション識別子
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
@@ -162,11 +163,18 @@ export interface CliToolConfig {
   windowIndex: number;  // tmuxウィンドウ番号（claudeは1）
 }
 
+// Codex 起動モード
+export type CodexLaunchMode = "new" | "resume" | "fork";
+
 // セッション起動リクエスト
 export interface LaunchRequest {
   tool_id: string;      // CliToolConfig.id
   cwd?: string;         // 作業ディレクトリ（省略時は環境変数のデフォルト値）
   group_id?: string;    // 起動後に自動割り当てするグループID
+  // Codex 専用オプション
+  codex_mode?: CodexLaunchMode; // 起動モード（省略時は "new"）
+  codex_target?: string;        // resume/fork 対象セッションID
+  codex_all?: boolean;          // --all フラグ（cwdスコープ不一致時に全セッション対象）
 }
 
 // セッション起動結果

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { runPaneMonitorTick, COPILOT_AUTO_DETECT_COMMANDS, COPILOT_ALIVE_COMMANDS, COPILOT_GRACE_PERIOD_MS, COPILOT_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_HARD_TIMEOUT_MS, type PaneMonitorDeps } from "./server.js";
+import { runPaneMonitorTick, COPILOT_AUTO_DETECT_COMMANDS, COPILOT_ALIVE_COMMANDS, COPILOT_GRACE_PERIOD_MS, COPILOT_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_HARD_TIMEOUT_MS, CODEX_AUTO_DETECT_COMMANDS, CODEX_ALIVE_COMMANDS, CODEX_GRACE_PERIOD_MS, CODEX_HOOK_TIMEOUT_MS, type PaneMonitorDeps } from "./server.js";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
 import type { TmuxManager, PaneInfo } from "./tmux-manager.js";
@@ -802,7 +802,7 @@ describe("Phase 4 統合回帰テスト（Pane Monitor）", () => {
     sessionStore.destroy();
   });
 
-  it("グレースピリオド + フック通信 + decision pending の複合条件テスト", async () => {
+  it("グレースピリオド + フック通信 + decision pending の複合条件テスト（copilot）", async () => {
     const onChange = vi.fn();
     const sessionStore = new SessionStore(onChange);
     const decisionStore = createMockDecisionStore();
@@ -862,5 +862,111 @@ describe("Phase 4 統合回帰テスト（Pane Monitor）", () => {
 
     sessionStore.destroy();
     decisionStore.destroy();
+  });
+});
+
+// ============================================================
+// Codex 自動検出テスト
+// ============================================================
+
+describe("runPaneMonitorTick codex 自動検出", () => {
+  it("セッション未登録の codex ペインを検出してプレセッションを作成する", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%0", command: "bash", currentPath: "/tmp" },
+        { paneId: "%8", command: "codex", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+
+    const session = sessionStore.get("codex-pane-8");
+    expect(session).toBeDefined();
+    expect(session!.status).toBe("idle");
+    expect(session!.cli_tool).toBe("codex");
+    expect(session!.tmux_pane).toBe("%8");
+    expect(session!.cwd).toBe("/workspace");
+    sessionStore.destroy();
+  });
+
+  it("CODEX_AUTO_DETECT_COMMANDS に codex が含まれる", () => {
+    expect(CODEX_AUTO_DETECT_COMMANDS).toContain("codex");
+  });
+
+  it("CODEX_ALIVE_COMMANDS に codex と node が含まれる", () => {
+    expect(CODEX_ALIVE_COMMANDS).toContain("codex");
+    expect(CODEX_ALIVE_COMMANDS).toContain("node");
+  });
+});
+
+describe("Codex pane 消失によるセッション完了", () => {
+  it("ペインが消失した Codex セッションを完了にする", async () => {
+    const sessionStore = new SessionStore(vi.fn());
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+    }));
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%0", command: "bash", currentPath: "/tmp" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith("codex-pane-8", "tmuxペインが終了しました");
+    sessionStore.destroy();
+  });
+
+  it("codex プロセス終了（pane 存続 + コマンド変化 + フックタイムアウト）でセッション完了", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_GRACE_PERIOD_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 1000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "bash", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "codex-pane-8",
+      "codex プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
+  });
+
+  it("codex がまだ実行中のセッションは完了にしない", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+    }));
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "codex", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
   });
 });

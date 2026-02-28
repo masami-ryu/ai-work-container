@@ -181,6 +181,11 @@ main.layout {
   color: #2196f3;
 }
 
+.badge-codex {
+  background: rgba(76, 175, 80, 0.15);
+  color: #4caf50;
+}
+
 /* Session Card */
 .session-card {
   background: #1a1d27;

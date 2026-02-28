@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import path from "path";
-import { TMUX_PANE_ID_RE, type CliToolConfig, type LaunchResult } from "./types.js";
+import { TMUX_PANE_ID_RE, type CliToolConfig, type LaunchResult, type CodexLaunchMode } from "./types.js";
 
 export interface PaneInfo {
   paneId: string;
@@ -26,6 +26,7 @@ const MAX_PANES_PER_WINDOW = 8;
 const DEFAULT_TOOLS: CliToolConfig[] = [
   { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
   { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
+  { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3 },
 ];
 
 // シェルコマンド文字列用のクォート（シングルクォート方式）
@@ -276,7 +277,7 @@ export class TmuxManager {
   }
 
   // 指定ツールで新しいセッションをtmuxペインに起動（排他制御付き）
-  async launchSession(toolId: string, cwd?: string): Promise<LaunchResult> {
+  async launchSession(toolId: string, cwd?: string, codexOptions?: { mode?: CodexLaunchMode; target?: string; all?: boolean }): Promise<LaunchResult> {
     if (this.destroyed) {
       throw new Error("TmuxManager is destroyed");
     }
@@ -287,7 +288,7 @@ export class TmuxManager {
           return;
         }
         try {
-          resolve(await this._doLaunch(toolId, cwd));
+          resolve(await this._doLaunch(toolId, cwd, codexOptions));
         } catch (e) {
           reject(e);
         }
@@ -296,7 +297,7 @@ export class TmuxManager {
   }
 
   // 内部: 実際の起動処理
-  private async _doLaunch(toolId: string, cwd?: string): Promise<LaunchResult> {
+  private async _doLaunch(toolId: string, cwd?: string, codexOptions?: { mode?: CodexLaunchMode; target?: string; all?: boolean }): Promise<LaunchResult> {
     const tool = this.tools.get(toolId);
     if (!tool) {
       throw new Error(`Unknown tool: ${toolId}`);
@@ -314,11 +315,15 @@ export class TmuxManager {
 
     const resolvedCwd = cwd || this.defaultCwd!;
 
-    // Copilot 固有の前処理
+    // ツール固有の前処理
     let warning: string | undefined;
     let command = tool.command;
     if (toolId === "copilot") {
       const result = await this.prepareCopilotLaunch(resolvedCwd);
+      warning = result.warning;
+      command = result.command;
+    } else if (toolId === "codex") {
+      const result = this.prepareCodexLaunch(codexOptions);
       warning = result.warning;
       command = result.command;
     }
@@ -358,6 +363,58 @@ export class TmuxManager {
       command,
       warning: warnings.length > 0 ? warnings.join("; ") : undefined,
     };
+  }
+
+  // Codex 起動コマンド生成（new/resume/fork + notify 注入）
+  private prepareCodexLaunch(options?: { mode?: CodexLaunchMode; target?: string; all?: boolean }): { command: string; warning?: string } {
+    const mode = options?.mode || "new";
+    const target = options?.target;
+    const all = options?.all;
+
+    // notify スクリプトのパス
+    const hooksDir = path.resolve(__dirname_local, "../hooks");
+    const notifyScript = path.join(hooksDir, "codex-notify.sh");
+
+    // notify 設定: TOML 配列をシェル引数で渡す
+    // シェルのシングルクォートで全体を保護し、TOML 文字列はダブルクォートで囲む
+    const escapedPath = notifyScript.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const notifyConfig = `-c 'notify=["${escapedPath}"]'`;
+
+    // --no-alt-screen: tmux でのキャプチャ対応
+    const baseFlags = "--no-alt-screen";
+
+    let command: string;
+    switch (mode) {
+      case "resume": {
+        if (target) {
+          command = `codex ${baseFlags} ${notifyConfig} resume ${shellQuote(target)}`;
+        } else {
+          command = `codex ${baseFlags} ${notifyConfig} resume --last`;
+        }
+        if (all) {
+          command += " --all";
+        }
+        break;
+      }
+      case "fork": {
+        if (target) {
+          command = `codex ${baseFlags} ${notifyConfig} fork ${shellQuote(target)}`;
+        } else {
+          command = `codex ${baseFlags} ${notifyConfig} fork --last`;
+        }
+        if (all) {
+          command += " --all";
+        }
+        break;
+      }
+      default: {
+        // new モード: 通常起動
+        command = `codex ${baseFlags} ${notifyConfig}`;
+        break;
+      }
+    }
+
+    return { command };
   }
 
   // Copilot 用 hooks.json を .github/hooks/ に配置

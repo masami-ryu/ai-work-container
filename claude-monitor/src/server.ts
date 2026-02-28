@@ -17,7 +17,8 @@ import { extractLatestProgress } from "./transcript-parser.js";
 import { cleanupPendingAssignments } from "./pending-group-assignments.js";
 import type { PendingAssignment } from "./pending-group-assignments.js";
 import { assignPendingGroupToSession } from "./group-assignment.js";
-import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion } from "./types.js";
+import { listCodexSessions } from "./codex-session-index.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode } from "./types.js";
 import type { PaneInfo } from "./tmux-manager.js";
 
 // --- ServerDeps: createApp の依存注入インターフェース ---
@@ -59,6 +60,18 @@ export const COPILOT_AUTO_DETECT_COMMANDS: readonly string[] =
   _parsedCopilotCommands && _parsedCopilotCommands.length > 0 ? _parsedCopilotCommands : ["copilot"];
 // 既存Copilotセッションの生存判定用: フック通信ベース判定と併用するため広めの集合を許容
 export const COPILOT_ALIVE_COMMANDS: readonly string[] = ["copilot", "node"];
+
+// Codex Pane Monitor 定数
+export const CODEX_HOOK_TIMEOUT_MS = 60_000;
+export const CODEX_NO_HOOK_TIMEOUT_MS = 120_000;
+export const CODEX_NO_HOOK_HARD_TIMEOUT_MS = 10 * 60_000;
+export const CODEX_GRACE_PERIOD_MS = 30_000;
+export const CODEX_PROMPT_READY_DELAY_MS = 5_000;
+
+const _parsedCodexCommands = process.env.CODEX_COMMANDS?.split(",").map(s => s.trim()).filter(Boolean);
+export const CODEX_AUTO_DETECT_COMMANDS: readonly string[] =
+  _parsedCodexCommands && _parsedCodexCommands.length > 0 ? _parsedCodexCommands : ["codex"];
+export const CODEX_ALIVE_COMMANDS: readonly string[] = ["codex", "node"];
 
 // --- Pane Monitor Tick ロジック（テスト可能な独立関数） ---
 export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
@@ -167,7 +180,61 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
     console.debug(`Copilot session ${sessionId}: command='${paneCommand}', commandAlive=${commandAlive}, waiting for timeout`);
   }
 
-  // copilot 手動起動の自動検出
+  // codex プロセス終了検出（copilot と同様のフック通信ベース判定）
+  for (const session of sessionStore.getAll()) {
+    if (session.cli_tool !== "codex") continue;
+    if (session.status === "completed") continue;
+    if (!session.tmux_pane) continue;
+    if (!activePaneIds.has(session.tmux_pane)) continue;
+
+    const paneCommand = paneCommandMap.get(session.tmux_pane) || "";
+    const commandAlive = CODEX_ALIVE_COMMANDS.includes(paneCommand);
+    const sessionId = session.session_id;
+
+    const sinceInit = Date.now() - new Date(session.last_init_at).getTime();
+    if (sinceInit < CODEX_GRACE_PERIOD_MS) {
+      continue;
+    }
+
+    const now = Date.now();
+
+    // idle + コマンド生存時はスキップ
+    if (session.status === "idle" && commandAlive) {
+      if (!session.prompt_ready && session.last_hook_at) {
+        const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+        if (sinceLastHook >= CODEX_PROMPT_READY_DELAY_MS) {
+          sessionStore.setPromptReady(sessionId, true);
+        }
+      }
+      continue;
+    }
+
+    if (commandAlive) {
+      const isFreshByHook = session.last_hook_at
+        ? (now - new Date(session.last_hook_at).getTime()) < CODEX_HOOK_TIMEOUT_MS
+        : false;
+      if (isFreshByHook) continue;
+    }
+
+    if (session.last_hook_at) {
+      const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+      if (sinceLastHook >= CODEX_HOOK_TIMEOUT_MS) {
+        completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
+        continue;
+      }
+    } else {
+      if (sinceInit >= CODEX_NO_HOOK_HARD_TIMEOUT_MS) {
+        completeSessionWithCleanup(sessionId, "codex フック未到達タイムアウト");
+        continue;
+      }
+      if (!commandAlive && sinceInit >= CODEX_NO_HOOK_TIMEOUT_MS) {
+        completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
+        continue;
+      }
+    }
+  }
+
+  // copilot/codex 手動起動の自動検出
   const registeredPanes = new Set(
     sessionStore.getAll()
       .filter((s) => s.status !== "completed")
@@ -176,42 +243,71 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
   );
 
   for (const pane of panes) {
-    if (!COPILOT_AUTO_DETECT_COMMANDS.includes(pane.command)) {
-      // 検出対象外のコマンドはスキップ（デバッグ用: 未知のコマンドを初回のみログ出力）
-      if (pane.command && !["bash", "zsh", "fish", "claude", "node"].includes(pane.command)) {
-        if (!loggedUnknownCommands.has(pane.command)) {
-          loggedUnknownCommands.add(pane.command);
-          console.debug(`Pane monitor: unknown command "${pane.command}" on ${pane.paneId}`);
-        }
-      }
+    // copilot 自動検出
+    if (COPILOT_AUTO_DETECT_COMMANDS.includes(pane.command)) {
+      if (registeredPanes.has(pane.paneId)) continue;
+      const paneNum = pane.paneId.replace("%", "");
+      const preSessionId = `copilot-pane-${paneNum}`;
+      const syntheticEvent: HookEvent = {
+        event_type: "SessionStart",
+        session_id: preSessionId,
+        cwd: pane.currentPath || process.env.CLAUDE_MONITOR_WORK_DIR || "",
+        model: "",
+        title: "",
+        notification_type: "",
+        message: "",
+        tool_name: "",
+        file_path: "",
+        prompt: "",
+        questions: [],
+        last_message: "",
+        tmux_pane: pane.paneId,
+        reason: "",
+        transcript_path: "",
+        progress_text: "",
+        cli_tool: "copilot",
+        timestamp: new Date().toISOString(),
+      };
+      sessionStore.processEvent(syntheticEvent);
       continue;
     }
-    if (registeredPanes.has(pane.paneId)) continue;
 
-    // セッション未登録の copilot ペインを検出 → プレセッション作成
-    const paneNum = pane.paneId.replace("%", "");
-    const preSessionId = `copilot-pane-${paneNum}`;
-    const syntheticEvent: HookEvent = {
-      event_type: "SessionStart",
-      session_id: preSessionId,
-      cwd: pane.currentPath || process.env.CLAUDE_MONITOR_WORK_DIR || "",
-      model: "",
-      title: "",
-      notification_type: "",
-      message: "",
-      tool_name: "",
-      file_path: "",
-      prompt: "",
-      questions: [],
-      last_message: "",
-      tmux_pane: pane.paneId,
-      reason: "",
-      transcript_path: "",
-      progress_text: "",
-      cli_tool: "copilot",
-      timestamp: new Date().toISOString(),
-    };
-    sessionStore.processEvent(syntheticEvent);
+    // codex 自動検出
+    if (CODEX_AUTO_DETECT_COMMANDS.includes(pane.command)) {
+      if (registeredPanes.has(pane.paneId)) continue;
+      const paneNum = pane.paneId.replace("%", "");
+      const preSessionId = `codex-pane-${paneNum}`;
+      const syntheticEvent: HookEvent = {
+        event_type: "SessionStart",
+        session_id: preSessionId,
+        cwd: pane.currentPath || process.env.CLAUDE_MONITOR_WORK_DIR || "",
+        model: "",
+        title: "",
+        notification_type: "",
+        message: "",
+        tool_name: "",
+        file_path: "",
+        prompt: "",
+        questions: [],
+        last_message: "",
+        tmux_pane: pane.paneId,
+        reason: "",
+        transcript_path: "",
+        progress_text: "",
+        cli_tool: "codex",
+        timestamp: new Date().toISOString(),
+      };
+      sessionStore.processEvent(syntheticEvent);
+      continue;
+    }
+
+    // 検出対象外のコマンド（デバッグ用）
+    if (pane.command && !["bash", "zsh", "fish", "claude", "node", "copilot", "codex"].includes(pane.command)) {
+      if (!loggedUnknownCommands.has(pane.command)) {
+        loggedUnknownCommands.add(pane.command);
+        console.debug(`Pane monitor: unknown command "${pane.command}" on ${pane.paneId}`);
+      }
+    }
   }
 }
 
@@ -349,8 +445,8 @@ export function createApp(deps: ServerDeps): CreateAppResult {
 
     const session = sessionStore.processEvent(event);
 
-    // Copilot セッション: フック通信時刻を更新（Pane Monitor の生存判定で使用）
-    if (session.cli_tool === "copilot") {
+    // Copilot/Codex セッション: フック通信時刻を更新（Pane Monitor の生存判定で使用）
+    if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
       session.last_hook_at = event.timestamp || new Date().toISOString();
     }
 
@@ -561,8 +657,9 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       res.status(400).json({ error: "tmux_pane not registered" });
       return;
     }
-    if (session.cli_tool === "copilot" && !session.prompt_ready) {
-      res.status(403).json({ error: "Copilot session is not ready for prompt input", errorCode: "PROMPT_NOT_READY" });
+    if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.prompt_ready) {
+      const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+      res.status(403).json({ error: `${toolLabel} session is not ready for prompt input`, errorCode: "PROMPT_NOT_READY" });
       return;
     }
     if (session.status !== "idle") {
@@ -570,19 +667,19 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       return;
     }
 
-    // Copilot 固有チェック: 起動状態に応じた制御
-    if (session.cli_tool === "copilot") {
+    // Copilot/Codex 固有チェック: 起動状態に応じた制御
+    if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
       if (!session.first_prompt_sent) {
-        // 初回送信は許可（Copilot CLI 起動トリガー）
+        // 初回送信は許可（CLI 起動トリガー）
       } else if (!session.last_hook_at) {
-        // 2回目以降: Copilot がまだ起動中（フック通信なし）
+        // 2回目以降: CLI がまだ起動中（フック通信なし）
         const elapsed = Date.now() - new Date(session.last_init_at).getTime();
         if (elapsed < COPILOT_HOOKS_TIMEOUT_MS) {
-          res.status(409).json({ error: "Copilot CLI is still starting up. Please wait." });
+          const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+          res.status(409).json({ error: `${toolLabel} CLI is still starting up. Please wait.` });
           return;
         }
-        // hooks 不成立のフォールバック: 一定時間経過後は送信を許可
-        console.warn(`Copilot session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
+        console.warn(`${session.cli_tool} session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
       }
     }
 
@@ -595,8 +692,8 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     const sanitizedText = text.replace(/\r?\n/g, " ");
 
     try {
-      // Copilot セッション: pane mode ガード（copy-mode 等の入力不可状態を検出・復帰）
-      if (session.cli_tool === "copilot") {
+      // Copilot/Codex セッション: pane mode ガード（copy-mode 等の入力不可状態を検出・復帰）
+      if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
         const inMode = await tmuxManager.checkPaneMode(session.tmux_pane);
         if (inMode) {
           console.log(`send-keys [${session.session_id}]: pane in copy-mode, attempting recovery`);
@@ -610,9 +707,8 @@ export function createApp(deps: ServerDeps): CreateAppResult {
         }
       }
 
-      // Copilot セッションでは行クリア（C-u）を送信しない
-      // Copilot CLI v0.0.418 では C-u → text → Enter のシーケンスで実行が開始されないため
-      if (session.cli_tool !== "copilot") {
+      // Copilot/Codex セッションでは行クリア（C-u）を送信しない
+      if (session.cli_tool !== "copilot" && session.cli_tool !== "codex") {
         console.log(`send-keys [${session.session_id}]: clearing line (C-u)`);
         await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
       }
@@ -621,7 +717,8 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
 
       // Enter 送信方式: Copilot は COPILOT_PROMPT_ENTER_METHOD > COPILOT_ENTER_METHOD > "c-m"
-      // 非 Copilot（Claude 等）は常に "enter"
+      // Codex は "enter"（通常の Enter キー）
+      // 非 Copilot/Codex（Claude 等）は常に "enter"
       const enterMethod = session.cli_tool === "copilot"
         ? (process.env.COPILOT_PROMPT_ENTER_METHOD || process.env.COPILOT_ENTER_METHOD || "c-m")
         : "enter";
@@ -629,8 +726,16 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       await sendEnterKey(session.tmux_pane, enterMethod);
 
       // tmux send-keys 一連成功後に first_prompt_sent を更新
-      if (session.cli_tool === "copilot" && !session.first_prompt_sent) {
+      if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.first_prompt_sent) {
         session.first_prompt_sent = true;
+      }
+
+      // Codex: send-keys 成功時に running へ遷移する合成状態更新（TASK-013）
+      if (session.cli_tool === "codex" && session.status === "idle") {
+        session.status = "running";
+        session.prompt_ready = false;
+        session.updated_at = new Date().toISOString();
+        broadcast({ type: "session_update", payload: session });
       }
 
       const historyKey = getPromptHistoryKey(id);
@@ -924,6 +1029,17 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     res.json(getPromptHistory(`${type}:${id}`));
   });
 
+  // --- Codex Sessions API ---
+  app.get("/api/codex/sessions", async (_req, res) => {
+    try {
+      const sessions = await listCodexSessions();
+      res.json(sessions);
+    } catch (e) {
+      console.error("Codex session index failed:", (e as Error).message);
+      res.status(500).json({ error: "Codex セッション一覧の取得に失敗しました", details: (e as Error).message });
+    }
+  });
+
   // --- Tools API ---
   app.get("/api/tools", (_req, res) => {
     res.json(tmuxManager.getToolsWithAvailability());
@@ -934,7 +1050,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
   const fsRealpathAsync = promisify(fs.realpath);
 
   app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
-    const { tool_id, cwd, group_id } = req.body as LaunchRequest;
+    const { tool_id, cwd, group_id, codex_mode, codex_target, codex_all } = req.body as LaunchRequest;
 
     if (!tool_id || typeof tool_id !== "string") {
       res.status(400).json({ error: "tool_id is required" });
@@ -945,6 +1061,23 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     if (!knownIds.has(tool_id)) {
       res.status(400).json({ error: `Unknown tool_id: ${tool_id}` });
       return;
+    }
+
+    // Codex 固有バリデーション
+    if (tool_id === "codex") {
+      const validModes: CodexLaunchMode[] = ["new", "resume", "fork"];
+      if (codex_mode && !validModes.includes(codex_mode)) {
+        res.status(400).json({ error: `Invalid codex_mode: ${codex_mode}. Must be one of: ${validModes.join(", ")}` });
+        return;
+      }
+      if ((codex_mode === "resume" || codex_mode === "fork") && codex_target && typeof codex_target !== "string") {
+        res.status(400).json({ error: "codex_target must be a string" });
+        return;
+      }
+      if (codex_all !== undefined && typeof codex_all !== "boolean") {
+        res.status(400).json({ error: "codex_all must be a boolean" });
+        return;
+      }
     }
 
     if (group_id) {
@@ -994,21 +1127,26 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     }
 
     try {
-      const result = await tmuxManager.launchSession(tool_id, resolvedCwd);
+      // Codex オプションを渡す
+      const codexOpts = tool_id === "codex"
+        ? { mode: codex_mode, target: codex_target, all: codex_all }
+        : undefined;
+      const result = await tmuxManager.launchSession(tool_id, resolvedCwd, codexOpts);
       // stale entryの除去を常に先に行い、pane再利用時の誤割り当てを防止
       pendingGroupAssignments.delete(result.tmux_pane);
       if (group_id) {
         pendingGroupAssignments.set(result.tmux_pane, { groupId: group_id, createdAt: Date.now() });
       }
 
-      // Copilot プレセッション: 合成 SessionStart イベントでセッションを先行作成
-      // Copilot CLI は最初のプロンプト実行まで sessionStart フックを発火しないため、
+      // Copilot/Codex プレセッション: 合成 SessionStart イベントでセッションを先行作成
+      // Copilot/Codex CLI は最初のプロンプト実行まで sessionStart フックを発火しないため、
       // Launch API 側で即座にセッションを作成し、ブラウザUIにカードを表示する。
-      // copilot の実際の sessionStart 到達時は session-store が Copilot セッションの
+      // 実際の sessionStart 到達時は session-store がセッションの
       // データを再初期化するため、重複 SessionStart は問題なく処理される。
-      if (tool_id === "copilot" && result.tmux_pane) {
+      if ((tool_id === "copilot" || tool_id === "codex") && result.tmux_pane) {
         const paneNum = result.tmux_pane.replace("%", "");
-        const preSessionId = `copilot-pane-${paneNum}`;
+        const cliTool = tool_id as "copilot" | "codex";
+        const preSessionId = `${cliTool}-pane-${paneNum}`;
         const syntheticEvent: HookEvent = {
           event_type: "SessionStart",
           session_id: preSessionId,
@@ -1026,7 +1164,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
           reason: "",
           transcript_path: "",
           progress_text: "",
-          cli_tool: "copilot",
+          cli_tool: cliTool,
           timestamp: new Date().toISOString(),
         };
         const preSession = sessionStore.processEvent(syntheticEvent);

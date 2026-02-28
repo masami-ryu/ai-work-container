@@ -591,3 +591,103 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
     expect(new Date(session.last_hook_at).getTime()).toBeGreaterThan(0);
   });
 });
+
+// ============================================================
+// Codex Launch API テスト
+// ============================================================
+
+function createMockTmuxManagerWithCodex(): TmuxManager {
+  return {
+    getTools: vi.fn().mockReturnValue([
+      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
+      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
+      { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3 },
+    ]),
+    getToolsWithAvailability: vi.fn().mockReturnValue([]),
+    isAvailable: vi.fn().mockReturnValue(true),
+    canManagePanes: vi.fn().mockReturnValue(true),
+    launchSession: vi.fn().mockResolvedValue({ ok: true, tmux_pane: "%8" }),
+    killPane: vi.fn(),
+    paneExists: vi.fn(),
+    listActivePanes: vi.fn(),
+    listActivePanesDetailed: vi.fn(),
+    initialize: vi.fn(),
+    destroy: vi.fn(),
+  } as unknown as TmuxManager;
+}
+
+describe("Launch API codex バリデーション", () => {
+  let deps: ServerDeps;
+  let app: CreateAppResult["app"];
+
+  beforeEach(() => {
+    deps = createTestDeps({ tmuxManager: createMockTmuxManagerWithCodex() });
+    ({ app } = createApp(deps));
+  });
+
+  afterEach(() => {
+    deps.sessionStore.destroy();
+    deps.decisionStore.destroy();
+    deps.questionStore.destroy();
+  });
+
+  it("Codex launch with invalid codex_mode returns 400", async () => {
+    const res = await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "codex", codex_mode: "invalid_mode" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Invalid codex_mode");
+  });
+
+  it("Codex launch with valid mode succeeds", async () => {
+    const res = await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "codex", codex_mode: "new" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.tmux_pane).toBe("%8");
+  });
+
+  it("Codex launch creates pre-session with codex cli_tool", async () => {
+    const res = await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "codex" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Codex プレセッションが作成されている
+    const session = deps.sessionStore.get("codex-pane-8");
+    expect(session).toBeDefined();
+    expect(session!.status).toBe("idle");
+    expect(session!.cli_tool).toBe("codex");
+    expect(session!.tmux_pane).toBe("%8");
+    expect(session!.prompt_ready).toBe(true);
+    expect(session!.external_session_id).toBe("");
+  });
+
+  it("Codex launch with codex_mode='resume' succeeds", async () => {
+    const res = await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "codex", codex_mode: "resume", codex_target: "thread-abc-123" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it("Codex launch with codex_mode='fork' succeeds", async () => {
+    const res = await request(app)
+      .post("/api/sessions/launch")
+      .set("Origin", "http://localhost:3456")
+      .send({ tool_id: "codex", codex_mode: "fork", codex_target: "thread-abc-123" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+});
