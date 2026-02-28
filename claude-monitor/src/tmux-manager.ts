@@ -22,6 +22,9 @@ const fsCopyFile = promisify(fs.copyFile);
 
 const MAX_PANES_PER_WINDOW = 8;
 
+// MCP エンドポイント URL（Copilot / Codex 共通）
+const MCP_URL = "http://localhost:3456/mcp";
+
 // デフォルトCLIツール定義
 const DEFAULT_TOOLS: CliToolConfig[] = [
   { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
@@ -365,7 +368,7 @@ export class TmuxManager {
     };
   }
 
-  // Codex 起動コマンド生成（new/resume/fork + notify 注入）
+  // Codex 起動コマンド生成（new/resume/fork + notify + mcp_servers 注入）
   private prepareCodexLaunch(options?: { mode?: CodexLaunchMode; target?: string; all?: boolean }): { command: string; warning?: string } {
     const mode = options?.mode || "new";
     const target = options?.target;
@@ -380,6 +383,9 @@ export class TmuxManager {
     const escapedPath = notifyScript.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const notifyConfig = `-c 'notify=["${escapedPath}"]'`;
 
+    // MCP サーバー設定: TOML インラインテーブルで注入
+    const mcpConfig = `-c 'mcp_servers={"claude-monitor"={url="${MCP_URL}"}}'`;
+
     // --no-alt-screen: tmux でのキャプチャ対応
     const baseFlags = "--no-alt-screen";
 
@@ -387,9 +393,9 @@ export class TmuxManager {
     switch (mode) {
       case "resume": {
         if (target) {
-          command = `codex ${baseFlags} ${notifyConfig} resume ${shellQuote(target)}`;
+          command = `codex ${baseFlags} ${notifyConfig} ${mcpConfig} resume ${shellQuote(target)}`;
         } else {
-          command = `codex ${baseFlags} ${notifyConfig} resume --last`;
+          command = `codex ${baseFlags} ${notifyConfig} ${mcpConfig} resume --last`;
         }
         if (all) {
           command += " --all";
@@ -398,9 +404,9 @@ export class TmuxManager {
       }
       case "fork": {
         if (target) {
-          command = `codex ${baseFlags} ${notifyConfig} fork ${shellQuote(target)}`;
+          command = `codex ${baseFlags} ${notifyConfig} ${mcpConfig} fork ${shellQuote(target)}`;
         } else {
-          command = `codex ${baseFlags} ${notifyConfig} fork --last`;
+          command = `codex ${baseFlags} ${notifyConfig} ${mcpConfig} fork --last`;
         }
         if (all) {
           command += " --all";
@@ -409,7 +415,7 @@ export class TmuxManager {
       }
       default: {
         // new モード: 通常起動
-        command = `codex ${baseFlags} ${notifyConfig}`;
+        command = `codex ${baseFlags} ${notifyConfig} ${mcpConfig}`;
         break;
       }
     }
@@ -511,7 +517,7 @@ export class TmuxManager {
         mcpServers: {
           "claude-monitor": {
             type: "http",
-            url: "http://localhost:3456/mcp",
+            url: MCP_URL,
           },
         },
       };

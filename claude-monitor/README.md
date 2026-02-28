@@ -143,6 +143,39 @@ Claude Code の `SessionEnd` は従来通り常に `completed` に遷移する�
 - Copilot CLI セッションの session_id は `copilot-pane-<N>` 形式（tmux pane ID ベース）
 - 同一 pane で新規セッションを起動すると前回のデータは自動的にリセットされる
 
+### 5. Codex CLI MCP 設定（任意）
+
+Codex CLI セッションで MCP ツール（`ask_user` 等）を利用する場合の設定。
+
+#### 自動注入（推奨）
+
+ダッシュボードの「新規セッション」ボタンから Codex CLI を起動すると、`-c` フラグで MCP サーバー設定が自動注入される:
+
+```
+codex --no-alt-screen -c 'notify=[...]' -c 'mcp_servers={"claude-monitor"={url="http://localhost:3456/mcp"}}'
+```
+
+#### 確認方法
+
+Codex セッション内で MCP サーバーが認識されているか確認:
+
+```bash
+codex mcp list
+# claude-monitor が表示されれば有効
+```
+
+#### `ask_user` の利用
+
+- Codex セッション内で `ask_user` ツールを使用すると、ブラウザダッシュボードに質問が表示される
+- ユーザーがブラウザから回答すると、Codex セッションに結果が返る
+- **タイムアウト**: 120秒で応答がない場合はエラーが返る。`AskUserQuestion` にフォールバックすること
+- **複数セッション同時運用時**: `session_id` パラメータを明示的に指定し、質問の紐付けを確実にすることを推奨
+
+#### 前提条件
+
+- `claude-monitor` サーバーが起動済みであること（`pnpm start`）
+- `claude-monitor` が未起動の場合、`ask_user` はエラーを返す。`AskUserQuestion` にフォールバックすること
+
 ## 使い方
 
 ### サーバー起動
@@ -183,6 +216,9 @@ Terminal (Claude Code)  ── Hooks ──→ Dashboard Server ←─ WebSocket
 Terminal (Copilot CLI)  ── Hooks ──→
                           │  ↑
               copilot-notify.sh  copilot-decide.sh
+Terminal (Codex CLI)   ── Hooks ──→
+                          │
+                  codex-notify.sh
 ```
 
 ## Hook イベント
