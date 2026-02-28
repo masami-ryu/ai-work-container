@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { resolveSessionId } from "./mcp-handler.js";
 import { SessionStore } from "./session-store.js";
 import { QuestionStore } from "./question-store.js";
-import type { HookEvent, PendingQuestion } from "./types.js";
+import type { HookEvent } from "./types.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -32,9 +33,8 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
 }
 
 /**
- * mcp-handler.ts の ask_user ツールにおける session_id 解決ロジックを再現。
- * sessionBindings を含む resolveSessionId ロジック（mcp-handler.ts:14-50）を
- * テスト可能な形で再実装する。
+ * mcp-handler.ts の ask_user ツールハンドラを再現するテストヘルパー。
+ * resolveSessionId は本体から直接 import して使用する（strict: true）。
  */
 function createAskUserHandler() {
   const sessionStore = new SessionStore(vi.fn());
@@ -47,41 +47,7 @@ function createAskUserHandler() {
   // MCP セッション ID → claude-monitor セッション ID のバインディング
   const sessionBindings = new Map<string, string>();
 
-  // mcp-handler.ts の resolveSessionId を再現
-  function resolveSessionId(mcpSessionId: string | undefined, explicitSessionId?: string): string | null {
-    // 1. 明示的 session_id が指定されている場合はそれを使用
-    if (explicitSessionId) {
-      const session = sessionStore.get(explicitSessionId);
-      if (session && (session.status === "running" || session.status === "idle")) {
-        if (mcpSessionId) sessionBindings.set(mcpSessionId, explicitSessionId);
-        return explicitSessionId;
-      }
-      return null;
-    }
-
-    // 2. バインド済みの session があり、まだアクティブならそれを使用
-    if (mcpSessionId && sessionBindings.has(mcpSessionId)) {
-      const boundId = sessionBindings.get(mcpSessionId)!;
-      const session = sessionStore.get(boundId);
-      if (session && (session.status === "running" || session.status === "idle")) {
-        return boundId;
-      }
-      sessionBindings.delete(mcpSessionId);
-    }
-
-    // 3. 最新のアクティブセッションを自動検出
-    const sessions = sessionStore.getAll();
-    const activeSession = sessions
-      .filter((s) => s.status === "running" || s.status === "idle")
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
-    if (activeSession) {
-      if (mcpSessionId) sessionBindings.set(mcpSessionId, activeSession.session_id);
-      return activeSession.session_id;
-    }
-    return null;
-  }
-
-  // mcp-handler.ts の ask_user ツールハンドラを再現（mcpSessionId 引数を追加）
+  // mcp-handler.ts の ask_user ツールハンドラ相当（strict: true）
   async function askUser(params: {
     mcpSessionId?: string;
     session_id?: string;
@@ -89,11 +55,20 @@ function createAskUserHandler() {
   }): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
     const { mcpSessionId, session_id, questions } = params;
 
-    const targetSessionId = resolveSessionId(mcpSessionId, session_id);
+    const targetSessionId = resolveSessionId(sessionStore, sessionBindings, mcpSessionId, session_id, { strict: true });
     if (!targetSessionId) {
-      const msg = session_id
-        ? `Session ${session_id} not found or not active. Use AskUserQuestion instead.`
-        : "No active session found. Use AskUserQuestion instead.";
+      let msg: string;
+      if (session_id) {
+        msg = `Session ${session_id} not found or not active. Use AskUserQuestion instead.`;
+      } else {
+        const allSessions = sessionStore.getAll();
+        const activeSessions = allSessions.filter((s) => s.status === "running" || s.status === "idle");
+        if (activeSessions.length >= 2) {
+          msg = `複数のアクティブセッションが存在するため、自動紐付けできません。session_id を明示的に指定してください。アクティブセッション: ${activeSessions.map((s) => s.session_id).join(", ")}`;
+        } else {
+          msg = "No active session found. Use AskUserQuestion instead.";
+        }
+      }
       return {
         content: [{ type: "text" as const, text: msg }],
         isError: true,
@@ -120,7 +95,7 @@ function createAskUserHandler() {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 既存テスト: session_id 解決ロジック
+// session_id 解決ロジック
 // ──────────────────────────────────────────────────────────────
 
 describe("MCP ask_user session_id 解決ロジック", () => {
@@ -154,25 +129,45 @@ describe("MCP ask_user session_id 解決ロジック", () => {
     questionStore.destroy();
   });
 
-  it("session_id 省略時にヒューリスティック検出が動作する", async () => {
+  it("session_id 省略時にアクティブセッションが1つなら自動検出される", async () => {
     const { sessionStore, questionStore, askUser } = createAskUserHandler();
 
     sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
     sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
 
-    // session_id なしで呼び出し
+    // session_id なしで呼び出し（アクティブ1つなら strict でも成功）
     const askPromise = askUser({
       questions: [{ question: "Q?" }],
     });
 
     const pending = questionStore.getPending();
     expect(pending).toHaveLength(1);
-    // ヒューリスティックで最新 running セッションが選ばれる
     expect(pending[0].session_id).toBe("s1");
 
     questionStore.respond(pending[0].id, { "0": "answer" });
     const result = await askPromise;
     expect(result.isError).toBeUndefined();
+
+    sessionStore.destroy();
+    questionStore.destroy();
+  });
+
+  it("session_id 省略時にアクティブセッションが2つ以上あるとエラーになる", async () => {
+    const { sessionStore, questionStore, askUser } = createAskUserHandler();
+
+    sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
+    await new Promise(r => setTimeout(r, 10));
+    sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s2" }));
+    sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s2", prompt: "world" }));
+
+    // session_id なしで呼び出し → strict モードで 2 セッション → エラー
+    const result = await askUser({
+      questions: [{ question: "Q?" }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("複数のアクティブセッション");
 
     sessionStore.destroy();
     questionStore.destroy();
@@ -195,7 +190,7 @@ describe("MCP ask_user session_id 解決ロジック", () => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// TASK-007: セッションバインディング挙動テスト
+// セッションバインディング挙動テスト
 // ──────────────────────────────────────────────────────────────
 
 describe("MCP ask_user セッションバインディング", () => {
@@ -206,14 +201,14 @@ describe("MCP ask_user セッションバインディング", () => {
     // セッション s1, s2 を作成（s2 が最新）
     sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
     sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
-    // s2 を少し遅れて作成
     await new Promise(r => setTimeout(r, 10));
     sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s2" }));
     sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s2", prompt: "world" }));
 
-    // 1回目: mcpSessionId 指定で呼び出し → 最新の s2 にバインドされる
+    // 1回目: 明示的 session_id で s2 にバインド（strict モードで 2 セッション時は明示必須）
     const ask1 = askUser({
       mcpSessionId,
+      session_id: "s2",
       questions: [{ question: "Q1?" }],
     });
     let pending = questionStore.getPending();
@@ -225,7 +220,7 @@ describe("MCP ask_user セッションバインディング", () => {
     // バインディングが記録されていることを確認
     expect(sessionBindings.get(mcpSessionId)).toBe("s2");
 
-    // 2回目: 同じ mcpSessionId → バインド済み s2 に継続紐付け
+    // 2回目: 同じ mcpSessionId で session_id 省略 → バインド済み s2 に継続紐付け
     const ask2 = askUser({
       mcpSessionId,
       questions: [{ question: "Q2?" }],
@@ -248,7 +243,7 @@ describe("MCP ask_user セッションバインディング", () => {
     sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
     sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
 
-    // 1回目: s1 にバインド
+    // 1回目: s1 にバインド（アクティブ 1 つなので自動検出）
     const ask1 = askUser({
       mcpSessionId,
       questions: [{ question: "Q1?" }],
@@ -268,7 +263,7 @@ describe("MCP ask_user セッションバインディング", () => {
     sessionStore.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s3" }));
     sessionStore.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s3", prompt: "new" }));
 
-    // 2回目: s1 は completed なのでバインド解除 → s3 に再検出
+    // 2回目: s1 は completed なのでバインド解除 → s3 に再検出（アクティブ 1 つ）
     const ask2 = askUser({
       mcpSessionId,
       questions: [{ question: "Q2?" }],
@@ -320,7 +315,7 @@ describe("MCP ask_user セッションバインディング", () => {
     await askB;
     expect(sessionBindings.get("mcp-b")).toBe("s2");
 
-    // mcp-a は引き続き s1、mcp-b は引き続き s2
+    // mcp-a は引き続き s1、mcp-b は引き続き s2（バインド済みで継続）
     const askA2 = askUser({
       mcpSessionId: "mcp-a",
       questions: [{ question: "QA2?" }],

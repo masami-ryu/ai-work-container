@@ -5,6 +5,58 @@ import type { Request, Response } from "express";
 import type { SessionStore } from "./session-store.js";
 import type { QuestionStore } from "./question-store.js";
 
+// MCP セッション ID からバインド済みのセッション ID を返す。
+// バインド未済の場合は最新のアクティブセッションを検出してバインドする。
+// strict: true の場合、アクティブセッションが2つ以上あり session_id 未指定時はエラー（null）を返す。
+// strict: false（デフォルト）の場合、従来どおり最新アクティブセッションに自動紐付けする。
+export function resolveSessionId(
+  sessionStore: SessionStore,
+  sessionBindings: Map<string, string>,
+  mcpSessionId: string | undefined,
+  explicitSessionId?: string,
+  options?: { strict?: boolean },
+): string | null {
+  const strict = options?.strict ?? false;
+
+  // 1. 明示的 session_id が指定されている場合はそれを使用
+  if (explicitSessionId) {
+    const session = sessionStore.get(explicitSessionId);
+    if (session && (session.status === "running" || session.status === "idle")) {
+      if (mcpSessionId) sessionBindings.set(mcpSessionId, explicitSessionId);
+      return explicitSessionId;
+    }
+    return null; // 指定されたが見つからない
+  }
+
+  // 2. バインド済みの session があり、まだアクティブならそれを使用
+  if (mcpSessionId && sessionBindings.has(mcpSessionId)) {
+    const boundId = sessionBindings.get(mcpSessionId)!;
+    const session = sessionStore.get(boundId);
+    if (session && (session.status === "running" || session.status === "idle")) {
+      return boundId;
+    }
+    // セッションが非アクティブになった場合はバインド解除して再検出
+    sessionBindings.delete(mcpSessionId);
+  }
+
+  // 3. 最新のアクティブセッションを自動検出
+  const sessions = sessionStore.getAll();
+  const activeSessions = sessions
+    .filter((s) => s.status === "running" || s.status === "idle")
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+  // strict モード: アクティブセッションが2つ以上あり session_id 未指定の場合はエラー
+  if (strict && activeSessions.length >= 2) {
+    return null;
+  }
+
+  if (activeSessions.length > 0) {
+    if (mcpSessionId) sessionBindings.set(mcpSessionId, activeSessions[0].session_id);
+    return activeSessions[0].session_id;
+  }
+  return null;
+}
+
 export function createMcpHandler(
   sessionStore: SessionStore,
   questionStore: QuestionStore,
@@ -12,42 +64,6 @@ export function createMcpHandler(
   const transports = new Map<string, StreamableHTTPServerTransport>();
   // MCP セッション ID → claude-monitor セッション ID のバインディング
   const sessionBindings = new Map<string, string>();
-
-  // MCP セッション ID からバインド済みのセッション ID を返す。
-  // バインド未済の場合は最新のアクティブセッションを検出してバインドする。
-  function resolveSessionId(mcpSessionId: string | undefined, explicitSessionId?: string): string | null {
-    // 1. 明示的 session_id が指定されている場合はそれを使用
-    if (explicitSessionId) {
-      const session = sessionStore.get(explicitSessionId);
-      if (session && (session.status === "running" || session.status === "idle")) {
-        if (mcpSessionId) sessionBindings.set(mcpSessionId, explicitSessionId);
-        return explicitSessionId;
-      }
-      return null; // 指定されたが見つからない
-    }
-
-    // 2. バインド済みの session があり、まだアクティブならそれを使用
-    if (mcpSessionId && sessionBindings.has(mcpSessionId)) {
-      const boundId = sessionBindings.get(mcpSessionId)!;
-      const session = sessionStore.get(boundId);
-      if (session && (session.status === "running" || session.status === "idle")) {
-        return boundId;
-      }
-      // セッションが非アクティブになった場合はバインド解除して再検出
-      sessionBindings.delete(mcpSessionId);
-    }
-
-    // 3. 最新のアクティブセッションを自動検出
-    const sessions = sessionStore.getAll();
-    const activeSession = sessions
-      .filter((s) => s.status === "running" || s.status === "idle")
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
-    if (activeSession) {
-      if (mcpSessionId) sessionBindings.set(mcpSessionId, activeSession.session_id);
-      return activeSession.session_id;
-    }
-    return null;
-  }
 
   return async (req: Request, res: Response) => {
     // セッション ID ベースのトランスポート管理
@@ -91,7 +107,7 @@ export function createMcpHandler(
         session_id: z.string().optional().describe("対象セッションID。省略時は自動検出"),
       },
       async ({ status, session_id }) => {
-        const targetId = resolveSessionId(mcpTransportSessionId, session_id);
+        const targetId = resolveSessionId(sessionStore, sessionBindings, mcpTransportSessionId, session_id);
         if (targetId) {
           sessionStore.updateStatus(targetId, status);
           return { content: [{ type: "text" as const, text: `Status updated: ${status}` }] };
@@ -110,7 +126,7 @@ export function createMcpHandler(
         session_id: z.string().optional().describe("対象セッションID。省略時は自動検出"),
       },
       async ({ milestone, details, session_id }) => {
-        const targetId = resolveSessionId(mcpTransportSessionId, session_id);
+        const targetId = resolveSessionId(sessionStore, sessionBindings, mcpTransportSessionId, session_id);
         if (targetId) {
           sessionStore.addMilestone(targetId, milestone, details || "");
           return { content: [{ type: "text" as const, text: `Milestone reported: ${milestone}` }] };
@@ -122,9 +138,9 @@ export function createMcpHandler(
     // ask_user ツール
     server.tool(
       "ask_user",
-      "ユーザーに質問する。ブラウザのダッシュボードに質問が表示され、ユーザーが回答する。AskUserQuestionの代わりに使用する。タイムアウト（120秒）した場合はエラーが返るので、AskUserQuestionにフォールバックすること。",
+      "ユーザーに質問する。ブラウザのダッシュボードに質問が表示され、ユーザーが回答する。AskUserQuestionの代わりに使用する。タイムアウト（120秒）した場合はエラーが返るので、AskUserQuestionにフォールバックすること。注意: 複数のアクティブセッションが存在する場合、session_id を省略するとエラーになる。その場合は session_id を明示的に指定すること。",
       {
-        session_id: z.string().optional().describe("対象セッションID。省略時は最新のアクティブセッションを自動検出"),
+        session_id: z.string().optional().describe("対象セッションID。省略時はアクティブセッションが1つの場合のみ自動検出。複数アクティブ時は必須"),
         questions: z.array(z.object({
           question: z.string().describe("質問文"),
           header: z.string().max(12).optional().describe("短いラベル（最大12文字）"),
@@ -136,12 +152,22 @@ export function createMcpHandler(
         })).min(1).max(4).describe("質問の配列（1-4個）"),
       },
       async ({ session_id, questions }) => {
-        // 1. セッション特定（バインディング活用）
-        const targetSessionId = resolveSessionId(mcpTransportSessionId, session_id);
+        // 1. セッション特定（strict モードで曖昧ケースを防止）
+        const targetSessionId = resolveSessionId(sessionStore, sessionBindings, mcpTransportSessionId, session_id, { strict: true });
         if (!targetSessionId) {
-          const msg = session_id
-            ? `Session ${session_id} not found or not active. Use AskUserQuestion instead.`
-            : "No active session found. Use AskUserQuestion instead.";
+          let msg: string;
+          if (session_id) {
+            msg = `Session ${session_id} not found or not active. Use AskUserQuestion instead.`;
+          } else {
+            // strict モードでの曖昧ケース判定
+            const allSessions = sessionStore.getAll();
+            const activeSessions = allSessions.filter((s) => s.status === "running" || s.status === "idle");
+            if (activeSessions.length >= 2) {
+              msg = `複数のアクティブセッションが存在するため、自動紐付けできません。session_id を明示的に指定してください。アクティブセッション: ${activeSessions.map((s) => s.session_id).join(", ")}`;
+            } else {
+              msg = "No active session found. Use AskUserQuestion instead.";
+            }
+          }
           return {
             content: [{ type: "text" as const, text: msg }],
             isError: true,

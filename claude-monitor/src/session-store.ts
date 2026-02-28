@@ -165,6 +165,7 @@ export class SessionStore {
       last_init_at: now,
       last_run_started_at: "",
       first_prompt_sent: false,
+      approvalSupported: cliTool !== "codex",
       external_session_id: "",
       error_info: "",
       error_at: "",
@@ -202,6 +203,7 @@ export class SessionStore {
         // Claude Code は UUID ベースの一意 session_id のため再初期化不要。
         if (event.cli_tool === "copilot" || event.cli_tool === "codex") {
           session.cli_tool = event.cli_tool;
+          session.approvalSupported = event.cli_tool !== "codex";
           session.activities = [];
           session.milestones = [];
           session.artifacts = [];

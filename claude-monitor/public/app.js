@@ -627,6 +627,16 @@ function renderCard(session) {
     html += `<div class="last-activity">${escapeHtml(truncate(activityText, 200))}</div>`;
   }
 
+  // Codex 承認非対応バナー
+  if (session.cli_tool === 'codex' && session.approvalSupported === false) {
+    html += `
+      <div class="approval-unsupported-banner">
+        <span class="banner-icon">&#9888;</span>
+        <span>Codex の承認操作はブラウザから行えません。端末で直接操作してください。</span>
+      </div>
+    `;
+  }
+
   // Decision panel
   const decisions = Object.values(pendingDecisions).filter(
     d => d.session_id === session.session_id && d.status === 'pending'

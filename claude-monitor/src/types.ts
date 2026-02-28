@@ -31,6 +31,7 @@ export interface Session {
   last_run_started_at: string; // ISO 8601 — 最終 run 開始時刻（UserPromptSubmit / send-keys 成功時に更新）
   first_prompt_sent: boolean; // Copilot: 初回プロンプト送信済みフラグ
   prompt_ready: boolean; // 送信UI/APIの共通判定フラグ（Copilotはstatusとは独立して制御）
+  approvalSupported: boolean; // ブラウザからの承認操作が対応しているか（Codex は false）
   external_session_id: string; // Codex thread-id 等、CLI固有のセッション識別子
   error_at: string; // ISO 8601
   created_at: string; // ISO 8601
