@@ -716,11 +716,14 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       console.log(`send-keys [${session.session_id}]: sending text (${sanitizedText.length} chars)`);
       await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
 
-      // Enter 送信方式: Copilot は COPILOT_PROMPT_ENTER_METHOD > COPILOT_ENTER_METHOD > "c-m"
-      // Codex は "enter"（通常の Enter キー）
-      // 非 Copilot/Codex（Claude 等）は常に "enter"
+      // Enter 送信方式
+      // - Copilot: COPILOT_PROMPT_ENTER_METHOD > COPILOT_ENTER_METHOD > "c-m"
+      // - Codex: CODEX_PROMPT_ENTER_METHOD > CODEX_ENTER_METHOD > "enter-delay"
+      // - 非 Copilot/Codex（Claude 等）: 常に "enter"
       const enterMethod = session.cli_tool === "copilot"
         ? (process.env.COPILOT_PROMPT_ENTER_METHOD || process.env.COPILOT_ENTER_METHOD || "c-m")
+        : session.cli_tool === "codex"
+        ? (process.env.CODEX_PROMPT_ENTER_METHOD || process.env.CODEX_ENTER_METHOD || "enter-delay")
         : "enter";
       console.log(`send-keys [${session.session_id}]: sending Enter (method: ${enterMethod})`);
       await sendEnterKey(session.tmux_pane, enterMethod);

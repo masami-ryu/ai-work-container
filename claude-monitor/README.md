@@ -122,17 +122,20 @@ Claude Code の `SessionEnd` は従来通り常に `completed` に遷移する�
 | `COPILOT_CONFIRM_RESPONSE` | `y` | Copilot ネイティブ承認プロンプトへの応答文字列 |
 | `COPILOT_PROMPT_ENTER_METHOD` | （未設定） | **プロンプト送信（send-keys）用** の Enter 送信方式。設定時は `COPILOT_ENTER_METHOD` より優先。値: `enter` / `c-m` / `enter-delay` / `double-enter` |
 | `COPILOT_ENTER_METHOD` | `c-m`（承認） / `c-m`（送信） | **承認（auto-approve）用** の Enter 送信方式。`COPILOT_PROMPT_ENTER_METHOD` 未設定時は send-keys のフォールバックとしても使用 |
+| `CODEX_PROMPT_ENTER_METHOD` | （未設定） | **Codex プロンプト送信（send-keys）用** の Enter 送信方式。設定時は `CODEX_ENTER_METHOD` より優先。値: `enter` / `c-m` / `enter-delay` / `double-enter` |
+| `CODEX_ENTER_METHOD` | （未設定） | **Codex プロンプト送信（send-keys）用** のフォールバック Enter 送信方式。`CODEX_PROMPT_ENTER_METHOD` 未設定時に使用 |
 | `COPILOT_DECISION_FAIL_MODE` | `closed` | 通信失敗時の動作: `closed`（deny）/ `open`（デフォルト動作） |
 | `COPILOT_APPROVAL_TOOLS` | `bash` | 承認対象ツール（カンマ区切り） |
 
-**Enter 送信方式のフォールバックチェーン**（Copilot セッションのみ）:
+**Enter 送信方式のフォールバックチェーン**:
 
 | 送信経路 | 優先順位 | デフォルト |
 |----------|---------|-----------|
-| send-keys（プロンプト送信） | `COPILOT_PROMPT_ENTER_METHOD` → `COPILOT_ENTER_METHOD` → `c-m` | `c-m` |
+| send-keys（Copilot プロンプト送信） | `COPILOT_PROMPT_ENTER_METHOD` → `COPILOT_ENTER_METHOD` → `c-m` | `c-m` |
+| send-keys（Codex プロンプト送信） | `CODEX_PROMPT_ENTER_METHOD` → `CODEX_ENTER_METHOD` → `enter-delay` | `enter-delay` |
 | auto-approve（承認送信） | `COPILOT_ENTER_METHOD` → `c-m` | `c-m` |
 
-非 Copilot セッション（Claude Code 等）は環境変数に関わらず常に `enter` を使用する。
+非 Copilot/Codex セッション（Claude Code 等）は環境変数に関わらず常に `enter` を使用する。
 
 #### 注意事項
 

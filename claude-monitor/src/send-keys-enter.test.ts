@@ -121,7 +121,12 @@ function getSendKeysCalls(): unknown[][] {
 }
 
 const savedEnv: Record<string, string | undefined> = {};
-const envKeys = ["COPILOT_ENTER_METHOD", "COPILOT_PROMPT_ENTER_METHOD"];
+const envKeys = [
+  "COPILOT_ENTER_METHOD",
+  "COPILOT_PROMPT_ENTER_METHOD",
+  "CODEX_ENTER_METHOD",
+  "CODEX_PROMPT_ENTER_METHOD",
+];
 
 describe("send-keys Enter 方式テスト", () => {
   let deps: ServerDeps;
@@ -185,6 +190,30 @@ describe("send-keys Enter 方式テスト", () => {
 
     return request(app)
       .post("/api/sessions/claude-session-1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text });
+  }
+
+  /** Codex idle セッションを準備し send-keys を送信 */
+  async function sendKeysToCodex(text: string, tmuxOverrides?: {
+    checkPaneMode?: ReturnType<typeof vi.fn>;
+    cancelCopyMode?: ReturnType<typeof vi.fn>;
+  }): Promise<request.Response> {
+    deps = createTestDeps(tmuxOverrides ? { tmuxManager: createMockTmuxManager(tmuxOverrides) } : undefined);
+    ({ app } = createApp(deps));
+
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      cwd: "/workspace",
+    }));
+
+    mockExecFile.mockClear();
+
+    return request(app)
+      .post("/api/sessions/codex-pane-8/send-keys")
       .set("Origin", "http://localhost:3456")
       .send({ text });
   }
@@ -301,6 +330,48 @@ describe("send-keys Enter 方式テスト", () => {
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%5", "-l", "hello"]);
     expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
     expect(sendKeysCalls[2][1]).toEqual(["send-keys", "-t", "%5", "Enter"]);
+  });
+
+  // === Codex セッション: C-u なしで送信 ===
+
+  it("Codex デフォルト: C-u なしで text + Enter（遅延付き）を送信する", async () => {
+    delete process.env.CODEX_PROMPT_ENTER_METHOD;
+    delete process.env.CODEX_ENTER_METHOD;
+
+    const res = await sendKeysToCodex("hello");
+    expect(res.status).toBe(200);
+
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(2);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%8", "-l", "hello"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%8", "Enter"]);
+  });
+
+  it("Codex CODEX_PROMPT_ENTER_METHOD=c-m + CODEX_ENTER_METHOD=enter-delay: send-keys は C-m を使用する", async () => {
+    process.env.CODEX_PROMPT_ENTER_METHOD = "c-m";
+    process.env.CODEX_ENTER_METHOD = "enter-delay";
+
+    const res = await sendKeysToCodex("hello");
+    expect(res.status).toBe(200);
+
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(2);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%8", "-l", "hello"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%8", "C-m"]);
+  });
+
+  it("Codex CODEX_ENTER_METHOD=double-enter のみ設定: Enter + Enter を送信する", async () => {
+    delete process.env.CODEX_PROMPT_ENTER_METHOD;
+    process.env.CODEX_ENTER_METHOD = "double-enter";
+
+    const res = await sendKeysToCodex("hello");
+    expect(res.status).toBe(200);
+
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.length).toBe(3);
+    expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%8", "-l", "hello"]);
+    expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%8", "Enter"]);
+    expect(sendKeysCalls[2][1]).toEqual(["send-keys", "-t", "%8", "Enter"]);
   });
 
   // === 非 Copilot セッション: C-u あり（既存挙動維持） ===
