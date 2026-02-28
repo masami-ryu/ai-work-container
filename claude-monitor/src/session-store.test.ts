@@ -805,3 +805,159 @@ describe("Codex 同一 pane 再起動で external_session_id がリセットさ�
     store.destroy();
   });
 });
+
+// ============================================================
+// TASK-011: SessionStore.cleanup Codex staleness 対策テスト
+// ============================================================
+
+describe("SessionStore.cleanup Codex staleness 対策", () => {
+  it("TASK-011: running Codex セッションが10分経過後も idle に誤遷移しない", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // Codex セッション作成
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "fix bug" }));
+    const session = store.get("codex-pane-7")!;
+    expect(session.status).toBe("running");
+
+    // 10分 + cleanup interval を超える時間を進める（staleness timeout を超過させる）
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    // cleanup が実行されても Codex セッションは idle に遷移しない
+    expect(session.status).toBe("running");
+    expect(session.prompt_ready).toBe(false);
+    store.destroy();
+    vi.useRealTimers();
+  });
+
+  it("TASK-011: 非 Codex (Claude) セッションは従来通り10分で idle に遷移する", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // Claude セッション作成
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
+    const session = store.get("s1")!;
+    expect(session.status).toBe("running");
+
+    // 10分 + cleanup interval を超える時間を進める
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    expect(session.status).toBe("idle");
+    expect(session.prompt_ready).toBe(true);
+    store.destroy();
+    vi.useRealTimers();
+  });
+
+  it("TASK-011: Codex セッションの hard timeout 超過で onHardTimeout が呼ばれる", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onHardTimeout = vi.fn();
+    store.onHardTimeout = onHardTimeout;
+
+    // Codex セッション作成（古い last_run_started_at で hard timeout 超過を模擬）
+    const oldTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex", timestamp: oldTime }));
+    store.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      prompt: "fix bug",
+      timestamp: oldTime,
+    }));
+    const session = store.get("codex-pane-7")!;
+    expect(session.status).toBe("running");
+
+    // hard timeout (10分) 超過分 + cleanup interval 分を進める
+    vi.advanceTimersByTime(10 * 60 * 1000);
+
+    expect(onHardTimeout).toHaveBeenCalledWith("codex-pane-7");
+    // onHardTimeout が呼ばれても store 側では idle 遷移しない（コールバック側で処理）
+    expect(session.status).toBe("running");
+    store.destroy();
+    vi.useRealTimers();
+  });
+
+  it("TASK-011: onHardTimeout 未設定時は hard timeout 超過でもエラーにならない", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // onHardTimeout は設定しない
+
+    const oldTime = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex", timestamp: oldTime }));
+    store.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      prompt: "fix bug",
+      timestamp: oldTime,
+    }));
+
+    // hard timeout 超過分を進めてもエラーにならない
+    expect(() => vi.advanceTimersByTime(10 * 60 * 1000)).not.toThrow();
+    const session = store.get("codex-pane-7")!;
+    expect(session.status).toBe("running");
+    store.destroy();
+    vi.useRealTimers();
+  });
+});
+
+// ============================================================
+// TASK-012: last_run_started_at の UserPromptSubmit 更新テスト
+// ============================================================
+
+describe("last_run_started_at の更新", () => {
+  it("TASK-012: UserPromptSubmit で last_run_started_at が現在時刻で設定される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    const session = store.get("s1")!;
+    expect(session.last_run_started_at).toBe("");
+
+    const timestamp = new Date().toISOString();
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello", timestamp }));
+    expect(session.last_run_started_at).toBe(timestamp);
+    store.destroy();
+  });
+
+  it("TASK-012: Codex UserPromptSubmit で last_run_started_at が更新される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    const session = store.get("codex-pane-7")!;
+    expect(session.last_run_started_at).toBe("");
+
+    const timestamp = new Date().toISOString();
+    store.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      prompt: "fix bug",
+      timestamp,
+    }));
+    expect(session.last_run_started_at).toBe(timestamp);
+    store.destroy();
+  });
+
+  it("TASK-012: Codex SessionStart 再初期化で last_run_started_at がリセットされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      prompt: "fix bug",
+    }));
+    const session = store.get("codex-pane-7")!;
+    expect(session.last_run_started_at).toBeTruthy();
+
+    // 再初期化
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(session.last_run_started_at).toBe("");
+    store.destroy();
+  });
+});

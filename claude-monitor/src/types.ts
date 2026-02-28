@@ -28,6 +28,7 @@ export interface Session {
   tmux_pane: string; // tmux pane識別子（例: "%5"）
   last_hook_at: string; // ISO 8601 — 最終フック通信時刻（空文字列で初期化）
   last_init_at: string; // ISO 8601 — 最終初期化時刻（SessionStart/再初期化時に更新）
+  last_run_started_at: string; // ISO 8601 — 最終 run 開始時刻（UserPromptSubmit / send-keys 成功時に更新）
   first_prompt_sent: boolean; // Copilot: 初回プロンプト送信済みフラグ
   prompt_ready: boolean; // 送信UI/APIの共通判定フラグ（Copilotはstatusとは独立して制御）
   external_session_id: string; // Codex thread-id 等、CLI固有のセッション識別子

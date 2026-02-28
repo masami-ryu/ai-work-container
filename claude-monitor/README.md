@@ -233,6 +233,42 @@ Terminal (Codex CLI)   ── Hooks ──→
 | Stop | notify.sh (async) | idle 遷移 |
 | SessionEnd | notify.sh (async) | completed 遷移 + 通知音（Copilot: `reason=complete` → idle 遷移） |
 
+## Codex セッション完了判定
+
+Codex セッションの Pane Monitor は Copilot とは異なる判定ルールを使用する。`commandAlive`（pane の現在コマンドが `codex` または `node`）を優先し、フック通信途絶だけでは完了させない。
+
+### 判定条件
+
+| 状態 | commandAlive | フック通信 | 判定 |
+|------|-------------|-----------|------|
+| idle | true | - | スキップ（prompt_ready 復帰のみ） |
+| running/waiting_answer | true | 新鮮（60秒以内） | アクティブ維持 |
+| running/waiting_answer | true | 途絶（60秒超） | **アクティブ維持**（hard timeout のみで完了判定） |
+| running/waiting_answer | true | - | hard timeout（`last_run_started_at` 基準、10分）で完了 |
+| running/waiting_answer | false | 途絶（60秒超） | 完了（`codex プロセス終了を検出しました`） |
+| - | - | pane 消失 | 完了（`tmuxペインが終了しました`） |
+
+### hard timeout の判定起点
+
+hard timeout は `last_run_started_at`（`UserPromptSubmit` または send-keys 成功時に更新）を基準に計測する。未設定時は `last_init_at` にフォールバックする。これにより、長寿命セッションで新しい run を開始した直後に即タイムアウトすることを防ぐ。
+
+### SessionStore.cleanup との関係
+
+`SessionStore.cleanup` の staleness 判定（10分更新なし → idle 遷移）は Codex `running`/`waiting_answer` セッションには適用されない。Codex セッションの状態管理は Pane Monitor に委ねる。ただし cleanup 側でも hard timeout 超過を検出した場合は `onHardTimeout` コールバック経由で `completeSessionWithCleanup` を呼び出し、永久残留を防止する。
+
+### reason_code サーバーログフォーマット
+
+`completeSessionWithCleanup` の各呼び出し箇所で、サーバーログに `[reason_code] メッセージ本文` 形式で出力する。`last_message`（UI 表示用）には人間向けメッセージのみを保持する。
+
+| reason_code | 条件 |
+|-------------|------|
+| `hard_timeout` | commandAlive + hard timeout 超過、または hooks 未到達 hard timeout |
+| `command_mismatch` | コマンド不一致 + フック途絶、または hooks 未到達 soft timeout |
+| `pane_lost` | tmux pane 消失 |
+| `manual_close` | UI からの手動終了 |
+
+ログから reason_code を抽出する正規表現: `/\[(\w+)\]/`
+
 ## セキュリティ
 
 - サーバーは `127.0.0.1` にバインド（外部アクセス不可）

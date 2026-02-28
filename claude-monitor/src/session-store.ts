@@ -8,12 +8,16 @@ const MAX_ACTIVITIES = 30;
 // error 状態からの自動復帰対象イベント
 const ERROR_RECOVERY_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart"]);
 
+// Codex hard timeout（pane monitor と共有、cleanup 側でも使用）
+export const CODEX_CLEANUP_HARD_TIMEOUT_MS = 10 * 60_000;
+
 export class SessionStore {
   private sessions = new Map<string, Session>();
   private cleanupTimer: ReturnType<typeof setInterval>;
   private onChange: (session: Session) => void;
   private onDelete?: (sessionId: string) => void;
   private onDeleteHooks: Array<(sessionId: string) => void> = [];
+  onHardTimeout?: (sessionId: string) => void;
 
   constructor(onChange: (session: Session) => void, onDelete?: (sessionId: string) => void) {
     this.onChange = onChange;
@@ -159,6 +163,7 @@ export class SessionStore {
       tmux_pane: "",
       last_hook_at: "",
       last_init_at: now,
+      last_run_started_at: "",
       first_prompt_sent: false,
       external_session_id: "",
       error_info: "",
@@ -210,6 +215,7 @@ export class SessionStore {
           session.error_at = "";
           session.last_hook_at = "";
           session.last_init_at = event.timestamp || new Date().toISOString();
+          session.last_run_started_at = "";
           session.first_prompt_sent = false;
           session.external_session_id = "";
           session.prompt_ready = true;
@@ -222,6 +228,7 @@ export class SessionStore {
         session.prompt_ready = false;
         session.current_progress = "";
         session.questions = [];
+        session.last_run_started_at = event.timestamp || new Date().toISOString();
         // 初回プロンプトをタイトルとして保存（スラッシュコマンドは除外）
         const normalizedPrompt = event.prompt?.trimStart() ?? "";
         const truncatedPrompt = normalizedPrompt.length > 80
@@ -384,6 +391,18 @@ export class SessionStore {
           }
         }
       } else if (session.status === "running" || session.status === "waiting_answer") {
+        // Codex セッション: pane monitor に状態管理を委ねるため、
+        // 通常の staleness による idle 遷移をスキップする。
+        // ただし hard timeout 超過時は onHardTimeout 経由で完了させる（永久残留防止）。
+        if (session.cli_tool === "codex") {
+          const runStartedAt = session.last_run_started_at || session.last_init_at;
+          const sinceRunStarted = now - new Date(runStartedAt).getTime();
+          if (sinceRunStarted >= CODEX_CLEANUP_HARD_TIMEOUT_MS && this.onHardTimeout) {
+            console.log(`[hard_timeout] cleanup: codex session ${id} hard timeout (${sinceRunStarted}ms), invoking onHardTimeout`);
+            this.onHardTimeout(id);
+          }
+          continue;
+        }
         const updatedAt = new Date(session.updated_at).getTime();
         if (now - updatedAt > STALENESS_TIMEOUT_MS) {
           session.status = "idle";

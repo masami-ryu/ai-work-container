@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { runPaneMonitorTick, COPILOT_AUTO_DETECT_COMMANDS, COPILOT_ALIVE_COMMANDS, COPILOT_GRACE_PERIOD_MS, COPILOT_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_HARD_TIMEOUT_MS, CODEX_AUTO_DETECT_COMMANDS, CODEX_ALIVE_COMMANDS, CODEX_GRACE_PERIOD_MS, CODEX_HOOK_TIMEOUT_MS, type PaneMonitorDeps } from "./server.js";
+import { runPaneMonitorTick, COPILOT_AUTO_DETECT_COMMANDS, COPILOT_ALIVE_COMMANDS, COPILOT_GRACE_PERIOD_MS, COPILOT_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_TIMEOUT_MS, COPILOT_NO_HOOK_HARD_TIMEOUT_MS, CODEX_AUTO_DETECT_COMMANDS, CODEX_ALIVE_COMMANDS, CODEX_GRACE_PERIOD_MS, CODEX_HOOK_TIMEOUT_MS, CODEX_NO_HOOK_TIMEOUT_MS, CODEX_NO_HOOK_HARD_TIMEOUT_MS, type PaneMonitorDeps } from "./server.js";
 import { SessionStore } from "./session-store.js";
 import { DecisionStore } from "./decision-store.js";
 import type { TmuxManager, PaneInfo } from "./tmux-manager.js";
@@ -961,6 +961,272 @@ describe("Codex pane 消失によるセッション完了", () => {
     const deps = createDeps({
       tmuxManager: createMockTmuxManager([
         { paneId: "%8", command: "codex", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+});
+
+// ============================================================
+// Codex 完了誤判定修正テスト（TASK-004〜007）
+// ============================================================
+
+describe("Codex commandAlive 優先判定（完了誤判定修正）", () => {
+  it("TASK-004: running + commandAlive(codex) + last_hook_at 60秒超でも完了しない", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_GRACE_PERIOD_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    // running 状態にする
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-8",
+      cli_tool: "codex",
+      prompt: "fix bug",
+    }));
+    // フック通信が途絶（60秒超過）
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "codex", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    // commandAlive=true なので、フック途絶だけでは完了しない
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+
+  it("TASK-004 (node): running + commandAlive(node) + last_hook_at 60秒超でも完了しない", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_GRACE_PERIOD_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-8",
+      cli_tool: "codex",
+      prompt: "fix bug",
+    }));
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "node", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+
+  it("TASK-005: running + commandAlive(node) + hard timeout 超過で完了する", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_GRACE_PERIOD_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    // UserPromptSubmit で last_run_started_at を設定（hard timeout 超過を模擬）
+    const runStartTime = new Date(Date.now() - CODEX_NO_HOOK_HARD_TIMEOUT_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-8",
+      cli_tool: "codex",
+      prompt: "fix bug",
+      timestamp: runStartTime,
+    }));
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "node", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "codex-pane-8",
+      "codex フック未到達タイムアウト"
+    );
+    sessionStore.destroy();
+  });
+
+  it("TASK-006: running + command不一致(bash) + フック途絶で完了する", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_GRACE_PERIOD_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-8",
+      cli_tool: "codex",
+      prompt: "fix bug",
+    }));
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 1000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "bash", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "codex-pane-8",
+      "codex プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
+  });
+
+  it("TASK-005 (last_run_started_at 基準): hard timeout は last_run_started_at 基準で判定される", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    // 古い last_init_at（hard timeout を超える）
+    const veryOldTime = new Date(Date.now() - CODEX_NO_HOOK_HARD_TIMEOUT_MS - 60000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: veryOldTime,
+    }));
+    // 最近の UserPromptSubmit で last_run_started_at を更新（hard timeout 未到達）
+    const recentRunStart = new Date(Date.now() - 60000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-8",
+      cli_tool: "codex",
+      prompt: "fix bug",
+      timestamp: recentRunStart,
+    }));
+    const session = sessionStore.get("codex-pane-8")!;
+    session.last_hook_at = new Date(Date.now() - CODEX_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "codex", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    // last_run_started_at が最近なので hard timeout 未到達 → 完了しない
+    expect(deps.completeSessionWithCleanup).not.toHaveBeenCalled();
+    sessionStore.destroy();
+  });
+
+  it("TASK-006 (no-hook): command不一致 + last_hook_at 未設定 + CODEX_NO_HOOK_TIMEOUT_MS 経過で完了する", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - CODEX_NO_HOOK_TIMEOUT_MS - 1000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "codex-pane-8",
+      tmux_pane: "%8",
+      cli_tool: "codex",
+      timestamp: oldTime,
+    }));
+    // last_hook_at は空文字列のまま
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%8", command: "bash", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "codex-pane-8",
+      "codex プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
+  });
+});
+
+describe("TASK-007: Copilot 既存判定テストの回帰確認", () => {
+  it("Copilot running + commandAlive + フック途絶 → 完了する（Copilot の動作は変わらない）", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+      prompt: "fix bug",
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "copilot", currentPath: "/workspace" },
+      ]),
+      sessionStore,
+    });
+
+    await runPaneMonitorTick(deps);
+    // Copilot は commandAlive でもフック途絶で完了する（Codex とは異なる）
+    expect(deps.completeSessionWithCleanup).toHaveBeenCalledWith(
+      "copilot-pane-5",
+      "copilot プロセス終了を検出しました"
+    );
+    sessionStore.destroy();
+  });
+
+  it("Copilot idle + commandAlive + フック途絶 → 完了しない（既存動作維持）", async () => {
+    const onChange = vi.fn();
+    const sessionStore = new SessionStore(onChange);
+    const oldTime = new Date(Date.now() - COPILOT_GRACE_PERIOD_MS - 5000).toISOString();
+    sessionStore.processEvent(makeEvent({
+      session_id: "copilot-pane-5",
+      tmux_pane: "%5",
+      cli_tool: "copilot",
+      timestamp: oldTime,
+    }));
+    const session = sessionStore.get("copilot-pane-5")!;
+    session.last_hook_at = new Date(Date.now() - COPILOT_HOOK_TIMEOUT_MS - 5000).toISOString();
+
+    const deps = createDeps({
+      tmuxManager: createMockTmuxManager([
+        { paneId: "%5", command: "copilot", currentPath: "/workspace" },
       ]),
       sessionStore,
     });

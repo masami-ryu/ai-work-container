@@ -93,6 +93,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
     if (!session.tmux_pane) continue;
     if (session.status === "completed") continue;
     if (activePaneIds.has(session.tmux_pane)) continue;
+    console.log(`[pane_lost] session ${session.session_id}: tmux pane ${session.tmux_pane} disappeared, completing`);
     completeSessionWithCleanup(session.session_id, "tmuxペインが終了しました");
   }
 
@@ -157,7 +158,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
       // 2a: last_hook_at 設定済み → フックタイムアウト判定
       const sinceLastHook = now - new Date(session.last_hook_at).getTime();
       if (sinceLastHook >= COPILOT_HOOK_TIMEOUT_MS) {
-        console.debug(`Copilot session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${COPILOT_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        console.log(`[command_mismatch] copilot session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${COPILOT_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
         completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
         continue;
       }
@@ -165,13 +166,13 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
       // 2b: last_hook_at 未設定 → no-hook フォールバック
       // hard timeout: commandAlive に関係なく最終上限で完了
       if (sinceInit >= COPILOT_NO_HOOK_HARD_TIMEOUT_MS) {
-        console.warn(`Copilot session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
+        console.log(`[hard_timeout] copilot session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
         completeSessionWithCleanup(sessionId, "copilot フック未到達タイムアウト");
         continue;
       }
       // soft timeout: commandAlive でないプロセスは早期に完了
       if (!commandAlive && sinceInit >= COPILOT_NO_HOOK_TIMEOUT_MS) {
-        console.warn(`Copilot session ${sessionId}: no hooks received after ${sinceInit}ms, completing`);
+        console.log(`[command_mismatch] copilot session ${sessionId}: no hooks received after ${sinceInit}ms, command='${paneCommand}', completing`);
         completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
         continue;
       }
@@ -180,7 +181,11 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
     console.debug(`Copilot session ${sessionId}: command='${paneCommand}', commandAlive=${commandAlive}, waiting for timeout`);
   }
 
-  // codex プロセス終了検出（copilot と同様のフック通信ベース判定）
+  // codex プロセス終了検出
+  // Copilot とは判定ルールを明示的に分離:
+  // - commandAlive かつ running/waiting_answer の場合、フック途絶だけでは完了しない
+  // - hard timeout は last_run_started_at 基準で判定
+  // - コマンド不一致時は従来通りフック途絶で完了
   for (const session of sessionStore.getAll()) {
     if (session.cli_tool !== "codex") continue;
     if (session.status === "completed") continue;
@@ -198,7 +203,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
 
     const now = Date.now();
 
-    // idle + コマンド生存時はスキップ
+    // idle + コマンド生存時はスキップ（prompt_ready 復帰のみ）
     if (session.status === "idle" && commandAlive) {
       if (!session.prompt_ready && session.last_hook_at) {
         const sinceLastHook = now - new Date(session.last_hook_at).getTime();
@@ -209,25 +214,43 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
       continue;
     }
 
+    // --- commandAlive 判定分岐（REQ-001: フック途絶だけで完了しない） ---
     if (commandAlive) {
+      // フック通信が新鮮ならアクティブ維持
       const isFreshByHook = session.last_hook_at
         ? (now - new Date(session.last_hook_at).getTime()) < CODEX_HOOK_TIMEOUT_MS
         : false;
       if (isFreshByHook) continue;
+
+      // commandAlive + running/waiting_answer: hard timeout のみで判定
+      // 判定起点: last_run_started_at（未設定時は last_init_at フォールバック）
+      const runStartedAt = session.last_run_started_at || session.last_init_at;
+      const sinceRunStarted = now - new Date(runStartedAt).getTime();
+      if (sinceRunStarted >= CODEX_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.log(`[hard_timeout] codex session ${sessionId}: hard timeout (${sinceRunStarted}ms >= ${CODEX_NO_HOOK_HARD_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "codex フック未到達タイムアウト");
+        continue;
+      }
+      // hard timeout 未到達 → アクティブ維持
+      continue;
     }
 
+    // --- コマンド不一致判定（REQ-002: 従来通り完了判定） ---
     if (session.last_hook_at) {
       const sinceLastHook = now - new Date(session.last_hook_at).getTime();
       if (sinceLastHook >= CODEX_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] codex session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${CODEX_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
         completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
         continue;
       }
     } else {
       if (sinceInit >= CODEX_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.log(`[hard_timeout] codex session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
         completeSessionWithCleanup(sessionId, "codex フック未到達タイムアウト");
         continue;
       }
-      if (!commandAlive && sinceInit >= CODEX_NO_HOOK_TIMEOUT_MS) {
+      if (sinceInit >= CODEX_NO_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] codex session ${sessionId}: no hooks received after ${sinceInit}ms, command='${paneCommand}', completing`);
         completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
         continue;
       }
@@ -734,10 +757,11 @@ export function createApp(deps: ServerDeps): CreateAppResult {
         session.first_prompt_sent = true;
       }
 
-      // Codex: send-keys 成功時に running へ遷移する合成状態更新（TASK-013）
+      // Codex: send-keys 成功時に running へ遷移する合成状態更新
       if (session.cli_tool === "codex" && session.status === "idle") {
         session.status = "running";
         session.prompt_ready = false;
+        session.last_run_started_at = new Date().toISOString();
         session.updated_at = new Date().toISOString();
         broadcast({ type: "session_update", payload: session });
       }
@@ -1335,6 +1359,16 @@ if (!process.env.VITEST) {
 
   // --- Create Express app via factory ---
   const publicDir = path.resolve(__dirname, "../public");
+
+  // Codex hard timeout: SessionStore.cleanup から呼ばれるコールバックを事前宣言
+  // completeSessionWithCleanup は createApp 後に設定
+  let completeSessionWithCleanupRef: ((sessionId: string, message: string) => void) | null = null;
+  sessionStore.onHardTimeout = (sessionId: string) => {
+    if (completeSessionWithCleanupRef) {
+      completeSessionWithCleanupRef(sessionId, "codex フック未到達タイムアウト");
+    }
+  };
+
   const { app, completeSessionWithCleanup } = createApp({
     sessionStore,
     decisionStore,
@@ -1348,6 +1382,7 @@ if (!process.env.VITEST) {
     allowedOrigins: ALLOWED_ORIGINS,
     publicDir,
   });
+  completeSessionWithCleanupRef = completeSessionWithCleanup;
 
   // --- HTTP Server + WebSocket ---
   const server = createServer(app);
