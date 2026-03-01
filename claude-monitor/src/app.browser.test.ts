@@ -10,6 +10,12 @@ let appApi: {
   setPendingQuestions: (v: Record<string, unknown>) => void;
   setGroups: (v: Record<string, unknown>) => void;
   setPromptTemplates: (v: Record<string, unknown>) => void;
+  stripAnsi: (str: string) => string;
+  setTerminalLogs: (v: Record<string, unknown[]>) => void;
+  setTerminalLogVisible: (v: Record<string, boolean>) => void;
+  getTerminalLogs: () => Record<string, unknown[]>;
+  handleMessage: (msg: Record<string, unknown>) => void;
+  renderCaptureActionPanel: (session: Record<string, unknown>) => string;
 };
 
 beforeAll(() => {
@@ -53,6 +59,12 @@ beforeAll(() => {
       setPendingQuestions: function(v) { pendingQuestions = v; },
       setGroups: function(v) { groups = v; },
       setPromptTemplates: function(v) { promptTemplates = v; },
+      stripAnsi: stripAnsi,
+      setTerminalLogs: function(v) { terminalLogs = v; },
+      setTerminalLogVisible: function(v) { terminalLogVisible = v; },
+      getTerminalLogs: function() { return terminalLogs; },
+      handleMessage: handleMessage,
+      renderCaptureActionPanel: renderCaptureActionPanel,
     };
   })();`;
 
@@ -151,6 +163,171 @@ describe("Codex 承認非対応バナー表示", () => {
 
     const html = appApi.renderCard(session);
     expect(html).toContain("approval-unsupported-banner");
+  });
+});
+
+// ============================================================
+// TASK-011: ターミナルログパネル テスト
+// ============================================================
+
+describe("stripAnsi ユーティリティ", () => {
+  it("ANSI エスケープシーケンスを除去する", () => {
+    expect(appApi.stripAnsi("\x1b[31mred\x1b[0m")).toBe("red");
+  });
+
+  it("複数の ANSI コードを除去する", () => {
+    expect(appApi.stripAnsi("\x1b[1m\x1b[32mbold green\x1b[0m")).toBe("bold green");
+  });
+
+  it("ANSI なしの文字列はそのまま返す", () => {
+    expect(appApi.stripAnsi("plain text")).toBe("plain text");
+  });
+});
+
+describe("ターミナルログパネル XSS 対策", () => {
+  it("<script>alert(1)</script> を含むログイベントが無害に表示される", () => {
+    const session = createMockSession({ session_id: "xss-test" });
+    appApi.setTerminalLogs({
+      "xss-test": [
+        { id: "e1", text: '<script>alert(1)</script>', type: "output", event_state: "pending" },
+      ],
+    });
+
+    const html = appApi.renderCard(session);
+    // renderCard の HTML 内にログパネルのコンテナがある
+    expect(html).toContain("terminal-log-panel");
+    // <script> タグがそのまま innerHTML に注入されていないことを確認
+    expect(html).not.toContain("<script>alert(1)</script>");
+    appApi.setTerminalLogs({});
+  });
+
+  it("ANSI エスケープシーケンスが除去されて表示される", () => {
+    // stripAnsi のテストで十分だが、統合テストとして確認
+    const result = appApi.stripAnsi("\x1b[31mred\x1b[0m text");
+    expect(result).toBe("red text");
+    expect(result).not.toContain("\x1b");
+  });
+});
+
+describe("ターミナルログ ON/OFF トグル", () => {
+  it("デフォルトではログパネルが表示される", () => {
+    const session = createMockSession({ session_id: "toggle-test" });
+    appApi.setTerminalLogs({
+      "toggle-test": [
+        { id: "e1", text: "test output", type: "output", event_state: "pending" },
+      ],
+    });
+
+    const html = appApi.renderCard(session);
+    expect(html).toContain("terminal-log-panel");
+    appApi.setTerminalLogs({});
+  });
+});
+
+describe("terminal_event_batch WebSocket ハンドラ", () => {
+  it("terminal_event_batch メッセージでログが蓄積される", () => {
+    appApi.setTerminalLogs({});
+    appApi.handleMessage({
+      type: "terminal_event_batch",
+      payload: {
+        session_id: "ws-test",
+        events: [
+          { id: "e1", text: "line 1", type: "output", event_state: "pending" },
+          { id: "e2", text: "line 2", type: "output", event_state: "pending" },
+        ],
+      },
+    });
+
+    const logs = appApi.getTerminalLogs();
+    expect(logs["ws-test"]).toHaveLength(2);
+    expect((logs["ws-test"][0] as any).text).toBe("line 1");
+    appApi.setTerminalLogs({});
+  });
+});
+
+// ============================================================
+// TASK-013: 操作ボタン UI テスト
+// ============================================================
+
+describe("capture アクションパネル", () => {
+  it("pending trigger イベントがある場合にアクションパネルが描画される", () => {
+    const session = createMockSession({
+      session_id: "capture-test",
+      status: "running",
+      cli_tool: "codex",
+    });
+    appApi.setTerminalLogs({
+      "capture-test": [
+        { id: "t1", text: "Do you want to proceed? (y/n)", type: "trigger", event_state: "pending" },
+      ],
+    });
+
+    const html = appApi.renderCaptureActionPanel(session);
+    expect(html).toContain("capture-action-panel");
+    expect(html).toContain("btn-capture-yes");
+    expect(html).toContain("btn-capture-no");
+    expect(html).toContain("btn-capture-yes-always");
+    appApi.setTerminalLogs({});
+  });
+
+  it("trigger イベントがない場合はアクションパネルが空", () => {
+    const session = createMockSession({
+      session_id: "no-trigger",
+      status: "running",
+    });
+    appApi.setTerminalLogs({ "no-trigger": [] });
+
+    const html = appApi.renderCaptureActionPanel(session);
+    expect(html).toBe("");
+    appApi.setTerminalLogs({});
+  });
+
+  it("running ステータスでも capture 起点のアクション UI が表示される", () => {
+    const session = createMockSession({
+      session_id: "status-test",
+      status: "running",
+    });
+    appApi.setTerminalLogs({
+      "status-test": [
+        { id: "t1", text: "Apply? (y/n)", type: "trigger", event_state: "pending" },
+      ],
+    });
+
+    const html = appApi.renderCaptureActionPanel(session);
+    expect(html).toContain("capture-action-panel");
+    appApi.setTerminalLogs({});
+  });
+
+  it("waiting_permission ステータスでも capture 起点のアクション UI が表示される", () => {
+    const session = createMockSession({
+      session_id: "wp-test",
+      status: "waiting_permission",
+    });
+    appApi.setTerminalLogs({
+      "wp-test": [
+        { id: "t1", text: "Apply? (y/n)", type: "trigger", event_state: "pending" },
+      ],
+    });
+
+    const html = appApi.renderCaptureActionPanel(session);
+    expect(html).toContain("capture-action-panel");
+    appApi.setTerminalLogs({});
+  });
+
+  it("consumed trigger イベントではアクションパネルが表示されない", () => {
+    const session = createMockSession({
+      session_id: "consumed-test",
+      status: "running",
+    });
+    appApi.setTerminalLogs({
+      "consumed-test": [
+        { id: "t1", text: "Apply? (y/n)", type: "trigger", event_state: "consumed" },
+      ],
+    });
+
+    const html = appApi.renderCaptureActionPanel(session);
+    expect(html).toBe("");
+    appApi.setTerminalLogs({});
   });
 });
 

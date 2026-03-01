@@ -8,6 +8,9 @@ let promptHistories = {}; // "group:<id>" or "session:<id>" -> string[]
 let selectedGroupId = null; // null=すべて, 'ungrouped'=未分類, string=グループID
 const selectedArtifacts = new Set(); // グループ成果物の選択状態
 let toggledSessions = new Set(); // デフォルト状態から反転されたセッション
+let terminalLogs = {}; // sessionId -> TerminalEvent[]
+let terminalLogVisible = {}; // sessionId -> boolean (default true)
+const TERMINAL_LOG_MAX_LINES = 100; // per session
 let ws = null;
 let reconnectDelay = 1000;
 let muted = false;
@@ -551,6 +554,13 @@ function renderSessions() {
   bindCopyPathButtons();
   bindCloseSessionButtons();
   bindMcpQuestionButtons();
+  bindTerminalToggleButtons();
+  bindCaptureActionButtons();
+
+  // Populate terminal log panels with existing data
+  sorted.forEach(id => {
+    updateTerminalLogPanel(id);
+  });
 
   // textarea入力値を復元
   Object.entries(savedTexts).forEach(([sid, val]) => {
@@ -679,6 +689,9 @@ function renderCard(session) {
     html += renderErrorPanel(session);
   }
 
+  // Capture Action Panel（trigger events in terminalLogs, status-independent）
+  html += renderCaptureActionPanel(session);
+
   // external_session_id 表示（Codex thread-id）
   if (session.external_session_id) {
     html += `<div class="card-info"><span class="label">Thread ID:</span>${escapeHtml(session.external_session_id)}</div>`;
@@ -756,6 +769,9 @@ function renderCard(session) {
 
   // Activities
   html += renderActivitiesPanel(session.activities);
+
+  // Terminal Log Panel
+  html += renderTerminalLogPanel(session);
 
   html += `</div>`; // .card-body
 
@@ -1034,6 +1050,111 @@ function bindMcpQuestionButtons() {
   });
 }
 
+function renderTerminalLogPanel(session) {
+  const sessionId = session.session_id;
+  const logs = terminalLogs[sessionId] || [];
+  const count = logs.length;
+  const isOff = terminalLogVisible[sessionId] === false;
+  const toggleLabel = isOff ? '非表示中' : '表示中';
+  const toggleClass = isOff ? 'btn-terminal-toggle off' : 'btn-terminal-toggle';
+
+  return `
+    <details class="terminal-log-panel" open>
+      <summary>ターミナルログ (${count})
+        <button class="${toggleClass}" data-session-id="${escapeHtml(sessionId)}">${toggleLabel}</button>
+      </summary>
+      <div class="terminal-log-content" data-session-id="${escapeHtml(sessionId)}"></div>
+    </details>
+  `;
+}
+
+function updateTerminalLogPanel(sessionId) {
+  const container = document.querySelector(`.terminal-log-content[data-session-id="${sessionId}"]`);
+  if (!container) return;
+
+  // Clear existing content
+  container.innerHTML = '';
+
+  if (terminalLogVisible[sessionId] === false) return;
+
+  const logs = terminalLogs[sessionId] || [];
+  logs.forEach(event => {
+    const el = document.createElement('div');
+    el.className = 'terminal-log-line';
+    if (event.type === 'trigger') {
+      el.classList.add('terminal-log-trigger');
+    }
+    el.textContent = stripAnsi(event.text || '');
+    container.appendChild(el);
+  });
+
+  // Auto-scroll to bottom
+  container.scrollTop = container.scrollHeight;
+}
+
+function getLatestPendingTrigger(sessionId) {
+  const logs = terminalLogs[sessionId] || [];
+  // Find the latest trigger event that is actionable
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const event = logs[i];
+    if (event.type === 'trigger') {
+      var state = event.event_state;
+      // A trigger is actionable if pending, or failed before text was sent
+      if (state === 'pending' || (state === 'failed' && event.fail_phase === 'before_text')) {
+        return event;
+      }
+    }
+  }
+  return null;
+}
+
+function renderCaptureActionPanel(session) {
+  const trigger = getLatestPendingTrigger(session.session_id);
+  if (!trigger) return '';
+
+  const triggerText = stripAnsi(trigger.text || '');
+  const eventId = trigger.id || '';
+
+  return `
+    <div class="capture-action-panel" data-session-id="${escapeHtml(session.session_id)}">
+      <h4>キャプチャトリガー検出</h4>
+      <div class="capture-trigger-text">${escapeHtml(triggerText)}</div>
+      <div class="capture-action-buttons">
+        <button class="btn-capture-yes" data-session-id="${escapeHtml(session.session_id)}" data-action-type="yes" data-trigger-event-id="${escapeHtml(eventId)}">承認 (Y)</button>
+        <button class="btn-capture-no" data-session-id="${escapeHtml(session.session_id)}" data-action-type="no" data-trigger-event-id="${escapeHtml(eventId)}">拒否 (N)</button>
+        <button class="btn-capture-yes-always" data-session-id="${escapeHtml(session.session_id)}" data-action-type="yes_always" data-trigger-event-id="${escapeHtml(eventId)}">常に承認 (Y!)</button>
+      </div>
+      <div class="capture-free-input">
+        <textarea class="capture-free-textarea" data-session-id="${escapeHtml(session.session_id)}" data-trigger-event-id="${escapeHtml(eventId)}" placeholder="自由入力..." rows="1"></textarea>
+        <button class="btn-capture-free-send" data-session-id="${escapeHtml(session.session_id)}" data-trigger-event-id="${escapeHtml(eventId)}">送信</button>
+      </div>
+    </div>
+  `;
+}
+
+function updateCaptureActionPanel(sessionId) {
+  // Re-render capture action panel in-place if it exists
+  const existing = document.querySelector(`.capture-action-panel[data-session-id="${sessionId}"]`);
+  const session = sessions[sessionId];
+  if (!session) return;
+
+  const trigger = getLatestPendingTrigger(sessionId);
+
+  if (!trigger && existing) {
+    // Remove the panel if no trigger
+    existing.remove();
+  } else if (trigger && !existing) {
+    // Insert the panel - find the card and insert before send-keys panel
+    const card = document.querySelector(`.session-card[data-session-id="${sessionId}"]`);
+    if (!card) return;
+    const sendKeysPanel = card.querySelector('.send-keys-panel');
+    if (sendKeysPanel) {
+      sendKeysPanel.insertAdjacentHTML('beforebegin', renderCaptureActionPanel(session));
+      bindCaptureActionButtons();
+    }
+  }
+}
+
 function renderErrorPanel(session) {
   const errorAt = session.error_at ? new Date(session.error_at).toLocaleTimeString('ja-JP') : '';
   return `
@@ -1044,6 +1165,104 @@ function renderErrorPanel(session) {
       <button class="btn-reset-error" data-session-id="${session.session_id}">idle に戻す</button>
     </div>
   `;
+}
+
+function bindTerminalToggleButtons() {
+  document.querySelectorAll('.btn-terminal-toggle').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const sessionId = btn.dataset.sessionId;
+      const currentlyVisible = terminalLogVisible[sessionId] !== false; // default true
+      terminalLogVisible[sessionId] = !currentlyVisible;
+      // Update button label and class
+      if (terminalLogVisible[sessionId]) {
+        btn.textContent = '表示中';
+        btn.classList.remove('off');
+      } else {
+        btn.textContent = '非表示中';
+        btn.classList.add('off');
+      }
+      updateTerminalLogPanel(sessionId);
+    };
+  });
+}
+
+function bindCaptureActionButtons() {
+  // Yes / No / Yes Always buttons
+  document.querySelectorAll('.btn-capture-yes, .btn-capture-no, .btn-capture-yes-always').forEach(btn => {
+    btn.onclick = async () => {
+      const sessionId = btn.dataset.sessionId;
+      const actionType = btn.dataset.actionType;
+      const triggerEventId = btn.dataset.triggerEventId;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/send-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action_type: actionType, trigger_event_id: triggerEventId }),
+        });
+        if (res.ok) {
+          // Remove the trigger event from local state to hide the panel
+          removeTriggerEvent(sessionId, triggerEventId);
+          addLogEntry('capture-action', sessionId, `${actionType} 送信`);
+        } else {
+          const data = await res.json().catch(() => ({}));
+          addLogEntry('capture-action-error', sessionId, data.error || 'エラー');
+        }
+      } catch (e) {
+        console.error('Capture action error:', e);
+        addLogEntry('capture-action-error', sessionId, '通信エラー');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
+
+  // Free input send button
+  document.querySelectorAll('.btn-capture-free-send').forEach(btn => {
+    btn.onclick = async () => {
+      const sessionId = btn.dataset.sessionId;
+      const triggerEventId = btn.dataset.triggerEventId;
+      const textarea = document.querySelector(`.capture-free-textarea[data-session-id="${sessionId}"]`);
+      if (!textarea || !textarea.value.trim()) return;
+      const text = textarea.value.trim();
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/send-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action_type: 'free_input', text, trigger_event_id: triggerEventId }),
+        });
+        if (res.ok) {
+          removeTriggerEvent(sessionId, triggerEventId);
+          textarea.value = '';
+          addLogEntry('capture-action', sessionId, `free_input: ${truncate(text, 30)}`);
+        } else {
+          const data = await res.json().catch(() => ({}));
+          addLogEntry('capture-action-error', sessionId, data.error || 'エラー');
+        }
+      } catch (e) {
+        console.error('Capture free input error:', e);
+        addLogEntry('capture-action-error', sessionId, '通信エラー');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
+}
+
+function removeTriggerEvent(sessionId, triggerEventId) {
+  const logs = terminalLogs[sessionId];
+  if (!logs) return;
+  // Mark the trigger as resolved or remove it
+  const idx = logs.findIndex(e => e.id === triggerEventId && e.type === 'trigger');
+  if (idx !== -1) {
+    logs[idx].status = 'resolved';
+  }
+  // Remove the capture action panel from DOM
+  const panel = document.querySelector(`.capture-action-panel[data-session-id="${sessionId}"]`);
+  if (panel) panel.remove();
 }
 
 function bindDecisionButtons() {
@@ -1853,10 +2072,30 @@ function handleMessage(msg) {
       renderSessions();
       break;
     }
+
+    case 'terminal_event_batch': {
+      const { session_id, events } = payload;
+      if (!terminalLogs[session_id]) terminalLogs[session_id] = [];
+      const logs = terminalLogs[session_id];
+      events.forEach(e => logs.push(e));
+      // Keep only latest TERMINAL_LOG_MAX_LINES
+      if (logs.length > TERMINAL_LOG_MAX_LINES) {
+        terminalLogs[session_id] = logs.slice(-TERMINAL_LOG_MAX_LINES);
+      }
+      // Update the terminal log panel directly (don't re-render full sessions)
+      updateTerminalLogPanel(session_id);
+      // Update the capture action panel (new trigger events may have arrived)
+      updateCaptureActionPanel(session_id);
+      break;
+    }
   }
 }
 
 // --- Utils ---
+function stripAnsi(str) {
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');

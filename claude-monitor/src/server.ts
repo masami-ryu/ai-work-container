@@ -15,12 +15,12 @@ import { TerminalEventStore, parseCaptureConfig } from "./terminal-event-store.j
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import { extractLatestProgress } from "./transcript-parser.js";
-import { getHardTimeoutMs, runCaptureTick, type PaneCaptureDeps } from "./pane-capture.js";
+import { getHardTimeoutMs, runCaptureTick, isCaptureEnabled, type PaneCaptureDeps } from "./pane-capture.js";
 import { cleanupPendingAssignments } from "./pending-group-assignments.js";
 import type { PendingAssignment } from "./pending-group-assignments.js";
 import { assignPendingGroupToSession } from "./group-assignment.js";
 import { listCodexSessions } from "./codex-session-index.js";
-import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode, Session } from "./types.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode, Session, CaptureConfig } from "./types.js";
 import type { PaneInfo } from "./tmux-manager.js";
 
 // --- ServerDeps: createApp の依存注入インターフェース ---
@@ -32,6 +32,7 @@ export interface ServerDeps {
   promptTemplateStore: PromptTemplateStore;
   terminalEventStore: TerminalEventStore;
   tmuxManager: TmuxManager;
+  captureConfig: CaptureConfig;
   pendingGroupAssignments: Map<string, PendingAssignment>;
   broadcast: (msg: WSMessage) => void;
   hookToken: string;
@@ -47,6 +48,7 @@ export interface PaneMonitorDeps {
   pendingGroupAssignments: Map<string, PendingAssignment>;
   completeSessionWithCleanup: (sessionId: string, message: string) => void;
   loggedUnknownCommands: Set<string>;
+  codexCaptureApproval?: boolean;
 }
 
 // Copilot Pane Monitor タイムアウト定数
@@ -78,7 +80,7 @@ export const CODEX_ALIVE_COMMANDS: readonly string[] = ["codex", "node"];
 
 // --- Pane Monitor Tick ロジック（テスト可能な独立関数） ---
 export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
-  const { tmuxManager, sessionStore, decisionStore, pendingGroupAssignments, completeSessionWithCleanup, loggedUnknownCommands } = deps;
+  const { tmuxManager, sessionStore, decisionStore, pendingGroupAssignments, completeSessionWithCleanup, loggedUnknownCommands, codexCaptureApproval } = deps;
   const panes = await tmuxManager.listActivePanesDetailed();
   if (!panes) return;
   if (panes.length === 0) {
@@ -294,7 +296,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
         cli_tool: "copilot",
         timestamp: new Date().toISOString(),
       };
-      sessionStore.processEvent(syntheticEvent);
+      sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
       continue;
     }
 
@@ -323,7 +325,7 @@ export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
         cli_tool: "codex",
         timestamp: new Date().toISOString(),
       };
-      sessionStore.processEvent(syntheticEvent);
+      sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
       continue;
     }
 
@@ -346,9 +348,13 @@ export interface CreateAppResult {
 export function createApp(deps: ServerDeps): CreateAppResult {
   const {
     sessionStore, decisionStore, questionStore, groupStore,
-    promptTemplateStore, terminalEventStore, tmuxManager, pendingGroupAssignments,
+    promptTemplateStore, terminalEventStore, tmuxManager, captureConfig,
+    pendingGroupAssignments,
     broadcast, hookToken, allowedOrigins, publicDir,
   } = deps;
+
+  // Codex capture-pane 疑似承認の可否（processEvent オプション注入用）
+  const codexCaptureApproval = tmuxManager.canManagePanes() && isCaptureEnabled(captureConfig, "codex");
 
   const execFileAsync = promisify(execFile);
 
@@ -496,7 +502,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       event.progress_text = await extractLatestProgress(event.transcript_path);
     }
 
-    const session = sessionStore.processEvent(event);
+    const session = sessionStore.processEvent(event, { codexCaptureApproval });
 
     // Copilot/Codex セッション: フック通信時刻を更新（Pane Monitor の生存判定で使用）
     if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
@@ -560,6 +566,12 @@ export function createApp(deps: ServerDeps): CreateAppResult {
 
   // Copilot 自動承認: tmux send-keys で Copilot ネイティブプロンプトに応答
   async function copilotAutoApprove(session: import("./types.js").Session): Promise<void> {
+    // CON-003: tmux 非接続環境では早期リターン
+    if (!tmuxManager.canManagePanes()) {
+      console.warn(`Copilot auto-approve: tmux not available, skipping for ${session.session_id}`);
+      return;
+    }
+
     const delayMs = parseInt(process.env.COPILOT_CONFIRM_DELAY_MS || "500", 10);
     const response = process.env.COPILOT_CONFIRM_RESPONSE || "y";
     const maxRetries = 3;
@@ -698,9 +710,18 @@ export function createApp(deps: ServerDeps): CreateAppResult {
 
   // --- Send Keys API ---
   const COPILOT_HOOKS_TIMEOUT_MS = 120_000;
+  const VALID_ACTION_TYPES = ["yes", "no", "yes_always", "free_input"] as const;
+  type ActionType = typeof VALID_ACTION_TYPES[number];
 
   app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
     const id = req.params.id as string;
+
+    // CON-003: tmux 可用性ガード
+    if (!tmuxManager.canManagePanes()) {
+      res.status(503).json({ error: "tmux is not available", errorCode: "TMUX_NOT_AVAILABLE" });
+      return;
+    }
+
     const session = sessionStore.get(id);
     if (!session) {
       res.status(404).json({ error: "Session not found" });
@@ -710,39 +731,117 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       res.status(400).json({ error: "tmux_pane not registered" });
       return;
     }
-    if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.prompt_ready) {
-      const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
-      res.status(403).json({ error: `${toolLabel} session is not ready for prompt input`, errorCode: "PROMPT_NOT_READY" });
-      return;
-    }
-    if (session.status !== "idle") {
-      res.status(403).json({ error: "Session is not idle" });
-      return;
-    }
 
-    // Copilot/Codex 固有チェック: 起動状態に応じた制御
-    if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
-      if (!session.first_prompt_sent) {
-        // 初回送信は許可（CLI 起動トリガー）
-      } else if (!session.last_hook_at) {
-        // 2回目以降: CLI がまだ起動中（フック通信なし）
-        const elapsed = Date.now() - new Date(session.last_init_at).getTime();
-        if (elapsed < COPILOT_HOOKS_TIMEOUT_MS) {
-          const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
-          res.status(409).json({ error: `${toolLabel} CLI is still starting up. Please wait.` });
-          return;
-        }
-        console.warn(`${session.cli_tool} session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
+    const { text, action_type, trigger_event_id } = req.body as {
+      text?: unknown;
+      action_type?: unknown;
+      trigger_event_id?: unknown;
+    };
+
+    // --- (1) action_type 形式チェック ---
+    const hasActionType = action_type !== undefined && action_type !== null;
+    const hasTriggerEventId = typeof trigger_event_id === "string" && trigger_event_id.length > 0;
+
+    if (hasActionType) {
+      if (typeof action_type !== "string" || !(VALID_ACTION_TYPES as readonly string[]).includes(action_type)) {
+        res.status(400).json({ error: "Invalid action_type", errorCode: "INVALID_ACTION_TYPE" });
+        return;
       }
     }
 
-    const { text } = req.body as { text: unknown };
-    if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
-      res.status(400).json({ error: "text must be a string between 1 and 4096 characters" });
-      return;
+    const actionType = hasActionType ? action_type as ActionType : null;
+    const isCaptureTriggered = hasTriggerEventId;
+
+    // --- (2) action_type 別の必須/禁止フィールド検証 ---
+    if (actionType === "yes" || actionType === "no" || actionType === "yes_always") {
+      if (text !== undefined && text !== null) {
+        res.status(400).json({ error: `text is not allowed for action_type '${actionType}'`, errorCode: "INVALID_PARAMS" });
+        return;
+      }
+      if (!hasTriggerEventId) {
+        res.status(400).json({ error: "trigger_event_id is required for action_type '" + actionType + "'", errorCode: "TRIGGER_EVENT_REQUIRED" });
+        return;
+      }
+    } else if (actionType === "free_input") {
+      if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
+        res.status(400).json({ error: "text must be a string between 1 and 4096 characters", errorCode: "TEXT_REQUIRED" });
+        return;
+      }
+    } else if (actionType === null) {
+      // 従来互換: action_type 未指定
+      if (hasTriggerEventId) {
+        res.status(400).json({ error: "trigger_event_id is not allowed without action_type", errorCode: "INVALID_PARAMS" });
+        return;
+      }
+      if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
+        res.status(400).json({ error: "text must be a string between 1 and 4096 characters" });
+        return;
+      }
     }
 
-    const sanitizedText = text.replace(/\r?\n/g, " ");
+    // --- (3) capture 検知起点 vs 従来互換の判定分岐 ---
+    if (isCaptureTriggered) {
+      // --- capture 検知起点: decision pending ガード ---
+      const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === id);
+      if (pendingDecisions.length > 0) {
+        res.status(409).json({
+          error: "A decision is pending for this session. Use /api/decisions/:id/respond instead.",
+          errorCode: "DECISION_PENDING",
+        });
+        return;
+      }
+
+      // --- (4) trigger_event_id ライフサイクル検証 ---
+      const consumeResult = terminalEventStore.consumeIfPending(
+        trigger_event_id as string, id, session.run_id
+      );
+      if (!consumeResult.success) {
+        const statusCode = consumeResult.reason === "TRIGGER_SESSION_MISMATCH" || consumeResult.reason === "TRIGGER_RUN_MISMATCH"
+          ? 409 : 410;
+        res.status(statusCode).json({
+          error: `Trigger event validation failed: ${consumeResult.reason}`,
+          errorCode: consumeResult.reason,
+        });
+        return;
+      }
+    } else {
+      // --- 従来互換: status / prompt_ready 判定 ---
+      if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.prompt_ready) {
+        const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+        res.status(403).json({ error: `${toolLabel} session is not ready for prompt input`, errorCode: "PROMPT_NOT_READY" });
+        return;
+      }
+      if (session.status !== "idle") {
+        res.status(403).json({ error: "Session is not idle", errorCode: "SESSION_NOT_IDLE" });
+        return;
+      }
+
+      // Copilot/Codex 固有チェック: 起動状態に応じた制御
+      if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
+        if (!session.first_prompt_sent) {
+          // 初回送信は許可（CLI 起動トリガー）
+        } else if (!session.last_hook_at) {
+          // 2回目以降: CLI がまだ起動中（フック通信なし）
+          const elapsed = Date.now() - new Date(session.last_init_at).getTime();
+          if (elapsed < COPILOT_HOOKS_TIMEOUT_MS) {
+            const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+            res.status(409).json({ error: `${toolLabel} CLI is still starting up. Please wait.` });
+            return;
+          }
+          console.warn(`${session.cli_tool} session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
+        }
+      }
+    }
+
+    // --- 送信テキスト解決 ---
+    let resolvedText: string;
+    if (actionType === "yes" || actionType === "no" || actionType === "yes_always") {
+      const toolConfig = tmuxManager.getTool(session.cli_tool || "claude");
+      const actionStrings = toolConfig?.actionStrings ?? { yes: "y", yes_always: "!", no: "n" };
+      resolvedText = actionStrings[actionType];
+    } else {
+      resolvedText = (text as string).replace(/\r?\n/g, " ");
+    }
 
     try {
       // Copilot/Codex セッション: pane mode ガード（copy-mode 等の入力不可状態を検出・復帰）
@@ -753,6 +852,10 @@ export function createApp(deps: ServerDeps): CreateAppResult {
           const recovered = await tmuxManager.cancelCopyMode(session.tmux_pane);
           if (!recovered) {
             console.warn(`send-keys [${session.session_id}]: copy-mode recovery failed`);
+            // trigger_event_id 付きの場合は before_text 失敗として記録
+            if (isCaptureTriggered) {
+              terminalEventStore.markFailed(trigger_event_id as string, "copy_mode_stuck", "before_text");
+            }
             res.status(422).json({ error: "Pane is in copy-mode and recovery failed", errorCode: "COPY_MODE_STUCK" });
             return;
           }
@@ -766,29 +869,36 @@ export function createApp(deps: ServerDeps): CreateAppResult {
         await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
       }
 
-      console.log(`send-keys [${session.session_id}]: sending text (${sanitizedText.length} chars)`);
-      await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", sanitizedText]);
+      console.log(`send-keys [${session.session_id}]: sending text (${resolvedText.length} chars)`);
+      await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", resolvedText]);
+
+      // --- text 送信成功: 以降の失敗は after_text ---
+      const textSent = true;
 
       // Enter 送信方式
-      // - Copilot(send-keys): COPILOT_PROMPT_ENTER_METHOD > "enter"
-      //   ※ COPILOT_ENTER_METHOD は auto-approve 専用
-      // - Codex: CODEX_PROMPT_ENTER_METHOD > CODEX_ENTER_METHOD > "enter-delay"
-      // - 非 Copilot/Codex（Claude 等）: 常に "enter"
       const enterMethod = session.cli_tool === "copilot"
         ? (process.env.COPILOT_PROMPT_ENTER_METHOD || "enter")
         : session.cli_tool === "codex"
         ? (process.env.CODEX_PROMPT_ENTER_METHOD || process.env.CODEX_ENTER_METHOD || "enter-delay")
         : "enter";
       console.log(`send-keys [${session.session_id}]: sending Enter (method: ${enterMethod})`);
-      await sendEnterKey(session.tmux_pane, enterMethod);
+      try {
+        await sendEnterKey(session.tmux_pane, enterMethod);
+      } catch (enterErr) {
+        // Enter 送信失敗: text は既に送信済みのため after_text
+        if (isCaptureTriggered && textSent) {
+          terminalEventStore.markFailed(trigger_event_id as string, "enter_send_failed", "after_text");
+        }
+        throw enterErr;
+      }
 
       // tmux send-keys 一連成功後に first_prompt_sent を更新
       if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.first_prompt_sent) {
         session.first_prompt_sent = true;
       }
 
-      // Codex: send-keys 成功時に running へ遷移する合成状態更新
-      if (session.cli_tool === "codex" && session.status === "idle") {
+      // Codex: send-keys 成功時に running へ遷移する合成状態更新（従来互換経路のみ）
+      if (!isCaptureTriggered && session.cli_tool === "codex" && session.status === "idle") {
         session.status = "running";
         session.prompt_ready = false;
         session.last_run_started_at = new Date().toISOString();
@@ -796,19 +906,29 @@ export function createApp(deps: ServerDeps): CreateAppResult {
         broadcast({ type: "session_update", payload: session });
       }
 
-      const historyKey = getPromptHistoryKey(id);
-      addPromptHistory(historyKey, text);
-      const [historyScope, historyId] = historyKey.split(":", 2) as ["group" | "session", string];
-      broadcast({
-        type: "prompt_history_update",
-        payload: { scope: historyScope, id: historyId, history: getPromptHistory(historyKey) },
-      });
+      // プロンプト履歴（free_input/従来互換のみ）
+      if (actionType === null || actionType === "free_input") {
+        const historyKey = getPromptHistoryKey(id);
+        addPromptHistory(historyKey, text as string);
+        const [historyScope, historyId] = historyKey.split(":", 2) as ["group" | "session", string];
+        broadcast({
+          type: "prompt_history_update",
+          payload: { scope: historyScope, id: historyId, history: getPromptHistory(historyKey) },
+        });
+      }
 
       console.log(`send-keys [${session.session_id}]: completed successfully`);
       res.json({ ok: true });
     } catch (e: unknown) {
       const err = e as { stderr?: string; message?: string };
       console.error(`send-keys [${session.session_id}] failed:`, err.stderr || err.message);
+      // trigger_event_id 付きで text 未送信の場合は before_text 失敗
+      if (isCaptureTriggered) {
+        const event = terminalEventStore.getEventById(trigger_event_id as string);
+        if (event && event.event_state !== "failed") {
+          terminalEventStore.markFailed(trigger_event_id as string, err.stderr || err.message || "send_keys_failed", "before_text");
+        }
+      }
       res.status(500).json({ error: "Failed to send keys" });
     }
   });
@@ -1273,7 +1393,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
           cli_tool: cliTool,
           timestamp: new Date().toISOString(),
         };
-        const preSession = sessionStore.processEvent(syntheticEvent);
+        const preSession = sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
 
         // グループ自動割り当て（共通ヘルパー経由）
         if (preSession.tmux_pane) {
@@ -1540,6 +1660,7 @@ if (!process.env.VITEST) {
     promptTemplateStore,
     terminalEventStore,
     tmuxManager,
+    captureConfig,
     pendingGroupAssignments,
     broadcast,
     hookToken: HOOK_TOKEN,
@@ -1580,6 +1701,8 @@ if (!process.env.VITEST) {
   function startPaneMonitor(): void {
     if (!tmuxManager.canManagePanes()) return;
 
+    const monitorCodexCaptureApproval = tmuxManager.canManagePanes() && isCaptureEnabled(captureConfig, "codex");
+
     paneCheckTimer = setInterval(async () => {
       if (inFlight) return;
       inFlight = true;
@@ -1591,6 +1714,7 @@ if (!process.env.VITEST) {
           pendingGroupAssignments,
           completeSessionWithCleanup,
           loggedUnknownCommands,
+          codexCaptureApproval: monitorCodexCaptureApproval,
         });
       } finally {
         inFlight = false;

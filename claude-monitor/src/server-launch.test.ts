@@ -51,8 +51,8 @@ function makeEvent(overrides: Partial<HookEvent>): HookEvent {
 function createMockTmuxManager(): TmuxManager {
   return {
     getTools: vi.fn().mockReturnValue([
-      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
-      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
+      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1, actionStrings: { yes: "y", yes_always: "!", no: "n" } },
+      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2, actionStrings: { yes: "y", yes_always: "always", no: "n" } },
     ]),
     getToolsWithAvailability: vi.fn().mockReturnValue([]),
     isAvailable: vi.fn().mockReturnValue(true),
@@ -93,6 +93,7 @@ function createTestDeps(overrides?: Partial<ServerDeps>): ServerDeps {
     promptTemplateStore,
     terminalEventStore: new TerminalEventStore(parseCaptureConfig({})),
     tmuxManager: createMockTmuxManager(),
+    captureConfig: parseCaptureConfig({}),
     pendingGroupAssignments: new Map<string, PendingAssignment>(),
     broadcast,
     hookToken: "",
@@ -617,9 +618,9 @@ describe("Copilot セッションライフサイクル統合テスト", () => {
 function createMockTmuxManagerWithCodex(): TmuxManager {
   return {
     getTools: vi.fn().mockReturnValue([
-      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
-      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
-      { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3 },
+      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1, actionStrings: { yes: "y", yes_always: "!", no: "n" } },
+      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2, actionStrings: { yes: "y", yes_always: "always", no: "n" } },
+      { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3, actionStrings: { yes: "y", yes_always: "yes_always", no: "n" } },
     ]),
     getToolsWithAvailability: vi.fn().mockReturnValue([]),
     isAvailable: vi.fn().mockReturnValue(true),

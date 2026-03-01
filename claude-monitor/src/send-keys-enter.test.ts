@@ -54,8 +54,8 @@ function createMockTmuxManager(overrides?: {
 }): TmuxManager {
   return {
     getTools: vi.fn().mockReturnValue([
-      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
-      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
+      { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1, actionStrings: { yes: "y", yes_always: "!", no: "n" } },
+      { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2, actionStrings: { yes: "y", yes_always: "always", no: "n" } },
     ]),
     getToolsWithAvailability: vi.fn().mockReturnValue([]),
     isAvailable: vi.fn().mockReturnValue(true),
@@ -69,6 +69,7 @@ function createMockTmuxManager(overrides?: {
     listActivePanesDetailed: vi.fn(),
     initialize: vi.fn(),
     destroy: vi.fn(),
+    getTool: vi.fn().mockReturnValue(undefined),
   } as unknown as TmuxManager;
 }
 
@@ -96,6 +97,7 @@ function createTestDeps(overrides?: Partial<ServerDeps>): ServerDeps {
     promptTemplateStore,
     terminalEventStore: new TerminalEventStore(parseCaptureConfig({})),
     tmuxManager: createMockTmuxManager(),
+    captureConfig: parseCaptureConfig({}),
     pendingGroupAssignments: new Map<string, PendingAssignment>(),
     broadcast,
     hookToken: "",
@@ -480,5 +482,320 @@ describe("send-keys Enter 方式テスト", () => {
     expect(sendKeysCalls[0][1]).toEqual(["send-keys", "-t", "%10", "C-u"]);
     expect(sendKeysCalls[1][1]).toEqual(["send-keys", "-t", "%10", "-l", "hello"]);
     expect(sendKeysCalls[2][1]).toEqual(["send-keys", "-t", "%10", "Enter"]);
+  });
+});
+
+// ============================================================
+// TASK-012: send-keys API 拡張テスト
+// ============================================================
+
+describe("send-keys API 拡張 (TASK-012)", () => {
+  let deps: ServerDeps;
+  let app: CreateAppResult["app"];
+
+  beforeEach(() => {
+    setupExecFileSuccess();
+  });
+
+  afterEach(() => {
+    deps?.sessionStore.destroy();
+    deps?.decisionStore.destroy();
+    deps?.questionStore.destroy();
+    mockExecFile.mockReset();
+  });
+
+  /** Codex セッション + trigger イベントを準備するヘルパー */
+  function setupCodexWithTrigger(): { triggerEventId: string; sessionId: string } {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+
+    const sessionId = "codex-pane-9";
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: sessionId,
+      tmux_pane: "%9",
+      cli_tool: "codex",
+    }));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: sessionId,
+      cli_tool: "codex",
+      prompt: "fix",
+    }));
+
+    // trigger イベントを作成
+    const triggerEvent = deps.terminalEventStore.addEvent({
+      sessionId,
+      runId: deps.sessionStore.get(sessionId)!.run_id,
+      text: "Do you want to proceed? (y/n)",
+      type: "trigger",
+      source: "capture",
+    });
+
+    mockExecFile.mockClear();
+    return { triggerEventId: triggerEvent.id, sessionId };
+  }
+
+  // --- CON-003: tmux 可用性ガード ---
+  it("canManagePanes()=false 時に 503 TMUX_NOT_AVAILABLE を返す", async () => {
+    const mockTmux = createMockTmuxManager();
+    (mockTmux.canManagePanes as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    deps = createTestDeps({ tmuxManager: mockTmux });
+    ({ app } = createApp(deps));
+
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text: "hello" });
+
+    expect(res.status).toBe(503);
+    expect(res.body.errorCode).toBe("TMUX_NOT_AVAILABLE");
+  });
+
+  // --- action_type バリデーション ---
+  it("無効な action_type で 400 INVALID_ACTION_TYPE を返す", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "invalid_type" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errorCode).toBe("INVALID_ACTION_TYPE");
+  });
+
+  // --- action_type 必須/禁止フィールド ---
+  it("action_type=yes に text を送ると 400 INVALID_PARAMS を返す", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes", text: "hello", trigger_event_id: "evt-1" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errorCode).toBe("INVALID_PARAMS");
+  });
+
+  it("action_type=yes に trigger_event_id なしで 400 TRIGGER_EVENT_REQUIRED を返す", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errorCode).toBe("TRIGGER_EVENT_REQUIRED");
+  });
+
+  it("action_type なし + trigger_event_id 指定で 400 INVALID_PARAMS を返す", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text: "hello", trigger_event_id: "evt-1" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errorCode).toBe("INVALID_PARAMS");
+  });
+
+  // --- capture 検知起点: action_type=yes の正常フロー ---
+  it("action_type=yes + 有効な trigger_event_id で actionStrings.yes が送信される", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    // getTool モックを追加（codex の actionStrings）
+    (deps.tmuxManager.getTool as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3,
+      actionStrings: { yes: "y", yes_always: "yes_always", no: "n" },
+    });
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(200);
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.some((c: unknown[]) => (c[1] as string[]).includes("y"))).toBe(true);
+
+    // trigger イベントが consumed になっている
+    const event = deps.terminalEventStore.getEventById(triggerEventId);
+    expect(event?.event_state).toBe("consumed");
+  });
+
+  // --- capture 検知起点: action_type=no ---
+  it("action_type=no + 有効な trigger_event_id で actionStrings.no が送信される", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    (deps.tmuxManager.getTool as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3,
+      actionStrings: { yes: "y", yes_always: "yes_always", no: "n" },
+    });
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "no", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(200);
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.some((c: unknown[]) => (c[1] as string[]).includes("n"))).toBe(true);
+  });
+
+  // --- capture 検知起点: 消費済みイベントで TRIGGER_EVENT_CONSUMED ---
+  it("消費済み trigger_event_id で 410 TRIGGER_EVENT_CONSUMED を返す", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    // 最初の消費
+    deps.terminalEventStore.consumeIfPending(
+      triggerEventId, sessionId, deps.sessionStore.get(sessionId)!.run_id
+    );
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(410);
+    expect(res.body.errorCode).toBe("TRIGGER_EVENT_CONSUMED");
+  });
+
+  // --- decision pending ガード ---
+  it("decision pending 時に capture 起点で 409 DECISION_PENDING を返す", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    // pending decision を登録
+    deps.decisionStore.register({
+      correlation_id: "dec-1",
+      session_id: sessionId,
+      decision_type: "permission",
+      tool_name: "Bash",
+      tool_input: {},
+      timestamp: new Date().toISOString(),
+    });
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(409);
+    expect(res.body.errorCode).toBe("DECISION_PENDING");
+
+    // trigger イベントは消費されていない
+    const event = deps.terminalEventStore.getEventById(triggerEventId);
+    expect(event?.event_state).toBe("pending");
+  });
+
+  // --- 従来互換: idle + prompt_ready 判定 ---
+  it("従来互換: idle + prompt_ready で正常に送信される（回帰テスト）", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+    mockExecFile.mockClear();
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text: "hello" });
+
+    expect(res.status).toBe(200);
+  });
+
+  // --- 従来互換: session.status !== idle ---
+  it("従来互換: status=running で 403 SESSION_NOT_IDLE を返す", async () => {
+    deps = createTestDeps();
+    ({ app } = createApp(deps));
+
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+      tmux_pane: "%1",
+    }));
+    deps.sessionStore.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "s1",
+      prompt: "hello",
+    }));
+
+    const res = await request(app)
+      .post("/api/sessions/s1/send-keys")
+      .set("Origin", "http://localhost:3456")
+      .send({ text: "another" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.errorCode).toBe("SESSION_NOT_IDLE");
+  });
+
+  // --- capture 起点は status に依存しない ---
+  it("capture 起点: status=running でも trigger_event_id 有効なら送信成功", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    (deps.tmuxManager.getTool as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3,
+      actionStrings: { yes: "y", yes_always: "yes_always", no: "n" },
+    });
+
+    // セッションは running 状態
+    expect(deps.sessionStore.get(sessionId)!.status).toBe("running");
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "yes", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(200);
+  });
+
+  // --- free_input + trigger_event_id ---
+  it("action_type=free_input + trigger_event_id で capture 起点として動作する", async () => {
+    const { triggerEventId, sessionId } = setupCodexWithTrigger();
+
+    const res = await request(app)
+      .post(`/api/sessions/${sessionId}/send-keys`)
+      .set("Origin", "http://localhost:3456")
+      .send({ action_type: "free_input", text: "custom response", trigger_event_id: triggerEventId });
+
+    expect(res.status).toBe(200);
+    const sendKeysCalls = getSendKeysCalls();
+    expect(sendKeysCalls.some((c: unknown[]) => (c[1] as string[]).includes("custom response"))).toBe(true);
   });
 });

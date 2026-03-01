@@ -436,6 +436,7 @@ describe("GET /api/sessions/:id/terminal-events", () => {
         initialize: vi.fn(),
         destroy: vi.fn(),
       } as unknown as TmuxManager,
+      captureConfig: parseCaptureConfig({}),
       pendingGroupAssignments: new Map(),
       broadcast: vi.fn(),
       hookToken: "",

@@ -203,12 +203,20 @@ export interface DecisionResponse {
   decision: "allow" | "deny";
 }
 
-// CLIツール設定（将来のcopilot/codex対応用）
+// CLI 別アクション文字列（capture 検知起点の疑似端末操作で使用）
+export interface ActionStrings {
+  yes: string;          // 承認文字列
+  yes_always: string;   // 全承認文字列（"yes and don't ask again" 相当）
+  no: string;           // 拒否文字列
+}
+
+// CLIツール設定
 export interface CliToolConfig {
   id: string;           // "claude", "copilot", "codex"
   label: string;        // "Claude Code"
   command: string;      // "claude"
   windowIndex: number;  // tmuxウィンドウ番号（claudeは1）
+  actionStrings: ActionStrings; // CLI 別アクション文字列
 }
 
 // Codex 起動モード

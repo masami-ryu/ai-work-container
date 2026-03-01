@@ -27,9 +27,9 @@ const MCP_URL = "http://localhost:3456/mcp";
 
 // デフォルトCLIツール定義
 const DEFAULT_TOOLS: CliToolConfig[] = [
-  { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1 },
-  { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2 },
-  { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3 },
+  { id: "claude", label: "Claude Code", command: "claude", windowIndex: 1, actionStrings: { yes: "y", yes_always: "!", no: "n" } },
+  { id: "copilot", label: "Copilot CLI", command: "copilot", windowIndex: 2, actionStrings: { yes: "y", yes_always: "always", no: "n" } },
+  { id: "codex", label: "Codex CLI", command: "codex", windowIndex: 3, actionStrings: { yes: "y", yes_always: "yes_always", no: "n" } },
 ];
 
 // シェルコマンド文字列用のクォート（シングルクォート方式）
@@ -111,6 +111,11 @@ export class TmuxManager {
   // ツール個別の利用可否を返す
   isToolAvailable(toolId: string): { available: boolean; unavailable_reason?: string } {
     return this.toolAvailability.get(toolId) || { available: false, unavailable_reason: "Unknown tool" };
+  }
+
+  // ツール設定を取得（actionStrings 参照用）
+  getTool(toolId: string): CliToolConfig | undefined {
+    return this.tools.get(toolId);
   }
 
   // tmuxペイン操作（kill/list/exists）が可能か（sessionNameのみ必要）

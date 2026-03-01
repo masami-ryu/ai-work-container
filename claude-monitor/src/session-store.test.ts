@@ -1173,3 +1173,95 @@ describe("updateTerminalEventSummary", () => {
     store.destroy();
   });
 });
+
+// ============================================================
+// TASK-022: approvalSupported 条件分岐テスト
+// ============================================================
+
+describe("Codex approvalSupported の条件分岐", () => {
+  it("デフォルト（options なし）: Codex は approvalSupported=false", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }));
+    expect(session.approvalSupported).toBe(false);
+    store.destroy();
+  });
+
+  it("codexCaptureApproval=true: Codex は approvalSupported=true", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }), { codexCaptureApproval: true });
+    expect(session.approvalSupported).toBe(true);
+    store.destroy();
+  });
+
+  it("codexCaptureApproval=false: Codex は approvalSupported=false", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }), { codexCaptureApproval: false });
+    expect(session.approvalSupported).toBe(false);
+    store.destroy();
+  });
+
+  it("Copilot は options に関係なく常に approvalSupported=true", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "copilot-pane-5",
+      cli_tool: "copilot",
+    }), { codexCaptureApproval: false });
+    expect(session.approvalSupported).toBe(true);
+    store.destroy();
+  });
+
+  it("Claude は options に関係なく常に approvalSupported=true", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "s1",
+    }));
+    expect(session.approvalSupported).toBe(true);
+    store.destroy();
+  });
+
+  it("Codex 再初期化時に codexCaptureApproval が反映される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // 初回: capture 無効
+    store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }));
+    expect(store.get("codex-pane-7")!.approvalSupported).toBe(false);
+
+    // UserPromptSubmit + 再初期化: capture 有効
+    store.processEvent(makeEvent({
+      event_type: "UserPromptSubmit",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+      prompt: "fix",
+    }));
+    const session = store.processEvent(makeEvent({
+      event_type: "SessionStart",
+      session_id: "codex-pane-7",
+      cli_tool: "codex",
+    }), { codexCaptureApproval: true });
+    expect(session.approvalSupported).toBe(true);
+    store.destroy();
+  });
+});

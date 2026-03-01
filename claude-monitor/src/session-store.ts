@@ -50,7 +50,7 @@ export class SessionStore {
     return session;
   }
 
-  processEvent(event: HookEvent): Session {
+  processEvent(event: HookEvent, options?: { codexCaptureApproval?: boolean }): Session {
     let session = this.sessions.get(event.session_id);
 
     if (!session) {
@@ -58,7 +58,7 @@ export class SessionStore {
       this.sessions.set(event.session_id, session);
     }
 
-    this.applyEvent(session, event);
+    this.applyEvent(session, event, options);
     session.updated_at = event.timestamp || new Date().toISOString();
     this.onChange(session);
     return session;
@@ -192,7 +192,7 @@ export class SessionStore {
     };
   }
 
-  private applyEvent(session: Session, event: HookEvent): void {
+  private applyEvent(session: Session, event: HookEvent, options?: { codexCaptureApproval?: boolean }): void {
     // error 状態からの自動復帰: エージェント動作を示すイベントで error をクリア
     if (session.status === "error" && ERROR_RECOVERY_EVENTS.has(event.event_type)) {
       session.error_info = "";
@@ -234,7 +234,10 @@ export class SessionStore {
         if (event.cli_tool === "copilot" || event.cli_tool === "codex") {
 
           session.cli_tool = event.cli_tool;
-          session.approvalSupported = event.cli_tool !== "codex";
+          // Codex: capture-pane ベースの疑似承認が利用可能な場合のみ true
+          session.approvalSupported = event.cli_tool === "codex"
+            ? options?.codexCaptureApproval === true
+            : true;
           session.activities = [];
           session.milestones = [];
           session.artifacts = [];
