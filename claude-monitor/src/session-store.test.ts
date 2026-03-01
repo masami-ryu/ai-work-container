@@ -961,3 +961,215 @@ describe("last_run_started_at の更新", () => {
     store.destroy();
   });
 });
+
+// ============================================================
+// run_id 世代管理テスト
+// ============================================================
+
+describe("run_id 世代管理", () => {
+  it("新規セッション作成時に run_id=1 で初期化される", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const session = store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(session.run_id).toBe(1);
+    store.destroy();
+  });
+
+  it("プレセッション→実セッション遷移（last_run_started_at=''）では run_id を維持", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    // プレセッション（SessionStart のみ、UserPromptSubmit なし）
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    const session = store.get("copilot-pane-5")!;
+    expect(session.run_id).toBe(1);
+    expect(session.last_run_started_at).toBe("");
+
+    // 再初期化（実セッション化）→ run_id は維持
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    expect(session.run_id).toBe(1);
+    expect(onInvalidate).not.toHaveBeenCalled();
+    store.destroy();
+  });
+
+  it("UserPromptSubmit 受信済みセッションの SessionStart で run_id がインクリメントされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "copilot-pane-5", cli_tool: "copilot", prompt: "hello" }));
+
+    expect(store.get("copilot-pane-5")!.run_id).toBe(1);
+
+    // 再初期化（last_run_started_at !== "" のためインクリメント）
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    expect(store.get("copilot-pane-5")!.run_id).toBe(2);
+    expect(onInvalidate).toHaveBeenCalledWith("copilot-pane-5");
+    store.destroy();
+  });
+
+  it("completed セッションの SessionStart で run_id がインクリメントされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "codex-pane-7", cli_tool: "codex", reason: "done" }));
+    expect(store.get("codex-pane-7")!.status).toBe("completed");
+
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    expect(store.get("codex-pane-7")!.run_id).toBe(2);
+    expect(onInvalidate).toHaveBeenCalledWith("codex-pane-7");
+    store.destroy();
+  });
+
+  it("手入力中心 Copilot run（UserPromptSubmit 設定済み）後の SessionStart で run_id がインクリメント", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    // first_prompt_sent=false だが UserPromptSubmit で last_run_started_at は設定される
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "copilot-pane-5", cli_tool: "copilot", prompt: "hi" }));
+    // SessionEnd(complete) → idle
+    store.processEvent(makeEvent({ event_type: "SessionEnd", session_id: "copilot-pane-5", cli_tool: "copilot", reason: "complete" }));
+
+    // 再初期化: last_run_started_at !== "" のためインクリメント
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    expect(store.get("copilot-pane-5")!.run_id).toBe(2);
+    expect(onInvalidate).toHaveBeenCalledWith("copilot-pane-5");
+    store.destroy();
+  });
+
+  it("Claude セッションでは run_id がインクリメントされない（再初期化ロジック非適用）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+
+    // Claude は Copilot/Codex 再初期化ブロックを通らないので run_id は 1 のまま
+    expect(store.get("s1")!.run_id).toBe(1);
+    expect(onInvalidate).not.toHaveBeenCalled();
+    store.destroy();
+  });
+
+  // Known limitation: Codex 同一 pane 短時間再起動シナリオ
+  // pane_pid 検知未実装のため Phase 3 TASK-024 で対応予定
+  it("Known limitation: Codex 同一 pane 短時間再起動（前セッション未 completed、合成 SessionStart 非発火）で run_id が進まない", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    const onInvalidate = vi.fn();
+    store.onInvalidateBySession = onInvalidate;
+
+    // Codex セッション開始、running 状態のまま（未 completed）
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "codex-pane-7", cli_tool: "codex" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "codex-pane-7", cli_tool: "codex", prompt: "fix" }));
+    expect(store.get("codex-pane-7")!.status).toBe("running");
+    expect(store.get("codex-pane-7")!.run_id).toBe(1);
+
+    // 同一 pane で Codex プロセスが短時間で再起動した場合、
+    // notify.sh の SessionStart が発火しない（Codex は Stop のみ送信）ため
+    // 合成 SessionStart も非 completed セッション存在時は生成されない。
+    // → run_id は進まない（pane_pid 変化検知は Phase 3 TASK-024 のスコープ）
+    // Known limitation: pane_pid 検知未実装のため Phase 3 TASK-024 で対応予定
+    expect(store.get("codex-pane-7")!.run_id).toBe(1);
+    expect(onInvalidate).not.toHaveBeenCalled();
+    store.destroy();
+  });
+});
+
+// ============================================================
+// updateTerminalEventSummary テスト
+// ============================================================
+
+describe("updateTerminalEventSummary", () => {
+  it("terminal_event_count と terminal_event_latest_seq を更新する", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    onChange.mockClear();
+
+    store.updateTerminalEventSummary("s1", 10, 15);
+    const session = store.get("s1")!;
+    expect(session.terminal_event_count).toBe(10);
+    expect(session.terminal_event_latest_seq).toBe(15);
+  });
+
+  it("onChange を発火しない（silent 更新）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    onChange.mockClear();
+
+    store.updateTerminalEventSummary("s1", 10, 15);
+    expect(onChange).not.toHaveBeenCalled();
+    store.destroy();
+  });
+
+  it("updated_at を変更しない（cleanup の stale 判定に影響しない）", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    const updatedAtBefore = store.get("s1")!.updated_at;
+
+    store.updateTerminalEventSummary("s1", 10, 15);
+    expect(store.get("s1")!.updated_at).toBe(updatedAtBefore);
+    store.destroy();
+  });
+
+  it("terminal event 連続更新中でも cleanup の stale 判定が従来どおり動作する", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "s1" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "s1", prompt: "hello" }));
+    const session = store.get("s1")!;
+    expect(session.status).toBe("running");
+
+    // terminal event の summary を頻繁に更新
+    for (let i = 0; i < 100; i++) {
+      store.updateTerminalEventSummary("s1", i, i);
+    }
+
+    // 15分進める（staleness timeout 超過）
+    vi.advanceTimersByTime(15 * 60 * 1000);
+
+    // updated_at は summary 更新で変わらないため、stale 判定で idle に遷移する
+    expect(session.status).toBe("idle");
+    store.destroy();
+    vi.useRealTimers();
+  });
+
+  it("存在しないセッションでは何もしない", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    // エラーにならないことを確認
+    expect(() => store.updateTerminalEventSummary("nonexistent", 10, 15)).not.toThrow();
+    store.destroy();
+  });
+
+  it("SessionStart 再初期化で terminal_event_count/latest_seq がリセットされる", () => {
+    const onChange = vi.fn();
+    const store = new SessionStore(onChange);
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    store.processEvent(makeEvent({ event_type: "UserPromptSubmit", session_id: "copilot-pane-5", cli_tool: "copilot", prompt: "hello" }));
+    store.updateTerminalEventSummary("copilot-pane-5", 50, 100);
+    expect(store.get("copilot-pane-5")!.terminal_event_count).toBe(50);
+
+    // 再初期化
+    store.processEvent(makeEvent({ event_type: "SessionStart", session_id: "copilot-pane-5", cli_tool: "copilot" }));
+    expect(store.get("copilot-pane-5")!.terminal_event_count).toBe(0);
+    expect(store.get("copilot-pane-5")!.terminal_event_latest_seq).toBe(0);
+    store.destroy();
+  });
+});

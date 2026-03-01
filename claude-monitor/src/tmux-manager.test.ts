@@ -341,3 +341,229 @@ describe("TmuxManager Copilot コマンド生成", () => {
     manager.destroy();
   });
 });
+
+// ──────────────────────────────────────────────────────────────
+// capturePane テスト
+// ──────────────────────────────────────────────────────────────
+
+describe("TmuxManager capturePane", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    savedEnv.TMUX = process.env.TMUX;
+    savedEnv.TMUX_PANE = process.env.TMUX_PANE;
+    savedEnv.CLAUDE_MONITOR_WORK_DIR = process.env.CLAUDE_MONITOR_WORK_DIR;
+
+    process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
+    process.env.TMUX_PANE = "%0";
+    process.env.CLAUDE_MONITOR_WORK_DIR = "/workspace";
+  });
+
+  afterEach(() => {
+    mockExecFile.mockReset();
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  });
+
+  it("正常系: pane テキストを行配列で返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else if (argv[0] === "capture-pane") {
+        cb(null, { stdout: "line1\nline2\nline3\n", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const lines = await manager.capturePane("%5");
+    expect(lines).toEqual(["line1", "line2", "line3", ""]);
+    manager.destroy();
+  });
+
+  it("startLine/endLine の指定が tmux 引数に反映される", async () => {
+    const capturedArgs: string[][] = [];
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else if (argv[0] === "capture-pane") {
+        capturedArgs.push([...argv]);
+        cb(null, { stdout: "line\n", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    await manager.capturePane("%5", -100, 50);
+
+    expect(capturedArgs[0]).toContain("-S");
+    expect(capturedArgs[0]).toContain("-100");
+    expect(capturedArgs[0]).toContain("-E");
+    expect(capturedArgs[0]).toContain("50");
+    manager.destroy();
+  });
+
+  it("pane 不在時は null を返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else if (argv[0] === "capture-pane") {
+        cb(createExecError("can't find pane: %99"));
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const result = await manager.capturePane("%99");
+    expect(result).toBeNull();
+    manager.destroy();
+  });
+
+  it("tmux 実行エラー時は null を返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else if (argv[0] === "capture-pane") {
+        cb(new Error("tmux server crashed"));
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const result = await manager.capturePane("%5");
+    expect(result).toBeNull();
+    manager.destroy();
+  });
+
+  it("canManagePanes() === false の場合は null を返す", async () => {
+    // TMUX 未設定 → canManagePanes() === false
+    delete process.env.TMUX;
+    const manager = new TmuxManager();
+    const result = await manager.capturePane("%5");
+    expect(result).toBeNull();
+    manager.destroy();
+  });
+
+  it("不正な pane ID フォーマットでは null を返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const result = await manager.capturePane("invalid-pane");
+    expect(result).toBeNull();
+    manager.destroy();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────
+// getPanePid テスト
+// ──────────────────────────────────────────────────────────────
+
+describe("TmuxManager getPanePid", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    savedEnv.TMUX = process.env.TMUX;
+    savedEnv.TMUX_PANE = process.env.TMUX_PANE;
+    savedEnv.CLAUDE_MONITOR_WORK_DIR = process.env.CLAUDE_MONITOR_WORK_DIR;
+
+    process.env.TMUX = "/tmp/tmux-1000/default,12345,0";
+    process.env.TMUX_PANE = "%0";
+    process.env.CLAUDE_MONITOR_WORK_DIR = "/workspace";
+  });
+
+  afterEach(() => {
+    mockExecFile.mockReset();
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  });
+
+  it("正常時: PID 文字列を返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message" && argv.includes("#{pane_pid}")) {
+        cb(null, { stdout: "12345\n", stderr: "" });
+      } else if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const pid = await manager.getPanePid("%5");
+    expect(pid).toBe("12345");
+    manager.destroy();
+  });
+
+  it("pane 不在時は null を返す", async () => {
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (argv[0] === "display-message" && argv.includes("#{pane_pid}")) {
+        cb(createExecError("can't find pane: %99"));
+      } else if (argv[0] === "display-message") {
+        cb(null, { stdout: "test-session\n", stderr: "" });
+      } else {
+        cb(null, { stdout: "", stderr: "" });
+      }
+      return { on: vi.fn(), kill: vi.fn() };
+    });
+
+    const manager = new TmuxManager();
+    await manager.initialize();
+    const pid = await manager.getPanePid("%99");
+    expect(pid).toBeNull();
+    manager.destroy();
+  });
+
+  it("canManagePanes() === false の場合は null を返す", async () => {
+    delete process.env.TMUX;
+    const manager = new TmuxManager();
+    const pid = await manager.getPanePid("%5");
+    expect(pid).toBeNull();
+    manager.destroy();
+  });
+});

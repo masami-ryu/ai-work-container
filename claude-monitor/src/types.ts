@@ -10,6 +10,47 @@ export type SessionStatus =
 // CLIツール種別
 export type CliToolType = "claude" | "copilot" | "codex";
 
+// ターミナルイベント状態（ライフサイクル管理）
+export type TerminalEventState = "pending" | "consumed" | "failed" | "expired";
+
+// ターミナルイベント種別
+export type TerminalEventType = "output" | "gap" | "trigger";
+
+// ターミナルイベント（capture-pane / hooks 由来の端末ログ）
+export interface TerminalEvent {
+  id: string;                          // 一意識別子
+  sequence: number;                    // セッション内 seq 番号（単調増加）
+  timestamp: string;                   // ISO 8601
+  source: "capture" | "hooks";        // イベント発生元
+  session_id: string;                  // セッション紐付け
+  run_id: number;                      // run 世代（Session.run_id と対応）
+  text: string;                        // イベントテキスト
+  type: TerminalEventType;             // イベント種別
+  // ライフサイクル管理（TASK-002b）
+  event_state: TerminalEventState;     // 状態
+  expires_at: string;                  // ISO 8601（TTL ベース有効期限）
+  consumed_at: string;                 // ISO 8601（消費日時、空文字で初期化）
+  failed_at: string;                   // ISO 8601（失敗日時、空文字で初期化）
+  fail_reason: string;                 // 失敗理由
+  fail_phase: "" | "before_text" | "after_text"; // 失敗フェーズ
+  retry_count: number;                 // 再試行回数（初期値0）
+  // メタデータ
+  truncated: boolean;                  // テキスト切り詰め済みフラグ
+  reason?: string;                     // gap イベント時の理由等
+}
+
+// capture-pane 設定
+export interface CaptureConfig {
+  enableCodex: boolean;
+  enableCopilot: boolean;
+  enableClaude: boolean;
+  maxEventsPerSession: number;
+  eventTtlMinutes: number;
+  maxEventsGlobal: number;
+  maxEventChars: number;
+  tombstoneTtlMinutes: number;
+}
+
 // セッション
 export interface Session {
   session_id: string;
@@ -38,6 +79,11 @@ export interface Session {
   updated_at: string; // ISO 8601
   activities: Activity[];
   questions: Question[];
+  // ターミナルイベント要約（TerminalEventStore から分離管理）
+  run_id: number;                          // run 世代カウンタ（初期値1、SessionStart 再初期化時にインクリメント）
+  terminal_event_count: number;            // 当該セッションのイベント総数
+  terminal_event_latest_seq: number;       // 当該セッションの最新 seq 番号
+  last_capture_detected_at: number | null; // epoch ms（capture 検知時刻、null で初期化）
 }
 
 export interface Activity {
@@ -210,4 +256,5 @@ export type WSMessage =
   | { type: "prompt_template_delete"; payload: { id: string } }
   | { type: "prompt_history_update"; payload: { scope: "group" | "session"; id: string; history: string[] } }
   | { type: "question_pending"; payload: PendingQuestion }
-  | { type: "question_answered"; payload: PendingQuestion };
+  | { type: "question_answered"; payload: PendingQuestion }
+  | { type: "terminal_event_batch"; payload: { session_id: string; events: TerminalEvent[]; dropped_count: number; from_seq: number; to_seq: number } };

@@ -18,6 +18,8 @@ export class SessionStore {
   private onDelete?: (sessionId: string) => void;
   private onDeleteHooks: Array<(sessionId: string) => void> = [];
   onHardTimeout?: (sessionId: string) => void;
+  // run_id 世代管理: SessionStart 再初期化時に前 run の pending/failed イベントを無効化
+  onInvalidateBySession?: (sessionId: string) => void;
 
   constructor(onChange: (session: Session) => void, onDelete?: (sessionId: string) => void) {
     this.onChange = onChange;
@@ -135,6 +137,16 @@ export class SessionStore {
     return session;
   }
 
+  /** ターミナルイベント要約を更新する（onChange 非発火 = silent 更新） */
+  updateTerminalEventSummary(sessionId: string, count: number, latestSeq: number): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.terminal_event_count = count;
+    session.terminal_event_latest_seq = latestSeq;
+    // 注意: updated_at は更新しない（cleanup の stale 判定に影響させない）
+    // 注意: onChange を呼ばない（session_update broadcast を抑制）
+  }
+
   destroy(): void {
     clearInterval(this.cleanupTimer);
   }
@@ -172,6 +184,10 @@ export class SessionStore {
       created_at: now,
       updated_at: now,
       questions: [],
+      run_id: 1,
+      terminal_event_count: 0,
+      terminal_event_latest_seq: 0,
+      last_capture_detected_at: null,
     };
   }
 
@@ -185,7 +201,20 @@ export class SessionStore {
     }
 
     switch (event.event_type) {
-      case "SessionStart":
+      case "SessionStart": {
+        // run_id 世代管理: Copilot/Codex で status 変更前にチェック
+        // 既存セッションが completed または UserPromptSubmit 受信済みの場合のみ
+        // run_id をインクリメントし、前 run の pending/failed イベントを無効化する。
+        // プレセッション→実セッションの再初期化（last_run_started_at === ""）では run_id を維持。
+        if (event.cli_tool === "copilot" || event.cli_tool === "codex") {
+          const shouldIncrementRunId =
+            session.status === "completed" || session.last_run_started_at !== "";
+          if (shouldIncrementRunId) {
+            session.run_id += 1;
+            this.onInvalidateBySession?.(session.session_id);
+          }
+        }
+
         // status は表示状態、prompt_ready は送信可能状態を表す（Copilot では分離制御）
         // 初期状態は idle + prompt_ready=true（初回プロンプト入力可能）。
         session.status = "idle";
@@ -202,6 +231,7 @@ export class SessionStore {
         // 同一 pane での連続起動時に前回データをクリアする必要がある。
         // Claude Code は UUID ベースの一意 session_id のため再初期化不要。
         if (event.cli_tool === "copilot" || event.cli_tool === "codex") {
+
           session.cli_tool = event.cli_tool;
           session.approvalSupported = event.cli_tool !== "codex";
           session.activities = [];
@@ -221,8 +251,12 @@ export class SessionStore {
           session.first_prompt_sent = false;
           session.external_session_id = "";
           session.prompt_ready = true;
+          session.terminal_event_count = 0;
+          session.terminal_event_latest_seq = 0;
+          session.last_capture_detected_at = null;
         }
         break;
+      }
 
       case "UserPromptSubmit": {
         // idle → running 復帰

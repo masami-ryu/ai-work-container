@@ -274,6 +274,70 @@ export class TmuxManager {
     return !(await this.checkPaneMode(paneId));
   }
 
+  /**
+   * pane のテキストを capture-pane で取得する。
+   * @param paneId - pane 識別子（例: "%5"）
+   * @param startLine - 取得開始行（0=表示領域先頭、負値=scrollback）。省略時は -200。
+   * @param endLine - 取得終了行。省略時は省略（表示領域末尾まで）。
+   * @returns pane テキスト（行配列）。pane 不在時は null。tmux 実行エラー時は null。
+   */
+  async capturePane(paneId: string, startLine?: number, endLine?: number): Promise<string[] | null> {
+    if (!this.canManagePanes()) {
+      return null;
+    }
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      return null;
+    }
+    try {
+      const args = ["capture-pane", "-t", paneId, "-p", "-J"];
+      if (startLine !== undefined) {
+        args.push("-S", String(startLine));
+      }
+      if (endLine !== undefined) {
+        args.push("-E", String(endLine));
+      }
+      const { stdout } = await execFileAsync("tmux", args);
+      return stdout.split("\n");
+    } catch (e: unknown) {
+      const stderr = (e as { stderr?: string }).stderr ?? "";
+      const msg = stderr || (e as Error).message || "";
+      if (/can.t find|no such|not found/i.test(msg)) {
+        return null;
+      }
+      console.warn(`capturePane(${paneId}) failed:`, msg);
+      return null;
+    }
+  }
+
+  /**
+   * pane のシェル PID を取得する。
+   * @param paneId - pane 識別子（例: "%5"）
+   * @returns PID 文字列。pane 不在・コマンドエラー時は null。
+   */
+  async getPanePid(paneId: string): Promise<string | null> {
+    if (!this.canManagePanes()) {
+      return null;
+    }
+    if (!TMUX_PANE_ID_RE.test(paneId)) {
+      return null;
+    }
+    try {
+      const { stdout } = await execFileAsync("tmux", [
+        "display-message", "-t", paneId, "-p", "#{pane_pid}",
+      ]);
+      const pid = stdout.trim();
+      return pid || null;
+    } catch (e: unknown) {
+      const stderr = (e as { stderr?: string }).stderr ?? "";
+      const msg = stderr || (e as Error).message || "";
+      if (/can.t find|no such|not found/i.test(msg)) {
+        return null;
+      }
+      console.warn(`getPanePid(${paneId}) failed:`, msg);
+      return null;
+    }
+  }
+
   // shutdown時にフラグを立て、以降のlaunchSessionを拒否する
   destroy(): void {
     this.destroyed = true;
