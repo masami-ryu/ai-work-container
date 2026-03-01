@@ -299,9 +299,67 @@ hard timeout は `last_run_started_at`（`UserPromptSubmit` または send-keys 
 
 ### 段階導入手順
 
-1. **Codex のみ有効化**: `CAPTURE_ENABLE_CODEX=true` でサーバー起動し、動作を検証
-2. **Copilot 追加**: `CAPTURE_ENABLE_COPILOT=true` を追加、hooks との共存を確認
-3. **Claude 追加（任意）**: `CAPTURE_ENABLE_CLAUDE=true` を追加（best-effort 動作）
+導入は Codex → Copilot → Claude の順で段階的に行う。各段階で回帰が発生しないことを確認してから次に進む。
+
+#### Stage 1: Codex のみ有効化
+
+```bash
+CAPTURE_ENABLE_CODEX=true pnpm start
+```
+
+チェックリスト:
+- [ ] Codex セッション起動時にターミナルログパネルが表示される
+- [ ] Codex 中間出力がストリーム表示される
+- [ ] 承認プロンプト検知で操作ボタン（Yes/No/Yes Always）が表示される
+- [ ] ボタンクリックで tmux send-keys が正常に実行される
+- [ ] `approvalSupported=true` で非対応バナーが非表示になる
+- [ ] hooks ベースのイベント（`codex-notify.sh` 経由）が正常に動作する
+- [ ] 誤検知時に dismiss が機能する
+- [ ] send-keys 失敗時に再試行またはガイダンスが表示される
+- [ ] 既存の Claude/Copilot セッションに影響がない
+
+#### Stage 2: Copilot 追加
+
+```bash
+CAPTURE_ENABLE_CODEX=true CAPTURE_ENABLE_COPILOT=true pnpm start
+```
+
+チェックリスト:
+- [ ] Copilot セッションのターミナルログパネルが表示される
+- [ ] Copilot 中間出力がストリーム表示される
+- [ ] Copilot は hooks authoritative のためトリガーイベントが生成されない
+- [ ] `last_capture_detected_at` がタイムアウト判定に寄与する
+- [ ] hooks ベースの承認フロー（`copilot-decide.sh`）が正常に動作する
+- [ ] hooks 承認解決時に capture の活動検知に影響がない
+- [ ] `--no-alt-screen` で capture 取得が安定している
+- [ ] Stage 1 の Codex 機能が回帰していない
+
+#### Stage 3: Claude 追加（任意）
+
+```bash
+CAPTURE_ENABLE_CODEX=true CAPTURE_ENABLE_COPILOT=true CAPTURE_ENABLE_CLAUDE=true pnpm start
+```
+
+チェックリスト:
+- [ ] Claude セッションのターミナルログパネルが表示される（best-effort）
+- [ ] alt-screen による取得欠落が許容範囲内
+- [ ] hooks ベースの承認フロー（`decide.sh`）が正常に動作する
+- [ ] Stage 1-2 の機能が回帰していない
+
+#### ロールバック手順
+
+各段階で問題が発生した場合、該当 CLI の feature flag を `false` に戻してサーバー再起動する:
+
+```bash
+# 例: Stage 3 で問題 → Claude のみロールバック
+CAPTURE_ENABLE_CODEX=true CAPTURE_ENABLE_COPILOT=true CAPTURE_ENABLE_CLAUDE=false pnpm start
+
+# 例: Stage 2 で問題 → Copilot のみロールバック
+CAPTURE_ENABLE_CODEX=true CAPTURE_ENABLE_COPILOT=false pnpm start
+
+# 例: 全体ロールバック → capture-pane を全て無効化
+pnpm start
+```
 
 ### capture-pane 環境変数一覧
 
