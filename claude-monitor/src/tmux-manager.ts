@@ -424,9 +424,10 @@ export class TmuxManager {
 
     // MCP 設定ファイルを生成して --additional-mcp-config に渡す
     const mcpConfigPath = await this.createMcpConfigFile(cwd);
-    let command = "copilot";
+    // --no-alt-screen: tmux capture-pane でスクロールバック取得を安定させる
+    let command = "copilot --no-alt-screen";
     if (mcpConfigPath) {
-      command = `copilot --additional-mcp-config ${shellQuote(`@${mcpConfigPath}`)}`;
+      command = `copilot --no-alt-screen --additional-mcp-config ${shellQuote(`@${mcpConfigPath}`)}`;
     } else {
       warnings.push("MCP設定ファイルの生成に失敗しました");
     }

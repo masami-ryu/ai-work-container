@@ -327,7 +327,7 @@ describe("TmuxManager Copilot コマンド生成", () => {
     }
   });
 
-  it("Copilot 起動コマンドに --additional-mcp-config が含まれる", async () => {
+  it("Copilot 起動コマンドに --no-alt-screen と --additional-mcp-config が含まれる", async () => {
     const { getCapturedCommand } = setupLaunchMocks();
     setupFsMocks();
     const manager = await createInitializedManager();
@@ -335,8 +335,47 @@ describe("TmuxManager Copilot コマンド生成", () => {
     await manager.launchSession("copilot", "/workspace");
 
     const cmd = getCapturedCommand()!;
-    expect(cmd).toContain("copilot --additional-mcp-config");
+    expect(cmd).toContain("copilot --no-alt-screen");
+    expect(cmd).toContain("--additional-mcp-config");
     expect(cmd).toContain("claude-monitor-mcp.json");
+
+    manager.destroy();
+  });
+
+  it("MCP 設定なし時も Copilot 起動コマンドに --no-alt-screen が含まれる", async () => {
+    const { getCapturedCommand } = setupLaunchMocks();
+    // fs モックを設定せず、MCP 設定生成が失敗するケース
+    mockFsMkdir.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      cb(new Error("EPERM"));
+    });
+    mockFsReadFile.mockImplementation((...args: unknown[]) => {
+      const filePath = String(args[0]);
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      if (filePath.includes("copilot-hooks.json") && !filePath.includes(".github")) {
+        cb(null, JSON.stringify({
+          hooks: {
+            prompt_submitted: [{ _source: "claude-monitor", command: "__HOOKS_DIR__/test.sh" }],
+          },
+        }));
+      } else {
+        const err = new Error("ENOENT") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        cb(err);
+      }
+    });
+    mockFsWriteFile.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (...cbArgs: unknown[]) => void;
+      cb(new Error("EPERM"));
+    });
+    const manager = await createInitializedManager();
+
+    const result = await manager.launchSession("copilot", "/workspace");
+
+    const cmd = getCapturedCommand()!;
+    expect(cmd).toContain("copilot --no-alt-screen");
+    expect(cmd).not.toContain("--additional-mcp-config");
+    expect(result.warning).toContain("MCP設定ファイルの生成に失敗しました");
 
     manager.destroy();
   });

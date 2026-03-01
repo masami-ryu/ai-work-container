@@ -174,15 +174,15 @@ codex mcp list
 
 #### Codex 承認操作の制約
 
-Codex CLI（v0.106.0 時点）は承認要求を外部フックに転送する仕組みを持たないため、ブラウザからの承認操作（Allow/Deny）には対応していない。承認が必要な場合は端末で直接操作すること。
-
-ダッシュボードには Codex セッション表示時に「承認操作はブラウザから行えません」のバナーが常時表示される。
+Codex CLI は承認要求を外部フックに転送する仕組みを持たないため、hooks ベースのブラウザ承認（Allow/Deny）には非対応。ただし `CAPTURE_ENABLE_CODEX=true` 設定時は capture-pane ベースの疑似承認に対応する（暫定）。疑似承認は端末出力のパターンマッチに依存するため、CLI バージョンアップで検知精度が変化する可能性がある。
 
 | 機能 | Claude Code | Copilot CLI | Codex CLI |
 |------|------------|------------|----------|
-| ブラウザ承認（Allow/Deny） | 対応 | 対応 | **非対応** |
+| ブラウザ承認（Allow/Deny） | 対応（hooks） | 対応（hooks） | **capture-pane 疑似承認（暫定）** |
 | ブラウザ質問回答（ask_user） | 対応 | 対応 | 対応 |
 | 端末承認 | 対応 | 対応 | 対応 |
+
+capture-pane 疑似承認が無効（`CAPTURE_ENABLE_CODEX=false` またはデフォルト）の場合、ダッシュボードに「承認操作はブラウザから行えません」のバナーが表示される。
 
 #### 前提条件
 
@@ -286,6 +286,109 @@ hard timeout は `last_run_started_at`（`UserPromptSubmit` または send-keys 
 
 - サーバーは `127.0.0.1` にバインド（外部アクセス不可）
 - 状態変更 API と WebSocket で Origin ヘッダーを検証（CSRF/CSWSH 対策）
+
+## capture-pane ハイブリッド運用ガイド
+
+### 概要
+
+`tmux capture-pane` を使って CLI の端末出力を取得し、中間メッセージの可視化と疑似端末操作（承認応答など）を行うハイブリッド機能。既存の hooks ベースのフローを維持したまま、補助的に capture-pane を導入する。
+
+- **Codex**: hooks による承認フック非対応のため、capture-pane による疑似承認が主要な承認経路（暫定）
+- **Copilot**: hooks ベースの承認フローを優先、capture-pane は中間メッセージ可視化と hooks タイムアウト前の補助検知に使用
+- **Claude**: alt-screen 未制御のため best-effort（取得が欠落する場合がある）
+
+### 段階導入手順
+
+1. **Codex のみ有効化**: `CAPTURE_ENABLE_CODEX=true` でサーバー起動し、動作を検証
+2. **Copilot 追加**: `CAPTURE_ENABLE_COPILOT=true` を追加、hooks との共存を確認
+3. **Claude 追加（任意）**: `CAPTURE_ENABLE_CLAUDE=true` を追加（best-effort 動作）
+
+### capture-pane 環境変数一覧
+
+#### CLI 別有効化フラグ
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `CAPTURE_ENABLE_CODEX` | `false` | Codex CLI の capture-pane を有効化 |
+| `CAPTURE_ENABLE_COPILOT` | `false` | Copilot CLI の capture-pane を有効化 |
+| `CAPTURE_ENABLE_CLAUDE` | `false` | Claude Code の capture-pane を有効化（best-effort） |
+
+#### イベント保持・TTL
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `CAPTURE_MAX_EVENTS_PER_SESSION` | `200` | セッションあたりの最大イベント保持数 |
+| `CAPTURE_MAX_EVENTS_GLOBAL` | `2000` | グローバル最大イベント保持数（全セッション合計） |
+| `CAPTURE_MAX_EVENT_CHARS` | `4096` | 1イベントあたりの最大文字数（超過時は切り詰め） |
+| `CAPTURE_EVENT_TTL_MINUTES` | `10` | pending/failed トリガーイベントの有効期限（分） |
+| `CAPTURE_TOMBSTONE_TTL_MINUTES` | `20` | expired イベントの tombstone 保持期間（分） |
+
+#### 誤検知保護・スロットリング
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `CAPTURE_TRIGGER_COOLDOWN_MS` | `5000` | 同一セッションでのトリガー再発火抑制間隔（ms） |
+| `CAPTURE_DEDUP_TTL_MS` | `60000` | 同一パターンの重複トリガー抑制ウィンドウ（ms） |
+| `CAPTURE_DISMISS_TTL_MS` | `300000` | ユーザー dismiss 後の再表示までの時間（ms、デフォルト5分） |
+| `CAPTURE_ABSOLUTE_TIMEOUT_MINUTES` | `30` | capture-pane トリガーの絶対タイムアウト（分） |
+| `CAPTURE_BATCH_MAX_EVENTS` | - | WebSocket バッチ配信の最大イベント数 |
+| `CAPTURE_MAX_MSG_PER_SEC` | - | WebSocket 配信のレート制限（メッセージ/秒） |
+
+#### Hard Timeout
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `COPILOT_HARD_TIMEOUT_MINUTES` | `10` | Copilot セッションの hard timeout（分） |
+| `CODEX_HARD_TIMEOUT_MINUTES` | `10` | Codex セッションの hard timeout（分、`last_run_started_at` 基準） |
+
+#### トリガー再試行
+
+| 変数名 | デフォルト | 説明 |
+|--------|-----------|------|
+| `TRIGGER_MAX_RETRIES` | `3`（定数） | capture トリガーの最大再試行回数（`before_text` 失敗のみ再試行可能） |
+
+### マスク設定ファイル
+
+端末出力に含まれる機密情報を自動マスクする。
+
+- **ファイルパス**: `claude-monitor/mask-patterns.json`
+- **フォーマット**: JSON 正規表現文字列の配列
+
+```json
+[
+  "(?<=CUSTOM_SECRET\\s*=\\s*).+",
+  "ghp_[A-Za-z0-9_]{36}"
+]
+```
+
+- **ロード順序**: ビルトインパターン → 設定ファイルのパターン（両方適用）
+- **エラー時挙動**: 設定ファイルの読み込みやパースに失敗した場合、ビルトインパターンのみで動作し、警告ログを出力
+- **ビルトインパターン**: API_KEY, SECRET_KEY, ACCESS_KEY, PRIVATE_KEY, TOKEN, PASSWORD, Bearer トークン, AWS アクセスキー, SSH 秘密鍵ヘッダー等
+
+### 検知精度について
+
+- capture-pane によるパターン検知は CLI の表示文言に依存するため、CLI バージョンアップで文言が変更されると検知が失敗する可能性がある
+- 検知ロジックは feature flag（`CAPTURE_ENABLE_*`）で即時無効化可能
+- feature flag の変更は**サーバー再起動で反映**される（既存セッションへの即時再計算は行わない）
+- `approvalSupported` はセッション開始時に評価され、セッション存続中は変化しない
+
+### 失敗時の復帰手順
+
+1. **誤検知が発生した場合**: UI の「dismiss」ボタンで一時的に非表示にする（`CAPTURE_DISMISS_TTL_MS` 経過後に再表示）
+2. **send-keys が `before_text` で失敗した場合**: UI の「再試行」ボタンで再送信（最大 `TRIGGER_MAX_RETRIES` 回）
+3. **send-keys が `after_text` で失敗した場合**: テキストは端末に送信済みのため再試行不可。端末で手動操作し、UI の「手動復帰済みとしてマーク」ボタンをクリック
+4. **capture 機能全体の不具合**: 下記の緊急無効化手順を実行
+
+### 緊急無効化手順
+
+capture-pane 機能に問題が発生した場合、以下の手順で即時無効化できる:
+
+```bash
+# サーバーを停止し、capture 機能を全て無効化して再起動
+CAPTURE_ENABLE_CODEX=false CAPTURE_ENABLE_COPILOT=false CAPTURE_ENABLE_CLAUDE=false pnpm start
+```
+
+既存の hooks ベースのフロー（状態遷移・承認管理）は tmux 非依存のため、capture-pane 無効化の影響を受けない。
 
 ## 拡張ポイント
 
