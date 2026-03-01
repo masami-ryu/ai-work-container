@@ -11,14 +11,16 @@ import { DecisionStore } from "./decision-store.js";
 import { QuestionStore } from "./question-store.js";
 import { GroupStore } from "./group-store.js";
 import { PromptTemplateStore } from "./prompt-template-store.js";
+import { TerminalEventStore, parseCaptureConfig } from "./terminal-event-store.js";
 import { TmuxManager } from "./tmux-manager.js";
 import { createMcpHandler } from "./mcp-handler.js";
 import { extractLatestProgress } from "./transcript-parser.js";
+import { getHardTimeoutMs, runCaptureTick, type PaneCaptureDeps } from "./pane-capture.js";
 import { cleanupPendingAssignments } from "./pending-group-assignments.js";
 import type { PendingAssignment } from "./pending-group-assignments.js";
 import { assignPendingGroupToSession } from "./group-assignment.js";
 import { listCodexSessions } from "./codex-session-index.js";
-import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode } from "./types.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode, Session } from "./types.js";
 import type { PaneInfo } from "./tmux-manager.js";
 
 // --- ServerDeps: createApp の依存注入インターフェース ---
@@ -28,6 +30,7 @@ export interface ServerDeps {
   questionStore: QuestionStore;
   groupStore: GroupStore;
   promptTemplateStore: PromptTemplateStore;
+  terminalEventStore: TerminalEventStore;
   tmuxManager: TmuxManager;
   pendingGroupAssignments: Map<string, PendingAssignment>;
   broadcast: (msg: WSMessage) => void;
@@ -49,7 +52,7 @@ export interface PaneMonitorDeps {
 // Copilot Pane Monitor タイムアウト定数
 export const COPILOT_HOOK_TIMEOUT_MS = 60_000;     // フック通信途絶時の完了判定（60秒）
 export const COPILOT_NO_HOOK_TIMEOUT_MS = 120_000; // hooks 未到達時のフォールバック完了判定（120秒）
-export const COPILOT_NO_HOOK_HARD_TIMEOUT_MS = 10 * 60_000; // hooks 未到達時の最終上限（10分、commandAlive でも適用）
+export const COPILOT_NO_HOOK_HARD_TIMEOUT_MS = getHardTimeoutMs("copilot"); // 共通ヘルパー（環境変数 COPILOT_HARD_TIMEOUT_MINUTES で上書き可能）
 export const COPILOT_GRACE_PERIOD_MS = 30_000;     // プレセッション作成後のグレースピリオド（30秒）
 export const COPILOT_PROMPT_READY_DELAY_MS = 5_000; // SessionEnd(complete) 後に再送信を許可する静穏期間
 
@@ -64,7 +67,7 @@ export const COPILOT_ALIVE_COMMANDS: readonly string[] = ["copilot", "node"];
 // Codex Pane Monitor 定数
 export const CODEX_HOOK_TIMEOUT_MS = 60_000;
 export const CODEX_NO_HOOK_TIMEOUT_MS = 120_000;
-export const CODEX_NO_HOOK_HARD_TIMEOUT_MS = 10 * 60_000;
+export const CODEX_NO_HOOK_HARD_TIMEOUT_MS = getHardTimeoutMs("codex"); // 共通ヘルパー（環境変数 CODEX_HARD_TIMEOUT_MINUTES で上書き可能）
 export const CODEX_GRACE_PERIOD_MS = 30_000;
 export const CODEX_PROMPT_READY_DELAY_MS = 5_000;
 
@@ -343,7 +346,7 @@ export interface CreateAppResult {
 export function createApp(deps: ServerDeps): CreateAppResult {
   const {
     sessionStore, decisionStore, questionStore, groupStore,
-    promptTemplateStore, tmuxManager, pendingGroupAssignments,
+    promptTemplateStore, terminalEventStore, tmuxManager, pendingGroupAssignments,
     broadcast, hookToken, allowedOrigins, publicDir,
   } = deps;
 
@@ -437,7 +440,7 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     app.use(express.static(publicDir));
   }
 
-  // Origin 検証ミドルウェア
+  // Origin 検証ミドルウェア（POST/PUT/DELETE 用）
   function validateOrigin(req: express.Request, res: express.Response, next: express.NextFunction): void {
     const origin = req.headers.origin;
     if (!origin || !allowedOrigins.has(origin)) {
@@ -445,6 +448,33 @@ export function createApp(deps: ServerDeps): CreateAppResult {
       return;
     }
     next();
+  }
+
+  // Origin 検証ミドルウェア（GET 用: Origin→Referer フォールバック、いずれも不在時は 403）
+  function validateOriginForGet(req: express.Request, res: express.Response, next: express.NextFunction): void {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (allowedOrigins.has(origin)) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Forbidden: invalid origin" });
+      return;
+    }
+    // Origin 不在時は Referer のオリジン部分でフォールバック判定
+    const referer = req.headers.referer;
+    if (referer) {
+      try {
+        const refererOrigin = new URL(referer).origin;
+        if (allowedOrigins.has(refererOrigin)) {
+          next();
+          return;
+        }
+      } catch {
+        // invalid URL — fall through to 403
+      }
+    }
+    res.status(403).json({ error: "Forbidden: origin or referer required" });
   }
 
   // --- REST API ---
@@ -1058,6 +1088,53 @@ export function createApp(deps: ServerDeps): CreateAppResult {
     res.json(getPromptHistory(`${type}:${id}`));
   });
 
+  // --- Terminal Events API (TASK-007b) ---
+  app.get("/api/sessions/:id/terminal-events", validateOriginForGet, (req, res) => {
+    const id = req.params.id as string;
+    const session = sessionStore.get(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    // cursor パラメータ（exclusive: seq > cursor）
+    const cursorRaw = req.query.cursor;
+    let cursor = 0;
+    if (cursorRaw !== undefined) {
+      cursor = parseInt(String(cursorRaw), 10);
+      if (Number.isNaN(cursor) || cursor < 0) cursor = 0;
+    }
+
+    // limit パラメータ（クランプ: 1-100, デフォルト50）
+    const limitRaw = req.query.limit;
+    let limit = 50;
+    if (limitRaw !== undefined) {
+      limit = parseInt(String(limitRaw), 10);
+      if (Number.isNaN(limit) || limit < 1) limit = 1;
+      if (limit > 100) limit = 100;
+    }
+
+    const events = terminalEventStore.getEvents(id, cursor, limit);
+    const latestSeq = terminalEventStore.getLatestSeq(id);
+
+    // next_cursor 契約: events 非空で残件ありなら max(events[].seq)、最終ページなら null
+    let nextCursor: number | null = null;
+    if (events.length > 0) {
+      const maxSeq = events[events.length - 1].sequence;
+      // 残件判定: 返却件数が limit に達し、かつ maxSeq < latestSeq
+      if (events.length >= limit && maxSeq < latestSeq) {
+        nextCursor = maxSeq;
+      }
+    }
+
+    res.json({
+      events,
+      next_cursor: nextCursor,
+      has_more: nextCursor !== null,
+      latest_seq: latestSeq,
+    });
+  });
+
   // --- Codex Sessions API ---
   app.get("/api/codex/sessions", async (_req, res) => {
     try {
@@ -1352,6 +1429,10 @@ if (!process.env.VITEST) {
     },
   });
 
+  // --- TerminalEventStore ---
+  const captureConfig = parseCaptureConfig();
+  const terminalEventStore = new TerminalEventStore(captureConfig);
+
   // --- Pending Group Assignments ---
   const pendingGroupAssignments = new Map<string, PendingAssignment>();
 
@@ -1360,6 +1441,82 @@ if (!process.env.VITEST) {
 
   // --- Create Express app via factory ---
   const publicDir = path.resolve(__dirname, "../public");
+
+  // --- broadcastTerminalEventBatch（TASK-023: バッチスロットリング付き） ---
+  const TERMINAL_BATCH_INTERVAL_MS = 200; // セッション毎のバッチ配信間隔
+
+  /** セッション別バッチバッファ */
+  const terminalBatchBuffers = new Map<string, import("./types.js").TerminalEvent[]>();
+  /** セッション別のフラッシュタイマー */
+  const terminalBatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function flushTerminalBatch(sessionId: string): void {
+    const buffer = terminalBatchBuffers.get(sessionId);
+    terminalBatchTimers.delete(sessionId);
+    if (!buffer || buffer.length === 0) {
+      terminalBatchBuffers.delete(sessionId);
+      return;
+    }
+    terminalBatchBuffers.delete(sessionId);
+
+    const fromSeq = buffer[0].sequence;
+    const toSeq = buffer[buffer.length - 1].sequence;
+    broadcast({
+      type: "terminal_event_batch",
+      payload: { session_id: sessionId, events: buffer, dropped_count: 0, from_seq: fromSeq, to_seq: toSeq },
+    });
+  }
+
+  function broadcastTerminalEventBatch(sessionId: string, events: import("./types.js").TerminalEvent[]): void {
+    if (events.length === 0) return;
+
+    let buffer = terminalBatchBuffers.get(sessionId);
+    if (!buffer) {
+      buffer = [];
+      terminalBatchBuffers.set(sessionId, buffer);
+    }
+    buffer.push(...events);
+
+    // タイマー未設定なら設定
+    if (!terminalBatchTimers.has(sessionId)) {
+      const timer = setTimeout(() => flushTerminalBatch(sessionId), TERMINAL_BATCH_INTERVAL_MS);
+      terminalBatchTimers.set(sessionId, timer);
+    }
+  }
+
+  // --- session_update コアレシング（TASK-023） ---
+  const SESSION_UPDATE_COALESCE_MS = 500;
+  const sessionUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const sessionUpdatePending = new Map<string, Session>();
+
+  /** session_update をコアレシングして配信する broadcast ラッパー */
+  function coalescedBroadcast(msg: WSMessage): void {
+    if (msg.type === "session_update") {
+      const session = msg.payload as Session;
+      const id = session.session_id;
+      sessionUpdatePending.set(id, session);
+
+      if (!sessionUpdateTimers.has(id)) {
+        const timer = setTimeout(() => {
+          sessionUpdateTimers.delete(id);
+          const latest = sessionUpdatePending.get(id);
+          sessionUpdatePending.delete(id);
+          if (latest) {
+            const data = JSON.stringify({ type: "session_update", payload: latest });
+            for (const ws of clients) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+              }
+            }
+          }
+        }, SESSION_UPDATE_COALESCE_MS);
+        sessionUpdateTimers.set(id, timer);
+      }
+      return;
+    }
+    // session_update 以外は即座に配信
+    broadcast(msg);
+  }
 
   // Codex hard timeout: SessionStore.cleanup から呼ばれるコールバックを事前宣言
   // completeSessionWithCleanup は createApp 後に設定
@@ -1370,12 +1527,18 @@ if (!process.env.VITEST) {
     }
   };
 
+  // SessionStart 再初期化時に前 run の pending/failed イベントを無効化
+  sessionStore.onInvalidateBySession = (sessionId: string) => {
+    terminalEventStore.invalidateBySession(sessionId);
+  };
+
   const { app, completeSessionWithCleanup } = createApp({
     sessionStore,
     decisionStore,
     questionStore,
     groupStore,
     promptTemplateStore,
+    terminalEventStore,
     tmuxManager,
     pendingGroupAssignments,
     broadcast,
@@ -1435,6 +1598,29 @@ if (!process.env.VITEST) {
     }, PANE_CHECK_INTERVAL_MS);
   }
 
+  // --- Capture Tick ---
+  const CAPTURE_TICK_INTERVAL_MS = 1000;
+  let captureTickTimer: ReturnType<typeof setInterval> | null = null;
+
+  const paneCaptureDeps: PaneCaptureDeps = {
+    tmux: tmuxManager,
+    sessionStore,
+    terminalEventStore,
+    captureConfig,
+    broadcastTerminalEventBatch,
+  };
+
+  function startCaptureTick(): void {
+    if (!tmuxManager.canManagePanes()) return;
+    captureTickTimer = setInterval(async () => {
+      try {
+        await runCaptureTick(paneCaptureDeps);
+      } catch (e) {
+        console.warn("Capture tick error:", (e as Error).message);
+      }
+    }, CAPTURE_TICK_INTERVAL_MS);
+  }
+
   // データストアとTmuxManagerを並列初期化してからサーバー起動
   Promise.all([
     groupStore.load(),
@@ -1445,12 +1631,19 @@ if (!process.env.VITEST) {
       console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
       console.log(`Listening on ${HOST}:${PORT}`);
       startPaneMonitor();
+      startCaptureTick();
     });
   });
 
   // Graceful shutdown
   function shutdown(): void {
     if (paneCheckTimer) clearInterval(paneCheckTimer);
+    if (captureTickTimer) clearInterval(captureTickTimer);
+    // バッチ / コアレシング タイマーのクリーンアップ
+    for (const timer of terminalBatchTimers.values()) clearTimeout(timer);
+    for (const timer of sessionUpdateTimers.values()) clearTimeout(timer);
+    terminalBatchTimers.clear();
+    sessionUpdateTimers.clear();
     tmuxManager.destroy();
     sessionStore.destroy();
     decisionStore.destroy();

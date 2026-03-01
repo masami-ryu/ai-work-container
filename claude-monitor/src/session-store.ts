@@ -1,4 +1,5 @@
 import { TMUX_PANE_ID_RE, type Session, type SessionStatus, type HookEvent, type Milestone, type Question, type Activity, type CliToolType } from "./types.js";
+import { getHardTimeoutMs } from "./pane-capture.js";
 
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5分ごとにチェック
 const COMPLETED_TTL_MS = 60 * 60 * 1000; // 完了セッションは1時間後に削除
@@ -8,8 +9,8 @@ const MAX_ACTIVITIES = 30;
 // error 状態からの自動復帰対象イベント
 const ERROR_RECOVERY_EVENTS: ReadonlySet<string> = new Set(["PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart"]);
 
-// Codex hard timeout（pane monitor と共有、cleanup 側でも使用）
-export const CODEX_CLEANUP_HARD_TIMEOUT_MS = 10 * 60_000;
+// Codex hard timeout — 共通ヘルパーから取得（環境変数 CODEX_HARD_TIMEOUT_MINUTES で上書き可能）
+export const CODEX_CLEANUP_HARD_TIMEOUT_MS = getHardTimeoutMs("codex");
 
 export class SessionStore {
   private sessions = new Map<string, Session>();

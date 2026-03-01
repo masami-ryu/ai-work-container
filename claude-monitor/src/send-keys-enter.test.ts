@@ -19,6 +19,7 @@ import { DecisionStore } from "./decision-store.js";
 import { QuestionStore } from "./question-store.js";
 import { GroupStore } from "./group-store.js";
 import { PromptTemplateStore } from "./prompt-template-store.js";
+import { TerminalEventStore, parseCaptureConfig } from "./terminal-event-store.js";
 import type { TmuxManager } from "./tmux-manager.js";
 import type { PendingAssignment } from "./pending-group-assignments.js";
 import type { WSMessage, Session, HookEvent } from "./types.js";
@@ -93,6 +94,7 @@ function createTestDeps(overrides?: Partial<ServerDeps>): ServerDeps {
     questionStore,
     groupStore,
     promptTemplateStore,
+    terminalEventStore: new TerminalEventStore(parseCaptureConfig({})),
     tmuxManager: createMockTmuxManager(),
     pendingGroupAssignments: new Map<string, PendingAssignment>(),
     broadcast,
