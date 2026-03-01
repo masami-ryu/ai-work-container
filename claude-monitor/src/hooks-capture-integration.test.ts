@@ -25,8 +25,6 @@ const enabledConfig = parseCaptureConfig({
 
 function makeHookEvent(overrides: Partial<HookEvent> & { event_type: string; session_id: string; cli_tool: string }): HookEvent {
   return {
-    event_type: overrides.event_type,
-    session_id: overrides.session_id,
     cwd: "/tmp",
     model: "opus",
     title: "",
@@ -39,7 +37,6 @@ function makeHookEvent(overrides: Partial<HookEvent> & { event_type: string; ses
     last_message: "",
     tmux_pane: "%5",
     reason: "",
-    cli_tool: overrides.cli_tool,
     transcript_path: "",
     progress_text: "",
     timestamp: new Date().toISOString(),

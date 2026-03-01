@@ -303,13 +303,6 @@ const CODEX_APPROVAL_PATTERNS: RegExp[] = [
   /\?\s*\(\s*(?:y(?:es)?)\s*\/\s*(?:n(?:o)?)\s*(?:\/\s*yes_always)?\s*\)\s*$/im,
 ];
 
-/** 承認プロンプトの近傍テキスト（誤検知防止用の文脈条件） */
-const CODEX_APPROVAL_CONTEXT_PATTERNS: RegExp[] = [
-  // ツール名やファイルパスなどの付随情報
-  /(?:Bash|Write|Edit|Read|Glob|Grep|WebFetch|WebSearch)/i,
-  /(?:sandbox|permission|tool|execute|run|command)/i,
-];
-
 /**
  * Codex 承認プロンプトを検知する
  * @param lines - pane テキスト（末尾数行を対象にする）
@@ -338,10 +331,6 @@ export function detectCodexApprovalPrompt(lines: string[]): string | null {
 const CAPTURE_TRIGGER_COOLDOWN_MS = parseIntEnvOr("CAPTURE_TRIGGER_COOLDOWN_MS", 5000);
 const CAPTURE_DEDUP_TTL_MS = parseIntEnvOr("CAPTURE_DEDUP_TTL_MS", 60000);
 const CAPTURE_DISMISS_TTL_MS = parseIntEnvOr("CAPTURE_DISMISS_TTL_MS", 300000);
-
-/** absolute timeout（capture 延命の最終上限） */
-const CAPTURE_ABSOLUTE_TIMEOUT_MS =
-  parseIntEnvOr("CAPTURE_ABSOLUTE_TIMEOUT_MINUTES", 30) * 60 * 1000;
 
 function parseIntEnvOr(key: string, defaultVal: number): number {
   const v = process.env[key];
