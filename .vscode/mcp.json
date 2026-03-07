@@ -11,10 +11,6 @@
         "-y",
         "@upstash/context7-mcp@latest"
       ]
-    },
-    "claude-monitor": {
-      "type": "http",
-      "url": "http://localhost:3456/mcp"
     }
   }
 }
