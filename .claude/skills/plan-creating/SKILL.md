@@ -7,10 +7,38 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 
 タスクを分析し、実行可能なプランを作成。
 
-- **出力先**: `ai/plans/YYMMDD_HHmm_[概要].md`（`HHmm` はJST/UTC+9。取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`）
 - **プランテンプレート**: [assets/plan-template.md](assets/plan-template.md)
-- **タスク実装指示書テンプレート**: [assets/task-template.md](assets/task-template.md) — プラン内の各タスクを実装者に引き渡す際に使用
+- **タスク詳細テンプレート**: [assets/task-template.md](assets/task-template.md) — タスクの設計メモ外部化（プラン作成時）および実装記録（実装時）に使用
 - **制限**: ソースコード直接編集は行わない
+
+## 出力形式
+
+`HHmm` はJST/UTC+9。取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`
+
+| ワークフロー | 出力先 |
+|-------------|--------|
+| Express | `ai/plans/YYMMDD_HHmm_[概要].md`（単一ファイル） |
+| Standard / Comprehensive | `ai/plans/YYMMDD_HHmm_[概要]/plan.md`（ディレクトリ構造） |
+
+### ディレクトリ構造（Standard / Comprehensive）
+
+```
+ai/plans/YYMMDD_HHmm_[概要]/
+├── plan.md          # メインプラン（300行目安）
+├── tasks/           # タスク別設計メモ
+│   ├── TASK-001.md
+│   └── TASK-002.md
+└── tests/           # テスト詳細
+    └── test-details.md
+```
+
+**plan.md サイズガイドライン: 300行以下**。超過する場合は以下で分離:
+
+| 内容 | plan.md に記載 | 外部化先 |
+|------|---------------|---------|
+| TASK設計メモ | サマリー1-3行 + 参照リンク | `tasks/TASK-XXX.md` |
+| テスト計画 | カテゴリ別サマリー + 件数 | `tests/test-details.md` |
+| 変更履歴 | 1行/修正回（詳細はgit履歴で追跡） | — |
 
 ## ワークフロー選択
 
@@ -29,7 +57,7 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 3. **設計検討** → コードベース内の既存パターンを優先、補助的に`WebFetch`で調査
 4. **ステップ分解** → アクションアイテム化、Phase分割
 5. **品質検証** → チェックリスト実行
-6. **出力** → `ai/plans/YYMMDD_HHmm_[概要].md`に保存（`HHmm` はJST/UTC+9）
+6. **出力** → 「出力形式」セクションのルールに従い保存
 
 各ワークフローの詳細プロセスは参照ファイルを確認。
 
@@ -63,3 +91,4 @@ description: 実行可能なプランを作成する専門スキル。タスク�
 | 測定可能性 | 完了条件が客観的に判断可能 |
 | 依存関係 | タスク間の依存が正しく反映 |
 | リスク対応 | 主要リスクへの対策を含む |
+| サイズ | plan.md本体が300行以下（Standard/Comprehensive） |

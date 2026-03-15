@@ -1,6 +1,6 @@
 ---
 name: code-reviewing
-description: コードレビューの専門スキル。5段階レビュープロセス（初期分析→詳細分析→ベストプラクティス参照→統合評価→品質検証）でコード品質・セキュリティ・パフォーマンスを評価。  (1) PR番号やURLを指定したPRレビュー、(2) git差分（staged, main...feature等）のレビュー、(3) 既存レビューファイルのメタレビュー、(4) plan-creatingで作成したプラン（ai/plans/*.md）のレビュー、のいずれかが必要な場合に使用。コード調査のみの場合、単一ファイルの簡単な質問、lintチェックのみの場合には使用しない。
+description: コードレビューの専門スキル。5段階レビュープロセス（初期分析→詳細分析→ベストプラクティス参照→統合評価→品質検証）でコード品質・セキュリティ・パフォーマンスを評価。  (1) PR番号やURLを指定したPRレビュー、(2) git差分（staged, main...feature等）のレビュー、(3) 既存レビューファイルのメタレビュー、(4) plan-creatingで作成したプラン（ai/plans/*/plan.md または ai/plans/*.md）のレビュー、のいずれかが必要な場合に使用。コード調査のみの場合、単一ファイルの簡単な質問、lintチェックのみの場合には使用しない。
 ---
 
 # Code Reviewing
@@ -16,7 +16,7 @@ description: コードレビューの専門スキル。5段階レビュープロ
 - **PR番号/URL**: `gh pr view <number>` でPR情報取得、`gh pr diff <number>` で変更内容を確認
 - **git差分**: 指定コマンド（例: `git diff --staged`, `git diff main...feature`）で差分取得。範囲未指定の場合: staged変更あり→`--staged`、なし→デフォルトブランチとの差分（`git symbolic-ref refs/remotes/origin/HEAD` でブランチ名を検出し `<branch>...HEAD` を使用）
 - **メタレビュー**: 指定レビューファイルを `Read` で読み込み
-- **プランレビュー**: 指定プランファイル（`ai/plans/*.md`）を `Read` で読み込み。評価観点は [references/plan-review-guidelines.md](references/plan-review-guidelines.md) を参照
+- **プランレビュー**: 指定プランファイル（`ai/plans/*/plan.md` または `ai/plans/*.md`）を `Read` で読み込み。ディレクトリ構造の場合は `tasks/` や `tests/` 配下の関連ファイルも確認する。評価観点は [references/plan-review-guidelines.md](references/plan-review-guidelines.md) を参照
 
 ### Phase 2: 詳細分析
 

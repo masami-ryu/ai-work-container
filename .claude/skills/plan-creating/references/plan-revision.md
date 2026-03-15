@@ -2,7 +2,7 @@
 
 ### レビュー
 
-`/code-reviewing` スキルに委譲。`/code-reviewing ai/plans/[対象プラン].md` で実行。
+`/code-reviewing` スキルに委譲。`/code-reviewing ai/plans/[対象プラン]/plan.md`（または `ai/plans/[対象プラン].md`）で実行。
 
 Standard/Comprehensiveワークフローではプラン作成後にレビュー実行を推奨。
 

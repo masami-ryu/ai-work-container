@@ -4,7 +4,7 @@
 
 ## レビュー対象情報
 - **種別**: プランレビュー
-- **対象**: `ai/plans/YYMMDD_HHmm_[概要].md`（HHmmはJST/UTC+9）
+- **対象**: `ai/plans/YYMMDD_HHmm_[概要]/plan.md`（または `ai/plans/YYMMDD_HHmm_[概要].md`。HHmmはJST/UTC+9）
 - **プランステータス**: Draft / Review
 
 ## フェーズ実行結果

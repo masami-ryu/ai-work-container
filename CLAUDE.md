@@ -1,10 +1,10 @@
-# README
-
 ## 共通規約
 
 - 日本語で記述
 - Markdownは正しい構文で記述（見出しレベルの順守、リスト前後の空行）
-- 成果物ファイルの命名: `YYMMDD_HHmm_[概要].md`（`HHmm` はJST / UTC+9）
+- 成果物の命名: `YYMMDD_HHmm_[概要]`（`HHmm` はJST / UTC+9）
+  - 単一ファイル: `YYMMDD_HHmm_[概要].md`（レビュー、Express プラン）
+  - ディレクトリ: `YYMMDD_HHmm_[概要]/plan.md`（Standard / Comprehensive プラン）
   - 取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`
 
 ## 作業ルール
@@ -16,17 +16,10 @@
 
 - Node.js 系の依存関係管理・スクリプト実行は **npm ではなく pnpm** を使う
   - 例: `pnpm install`, `pnpm build`, `pnpm test`
-- `ai/reviews` は既存ディレクトリのため、`mkdir` は実行しない
-  - レビュー結果はそのまま `ai/reviews/<ファイル名>.md` に保存する
-
-## ユーザーへの質問
-
-ユーザーに質問する際は、AskUserQuestion ツールの代わりに MCP ツール `ask_user` を使用すること。
-`ask_user` はブラウザのダッシュボードに質問を表示し、ユーザーがブラウザから回答できる。
-
-- `ask_user` がエラー（MCPサーバー未起動、タイムアウト等）の場合のみ `AskUserQuestion` にフォールバック
-- `ask_user` の引数形式は `AskUserQuestion` と同様（questions 配列）
-- `session_id`（optional）: セッションIDを指定すると正確な紐付けが可能。省略時は最新アクティブセッションを自動検出
+- `ai/reviews`、`ai/plans` は既存ディレクトリのため、`mkdir` は実行しない
+  - レビュー結果: `ai/reviews/<ファイル名>.md` に保存
+  - プラン: `ai/plans/<ファイル名>.md` または `ai/plans/<ディレクトリ名>/plan.md` に保存
+- **保存先の基準ディレクトリ**: `ai/` はこの CLAUDE.md が配置されたディレクトリ直下を指す。作業対象のサブディレクトリ内には作成しない
 
 ## サブプロジェクト
 

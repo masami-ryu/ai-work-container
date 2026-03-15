@@ -70,7 +70,8 @@ SKILL.mdの「品質チェックリスト」を実行。重大リスク検出時
 ### 6. 出力
 
 - テンプレート [assets/plan-template.md](../assets/plan-template.md) を使用
-- `ai/plans/YYMMDD_HHmm_[概要].md`に保存（`HHmm` はJST/UTC+9）
+- `ai/plans/YYMMDD_HHmm_[概要]/plan.md` に保存（ディレクトリ構造。詳細は SKILL.md「出力形式」参照）
 - ステータス: Draft
-- 各タスクの実装指示が必要な場合、[assets/task-template.md](../assets/task-template.md) で個別指示書を作成
-- プラン保存後、`/code-reviewing ai/plans/[作成したプラン].md` でレビュー実行を推奨
+- 設計メモが必要なタスク（設計判断・データ構造定義・インターフェース設計を含むもの）は `tasks/TASK-XXX.md` に外部化（テンプレート: [assets/task-template.md](../assets/task-template.md) の§1-3）
+- テストケースが多数（20件超）の場合は `tests/test-details.md` に外部化
+- プラン保存後、`/code-reviewing ai/plans/[作成したプラン]/plan.md` でレビュー実行を推奨
