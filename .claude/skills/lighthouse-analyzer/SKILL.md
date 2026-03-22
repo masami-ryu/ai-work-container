@@ -1,20 +1,26 @@
 ---
 name: lighthouse-analyzer
-description: Lighthouse JSONレポートの分析と改善提案。Lighthouse結果の分析、パフォーマンス改善の提案が必要な場合に使用。ユーザーが「Lighthouseの結果を分析して」「パフォーマンスを分析して」「lighthouse JSONを見て」と依頼した場合、またはLighthouse JSONファイルパスが引数として渡された場合にトリガー。
+description: Lighthouse JSONレポートの分析と改善提案。Lighthouse結果の分析、パフォーマンス改善の提案が必要な場合に使用。ユーザーが「Lighthouseの結果を分析して」「パフォーマンスを分析して」「lighthouse JSONを見て」と依頼した場合、またはLighthouse JSONファイルパスが引数として渡された場合にトリガー。複数JSONの比較分析（ベースライン対応）、「計測結果を比較して」「TEST-xxxを分析して」といった依頼にも対応。
 ---
 
 # Lighthouse Analyzer
 
 Lighthouse JSONレポートを分析し、構造化されたパフォーマンスレポートと改善提案を提供する。
+単一JSONの分析と、複数JSONの比較分析の2モードに対応。
 
-## ワークフロー
+## モード判定
+
+- **JSON 1件** → 単一分析（ワークフロー A）
+- **JSON 2件以上** → 比較分析（ワークフロー B）
+
+## ワークフロー A: 単一分析
 
 ### 1. JSONレポートの解析
 
-分析スクリプトを実行してレポートを生成する（パスはスキル配置先に応じて読み替える）:
+分析スクリプトを実行してレポートを生成する（パスはこの SKILL.md と同階層の `scripts/` を使用）:
 
 ```bash
-node .claude/skills/lighthouse-analyzer/scripts/analyze-lighthouse.mjs <json-path>
+node scripts/analyze-lighthouse.mjs <json-path>
 ```
 
 出力はMarkdown形式。内容:
@@ -37,7 +43,7 @@ node .claude/skills/lighthouse-analyzer/scripts/analyze-lighthouse.mjs <json-pat
 3. **転送サイズ削減**（画像配信改善、CSS/JS最適化）
 4. **その他**（A11y、SEO、Best Practices）
 
-Lighthouseのスコアウェイトを意識する: **TBT 30% > LCP 25% = CLS 25% > FCP 10% = SI 10%**
+スコアウェイトは [references/metrics-thresholds.md](references/metrics-thresholds.md) を参照
 
 ### 3. 改善提案
 
@@ -45,18 +51,59 @@ Lighthouseのスコアウェイトを意識する: **TBT 30% > LCP 25% = CLS 25%
 
 提案時の原則:
 - フレームワーク固有の制約を考慮する（例: Next.js static exportではImage最適化が使えない）
-- 改善効果の大きいものから順に提案する
 - 各提案に期待される改善効果（削減量やスコア影響）を添える
-- アプリケーションコード起因か、フレームワーク起因かを区別する
 
-## 出力形式
-
-ユーザーへの報告は以下の構造で行う:
+### 4. 出力
 
 1. **スコアサマリー**: カテゴリスコアとCWV一覧
 2. **最重要課題**: LCPなど最もスコア影響が大きい問題を1-2個ピックアップ
 3. **問題点一覧**: 優先度順の問題と改善策
 4. **次のアクション**: 具体的な改善手順（実装するか、プラン作成スキルに委譲するか）
+
+## ワークフロー B: 比較分析
+
+### 1. 比較レポートの生成
+
+比較スクリプトを実行（パスはこの SKILL.md と同階層の `scripts/` を使用）:
+
+```bash
+# 基本（ベースラインなし）
+node scripts/compare-lighthouse.mjs <json1> <json2> [json3...]
+
+# ベースラインJSONファイル指定
+node scripts/compare-lighthouse.mjs <json1> <json2> [json3...] \
+  --baseline <baseline1.json> [baseline2.json ...]
+
+# ベースライン値を手動指定
+node scripts/compare-lighthouse.mjs <json1> <json2> [json3...] \
+  --baseline-values "Performance:80,LCP:4900,TBT:110,CLS:0.002"
+```
+
+出力はMarkdown形式。内容:
+- 全計測データの比較テーブル（中央値ラン自動選定）
+- 外れ値検出とLCP Breakdown比較による原因推定
+- ベースライン比較（変化量・変化率）
+- 第三者タグ影響サマリー
+- 未使用JS一覧（自サイト/第三者の分類付き）
+
+### 2. スクリプト出力の分析
+
+スクリプト出力を基に以下を評価:
+
+1. **中央値ランの妥当性**: 外れ値が検出された場合、その原因（第三者タグ、ネットワーク、サーバー）を考察
+2. **ベースライン比較の解釈**: スコア系は正の変化が改善、時間系は負の変化が改善。[references/comparison-guide.md](references/comparison-guide.md) 参照
+3. **第三者タグの影響**: app-only と production の差分からタグ由来の負荷を定量化
+4. **成功基準の判定**: プランの TEST ケースや成功基準と照合し PASS/FAIL を判定
+
+### 3. レポート出力
+
+スクリプト出力をベースに、以下の構造でレポートを完成:
+
+1. **計測概要**: URL・計測回数・中央値ラン
+2. **ベースライン比較結果**: 変化量・変化率の解釈
+3. **成功基準判定**: プランの TEST ケースに対する PASS/FAIL
+4. **差分分析**: app-only と production の差分（両方ある場合）
+5. **推奨アクション**: 残タスク、運用依頼事項
 
 ## データ保存規約
 
