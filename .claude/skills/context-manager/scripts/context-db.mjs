@@ -49,7 +49,8 @@ function showHelp() {
   verify    コンテキスト検証
   clean     鮮度チェック・クリーン
   workspace ワークスペース管理
-  history   上書き履歴管理`;
+  history   上書き履歴管理
+  export    HTML/JSON/Markdown エクスポート`;
 }
 
 async function main() {
@@ -93,6 +94,9 @@ async function main() {
         break;
       case 'clean':
         result = (await import('./lib/clean.mjs')).handleClean(db, options);
+        break;
+      case 'export':
+        result = (await import('./lib/export.mjs')).handleExport(db, options);
         break;
       default:
         result = formatError(`不明な操作: ${operation}\n`) + '\n' + showHelp();
