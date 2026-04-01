@@ -1,56 +1,26 @@
-# プロジェクト: ai-work-container
+## 共通規約
 
-## 概要
-AI開発作業用のDevContainer環境。Claude CodeとMCPを活用した効率的な開発ワークフローを提供。
-
-## 技術スタック
-- 言語: Markdown, Shell, JSON
-- ツール: Claude Code, VS Code, MCP (context7, msdocs, github-mcp-server, serena)
-- 環境: DevContainer (Ubuntu 24.04)
-
-## ディレクトリ構造
-- `ai/plans/` - 実行プラン
-- `ai/templates/` - テンプレート
-- `docs/` - ドキュメント
-- `.claude/` - Claude Code設定
-- `.vscode/mcp.json` - MCP設定
-
-## 頻繁に使用するコマンド
-```bash
-# MCPサーバー確認
-claude mcp list
-
-# セッション開始
-claude
-
-# ワンショット実行
-claude -p "質問内容"
-
-# メモリ確認
-/memory
-```
-
-## コーディング規約
-- Markdownはプレビュー可能な形式で
 - 日本語で記述
-- ファイル命名: `YYMMDD_[概要].md`
+- Markdownは正しい構文で記述（見出しレベルの順守、リスト前後の空行）
+- 成果物の命名: `YYMMDD_HHmm_[概要]`（`HHmm` はJST / UTC+9）
+  - 単一ファイル: `YYMMDD_HHmm_[概要].md`（レビュー、Express プラン）
+  - ディレクトリ: `YYMMDD_HHmm_[概要]/plan.md`（Standard / Comprehensive プラン）
+  - 取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`
 
-## パーミッション
-- 開発コマンド（yarn run, node, python）は確認なしで実行可能
-- パッケージインストール（yarn install, pip install）は確認が必要
-- 危険な操作（rm -rf, chmod 777）は禁止
+## 作業ルール
 
-## IMPORTANT
-- プランは必ず `ai/plans/` に保存
-- レビュー結果は `ai/reviews/` に保存
-- MCPツールを活用してベストプラクティスを参照すること
-- 設定変更前に必ずバックアップを作成
+1. **小さな差分**: 1タスク=1目的、レビュー可能なサイズで実装
+2. **秘密情報禁止**: ログ・APIキー・SSH情報は貼らない
 
-## 重要なドキュメント
-- @docs/claude-code-usage.md
-- @docs/claude-code-mcp-setup.md
-- @ai/templates/plan-template.md
-- @.github/copilot-instructions.md
+## 運用ルール
 
-## トラブルシューティング
-MCPやCLI関連の問題は @docs/claude-code-mcp-setup.md#トラブルシューティング を参照。
+- Node.js 系の依存関係管理・スクリプト実行は **npm ではなく pnpm** を使う
+  - 例: `pnpm install`, `pnpm build`, `pnpm test`
+- `ai/reviews`、`ai/plans` は既存ディレクトリのため、`mkdir` は実行しない
+  - レビュー結果: `ai/reviews/<ファイル名>.md` に保存
+  - プラン: `ai/plans/<ファイル名>.md` または `ai/plans/<ディレクトリ名>/plan.md` に保存
+- **保存先の基準ディレクトリ**: `ai/` はこの CLAUDE.md が配置されたディレクトリ直下を指す。作業対象のサブディレクトリ内には作成しない
+
+## サブプロジェクト
+
+`works*` は独立したリポジトリ。プロジェクト固有のルールは `works*/CLAUDE.md` を参照。

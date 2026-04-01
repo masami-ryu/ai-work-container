@@ -48,10 +48,12 @@
         "https://registry.npmjs.org/**": true
     },
 
-    // GitHub Copilot Chat - グローバル自動承認は無効
-    "chat.tools.global.autoApprove": false,
-
     // ターミナル自動承認機能の有効化
     "chat.tools.terminal.enableAutoApprove": true,
-    "chat.tools.terminal.ignoreDefaultAutoApproveRules": false
+    
+    // エージェントスキルの有効化
+    "chat.useAgentSkills": true,
+
+    // フォルダをコンパクト表示しない設定
+    "explorer.compactFolders": false
 }

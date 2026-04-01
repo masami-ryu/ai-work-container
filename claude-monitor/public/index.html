@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Monitor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Claude Monitor</h1>
+      <span id="connection-status" class="status-indicator disconnected">● Disconnected</span>
+    </div>
+    <div class="header-right">
+      <span id="active-count">0 sessions</span>
+      <button id="notification-btn" title="デスクトップ通知を有効化">🔔 通知許可</button>
+      <button id="mute-btn" title="通知音のミュート切替">🔊</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside id="sidebar" class="sidebar"></aside>
+    <div class="main-content">
+      <div id="group-content-header"></div>
+      <div id="group-artifacts-panel"></div>
+      <div id="sessions-container">
+        <p class="empty-message" id="empty-message">セッションなし</p>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <details>
+      <summary>イベントログ (<span id="log-count">0</span>)</summary>
+      <div id="event-log"></div>
+    </details>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
