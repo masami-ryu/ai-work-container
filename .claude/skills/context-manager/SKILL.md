@@ -62,6 +62,13 @@ description: >
 - ダッシュボード・レポート等の成果物も同様
 - `export` の `--lang` オプションで言語を明示的に指定可能
 
+### 定期レビュー（品質改善）
+
+1. `index --scope all --project <name>` で全エントリを俯瞰し、品質基準に照らして問題を分類（過剰詳細/重複/動的知識不足/未検証）
+2. `export --format json --project <name> --output backup.json` でバックアップ取得
+3. 改善実施: `write`（上書き圧縮）/ `delete`（重複削除）/ `write`（caveat/insight 新規追加）
+4. `verify --all --project <name>` で全エントリの鮮度を一括更新
+
 ### セッション終了時
 
 保存すべき知見がないか振り返る:
@@ -74,82 +81,18 @@ description: >
 - デフォルト: `~/.claude/context/context.db`（初回実行時に自動作成）
 - 環境変数 `CLAUDE_CONTEXT_DB_PATH` でパスをカスタマイズ可能
 
-## CLI クイックリファレンス
+## CLI
 
 ```
 node <skill-dir>/scripts/context-db.mjs <操作> [オプション...]
 ```
 
-各コマンドの詳細オプション・出力例は [references/cli-reference.md](references/cli-reference.md) を参照。
+主要操作: `project`, `write`, `read`, `index`, `search`, `delete`, `verify`, `export`, `workspace`, `history`, `clean`
 
-### project — プロジェクト管理
+デフォルト動作:
+- `--scope` 省略時は project。`--project` 省略時は CWD から自動解決
+- `index` の ID は先頭8桁。`--full-id` でフルUUID表示（`verify`/`delete` にそのまま使用可能）
+- `verify --all --project <name>` で一括検証。`verify` は未解決の上書き履歴も解決済みにする
+- `--id` は複数指定可（例: `--id <uuid1> --id <uuid2>`）
 
-```bash
-node scripts/context-db.mjs project --register --name myproject --cwd /path/to/project
-node scripts/context-db.mjs project --add-cwd --name myproject --cwd /path/to/worktree
-node scripts/context-db.mjs project --list
-node scripts/context-db.mjs project --delete --name myproject
-```
-
-### write — コンテキスト書き込み
-
-```bash
-node scripts/context-db.mjs write --category decision --title api-design --content "REST API は OpenAPI 3.1 で定義する" --source claude-code:session-abc --tags api
-```
-
-`--scope` 省略時は project。`--project` 省略時は CWD から自動解決。
-
-### read — コンテキスト読み取り
-
-```bash
-node scripts/context-db.mjs read --id <uuid>
-node scripts/context-db.mjs read --scope all --project myproject --category decision
-```
-
-### index — コンテキスト目次
-
-```bash
-node scripts/context-db.mjs index --scope all --project myproject
-node scripts/context-db.mjs index --scope project --project myproject --category decision
-```
-
-### search — 全文検索
-
-```bash
-node scripts/context-db.mjs search --query "OpenAPI" --scope all --project myproject
-```
-
-### delete / verify
-
-```bash
-node scripts/context-db.mjs delete --id <uuid>
-node scripts/context-db.mjs delete --id <uuid1> --id <uuid2> --id <uuid3>
-node scripts/context-db.mjs verify --id <uuid>
-node scripts/context-db.mjs verify --id <uuid1> --id <uuid2>
-```
-
-`--id` は複数指定で一括操作が可能。
-`verify`: `verified_at` を更新し、未解決の上書き履歴も解決済みにする。
-
-### export — エクスポート
-
-```bash
-node scripts/context-db.mjs export --project myproject --output dashboard.html
-node scripts/context-db.mjs export --project myproject --format json --output contexts.json
-node scripts/context-db.mjs export --project myproject --format md --lang en
-```
-
-- `--format`: `html`（デフォルト）/ `json` / `md`
-- `--lang`: `ja`（デフォルト）/ `en`
-- `--output`: ファイル出力（省略時は標準出力）
-
-### workspace / history / clean
-
-低頻度操作。詳細は [references/cli-reference.md](references/cli-reference.md) を参照。
-
-```bash
-node scripts/context-db.mjs workspace --create --name feature-auth --project myproject
-node scripts/context-db.mjs workspace --list --project myproject
-node scripts/context-db.mjs history --unresolved --project myproject
-node scripts/context-db.mjs clean --project myproject
-```
+各コマンドの詳細オプション・構文・出力例は [references/cli-reference.md](references/cli-reference.md) を参照。

@@ -1,6 +1,40 @@
 # CLI リファレンス（詳細）
 
-SKILL.md のクイックリファレンスで不足する場合に参照する。
+SKILL.md の概要で不足する場合に参照する。
+
+## 目次
+
+- [write — 詳細オプション](#write--詳細オプション)
+- [read — 詳細オプション](#read--詳細オプション)
+- [search — 詳細オプション](#search--詳細オプション)
+- [workspace — ワークスペース管理](#workspace--ワークスペース管理)
+- [history — 上書き履歴管理](#history--上書き履歴管理)
+- [clean — 鮮度チェック](#clean--鮮度チェック)
+- [index — 詳細オプション](#index--詳細オプション)
+- [project — プロジェクト管理](#project--プロジェクト管理)
+- [verify — 詳細オプション](#verify--詳細オプション)
+- [export — エクスポート](#export--エクスポート)
+
+## project — プロジェクト管理
+
+```bash
+node scripts/context-db.mjs project --register --name myproject --cwd /path/to/project
+node scripts/context-db.mjs project --add-cwd --name myproject --cwd /path/to/worktree
+node scripts/context-db.mjs project --list
+node scripts/context-db.mjs project --delete --name myproject
+```
+
+## export — エクスポート
+
+```bash
+node scripts/context-db.mjs export --project myproject --output dashboard.html
+node scripts/context-db.mjs export --project myproject --format json --output contexts.json
+node scripts/context-db.mjs export --project myproject --format md --lang en
+```
+
+- `--format`: `html`（デフォルト）/ `json` / `md`
+- `--lang`: `ja`（デフォルト）/ `en`
+- `--output`: ファイル出力（省略時は標準出力）
 
 ## write — 詳細オプション
 
@@ -137,7 +171,19 @@ node scripts/context-db.mjs clean --project myproject --days 14
 エントリを削除するには: `node context-db.mjs delete --id <id>`
 ```
 
-## index — 出力例
+## index — 詳細オプション
+
+```bash
+# フルUUID表示（verify/delete にそのまま使用可能）
+node scripts/context-db.mjs index --scope all --project myproject --full-id
+
+# カテゴリ絞り込み
+node scripts/context-db.mjs index --scope project --project myproject --category decision
+```
+
+- `--full-id`: ID列にフルUUID（36桁）を表示。省略時は先頭8桁
+
+### 出力例
 
 ```
 | ID       | スコープ  | カテゴリ   | タイトル          | 経過日数 | タグ              | 注釈       |
@@ -149,3 +195,18 @@ node scripts/context-db.mjs clean --project myproject --days 14
 
 - `⚠`: 鮮度閾値（30日）超過
 - `overridden`: 下位スコープに同一 category+title が存在
+
+## verify — 詳細オプション
+
+```bash
+# 個別エントリを検証
+node scripts/context-db.mjs verify --id <uuid>
+
+# 複数エントリを一括検証
+node scripts/context-db.mjs verify --id <uuid1> --id <uuid2>
+
+# プロジェクト内の全エントリを一括検証
+node scripts/context-db.mjs verify --all --project myproject
+```
+
+- `--all --project <name>`: プロジェクト内の全エントリの `verified_at` を一括更新。定期レビュー後の鮮度リセットに使用

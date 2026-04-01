@@ -251,7 +251,7 @@ export function handleIndex(db, options) {
     const freshnessMark = days > 30 ? ' ⚠' : '';
     const overridden = checkOverridden(db, e, scope, projectName, workspaceName);
     return [
-      e.id.slice(0, 8),
+      options['full-id'] ? e.id : e.id.slice(0, 8),
       e.scope,
       e.category,
       e.title,
@@ -284,7 +284,23 @@ export function handleDelete(db, options) {
  * verify 操作
  */
 export function handleVerify(db, options) {
-  if (!options.id) return formatError('--id は必須です。');
+  // --all: プロジェクト内の全エントリを一括verify
+  if (options.all) {
+    let projectName = options.project || null;
+    if (!projectName) {
+      projectName = resolveProject(db, process.cwd());
+    }
+    if (!projectName) {
+      return formatError('--all には --project またはCWD登録済みプロジェクトが必要です。');
+    }
+    const { changes } = db.prepare(`
+      UPDATE contexts SET verified_at = datetime('now')
+      WHERE project_name = ?
+    `).run(projectName);
+    return `${changes} 件のエントリを検証済みにしました。`;
+  }
+
+  if (!options.id) return formatError('--id または --all は必須です。');
   const ids = [].concat(options.id);
   let verified = 0;
   transaction(db, () => {
