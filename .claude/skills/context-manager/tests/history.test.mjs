@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createTestDb, closeTestDb } from './helpers.mjs';
 import { handleHistory } from '../scripts/lib/history.mjs';
 import { handleWrite, handleVerify } from '../scripts/lib/context.mjs';
-import { registerProject } from '../scripts/lib/project.mjs';
+import { registerProject, addCwd } from '../scripts/lib/project.mjs';
+import { execSync } from 'node:child_process';
 
 describe('history', () => {
   let db;
@@ -134,5 +135,29 @@ describe('history', () => {
   it('purge（存在しない ID）', () => {
     const result = handleHistory(db, { purge: true, 'history-id': ['nonexistent-id'] });
     assert.ok(result.includes('見つかりません'));
+  });
+
+  it('history（引数なし + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'hist-cwd', content: 'v1', source: 'a' });
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'hist-cwd', content: 'v2', source: 'b' });
+    const result = handleHistory(db, {});
+    assert.ok(result.includes('hist-cwd'));
+  });
+
+  it('history --unresolved（--project 省略 + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'unres-cwd', content: 'v1', source: 'a' });
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'unres-cwd', content: 'v2', source: 'b' });
+    const result = handleHistory(db, { unresolved: true });
+    assert.ok(result.includes('unres-cwd'));
   });
 });

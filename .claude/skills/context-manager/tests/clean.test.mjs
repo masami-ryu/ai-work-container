@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createTestDb, closeTestDb } from './helpers.mjs';
 import { handleClean } from '../scripts/lib/clean.mjs';
 import { handleWrite, handleVerify } from '../scripts/lib/context.mjs';
-import { registerProject } from '../scripts/lib/project.mjs';
+import { registerProject, addCwd } from '../scripts/lib/project.mjs';
+import { execSync } from 'node:child_process';
 
 describe('clean', () => {
   let db;
@@ -116,5 +117,21 @@ describe('clean', () => {
     const result = handleClean(db, { project: 'testproj' });
     // 未解決履歴は clean 対象外
     assert.ok(!result.includes('解決済み上書き履歴'));
+  });
+
+  it('clean（--project 省略 + CWD 自動解決でフィルタ）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'clean-cwd', content: 'c', source: null });
+    db.prepare("UPDATE contexts SET updated_at = datetime('now', '-31 days') WHERE title = 'clean-cwd'").run();
+    registerProject(db, 'other', '/tmp/other');
+    handleWrite(db, { scope: 'project', project: 'other', category: 'rule', title: 'other-old', content: 'c', source: null });
+    db.prepare("UPDATE contexts SET updated_at = datetime('now', '-31 days') WHERE title = 'other-old'").run();
+    const result = handleClean(db, {});
+    assert.ok(result.includes('clean-cwd'));
+    assert.ok(!result.includes('other-old'));
   });
 });

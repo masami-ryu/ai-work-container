@@ -168,8 +168,14 @@ export function handleRead(db, options) {
 
   // カテゴリ / タイトル / スコープ指定
   const scope = options.scope || 'all';
-  const projectName = options.project || null;
+  let projectName = options.project || null;
   const workspaceName = options.workspace || null;
+  if (!projectName) {
+    projectName = resolveProject(db, process.cwd());
+  }
+  if ((scope === 'project' || scope === 'workspace') && !projectName) {
+    return formatError('プロジェクトが未登録です。先に project --register で登録してください。');
+  }
   const { sql: scopeFilter, params: scopeParams } = buildScopeFilter(
     scope, projectName, workspaceName, includeArchived, 'c'
   );
@@ -205,8 +211,14 @@ export function handleRead(db, options) {
 export function handleIndex(db, options) {
   const includeArchived = !!options['include-archived'];
   const scope = options.scope || 'all';
-  const projectName = options.project || null;
+  let projectName = options.project || null;
   const workspaceName = options.workspace || null;
+  if (!projectName) {
+    projectName = resolveProject(db, process.cwd());
+  }
+  if ((scope === 'project' || scope === 'workspace') && !projectName) {
+    return formatError('プロジェクトが未登録です。先に project --register で登録してください。');
+  }
   const { sql: scopeFilter, params: scopeParams } = buildScopeFilter(
     scope, projectName, workspaceName, includeArchived, 'c'
   );

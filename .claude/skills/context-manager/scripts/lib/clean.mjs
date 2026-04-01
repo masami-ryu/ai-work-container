@@ -1,3 +1,4 @@
+import { resolveProject } from './project.mjs';
 import { formatTable } from './formatter.mjs';
 
 /**
@@ -5,7 +6,10 @@ import { formatTable } from './formatter.mjs';
  */
 export function handleClean(db, options) {
   const days = parseInt(options.days, 10) || 30;
-  const project = options.project || null;
+  let project = options.project || null;
+  if (!project) {
+    project = resolveProject(db, process.cwd());
+  }
 
   const staleEntries = findStaleEntries(db, days, project);
   const resolvedHistory = findResolvedHistory(db, days, project);

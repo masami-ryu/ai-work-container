@@ -88,6 +88,39 @@ describe('context', () => {
     assert.equal(entry.project_name, 'testproj');
   });
 
+  it('index（引数なし + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'auto-idx', content: 'c', source: null });
+    const result = handleIndex(db, {});
+    assert.ok(result.includes('auto-idx'));
+  });
+
+  it('index（--scope project + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'auto-idx2', content: 'c', source: null });
+    const result = handleIndex(db, { scope: 'project' });
+    assert.ok(result.includes('auto-idx2'));
+  });
+
+  it('read（引数なし + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'auto-read', content: 'auto resolved read', source: null });
+    const result = handleRead(db, { category: 'rule' });
+    assert.ok(result.includes('auto-read'));
+  });
+
   it('write（CWD 自動解決失敗）', () => {
     // CWD が未登録のプロジェクトを指す
     const result = handleWrite(db, {

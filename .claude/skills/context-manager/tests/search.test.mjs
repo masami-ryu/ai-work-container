@@ -4,7 +4,8 @@ import { createTestDb, closeTestDb } from './helpers.mjs';
 import { handleSearch } from '../scripts/lib/search.mjs';
 import { handleWrite } from '../scripts/lib/context.mjs';
 import { handleWorkspace } from '../scripts/lib/workspace.mjs';
-import { registerProject } from '../scripts/lib/project.mjs';
+import { registerProject, addCwd } from '../scripts/lib/project.mjs';
+import { execSync } from 'node:child_process';
 
 describe('search', () => {
   let db;
@@ -185,5 +186,27 @@ describe('search', () => {
     // --include-archived で含まれる
     const archivedResult = handleSearch(db, { query: 'アーカイブされた', scope: 'all', project: 'testproj', 'include-archived': true });
     assert.ok(archivedResult.includes('search-archived-entry'));
+  });
+
+  it('search（引数なし + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    seedEntries();
+    const result = handleSearch(db, { query: 'OpenAPI' });
+    assert.ok(result.includes('api-design'));
+  });
+
+  it('search（--scope project + CWD 自動解決）', () => {
+    let gitRoot;
+    try {
+      gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch { gitRoot = process.cwd(); }
+    addCwd(db, 'testproj', gitRoot);
+    seedEntries();
+    const result = handleSearch(db, { query: 'OpenAPI', scope: 'project' });
+    assert.ok(result.includes('api-design'));
   });
 });

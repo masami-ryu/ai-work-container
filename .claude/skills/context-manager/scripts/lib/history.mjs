@@ -1,4 +1,5 @@
 import { transaction, generateId } from './database.mjs';
+import { resolveProject } from './project.mjs';
 import { formatTable, formatError } from './formatter.mjs';
 
 /**
@@ -20,6 +21,10 @@ export function handleHistory(db, options) {
   }
   if (options.project) {
     return listHistoryByProject(db, options.project);
+  }
+  const resolved = resolveProject(db, process.cwd());
+  if (resolved) {
+    return listHistoryByProject(db, resolved);
   }
   return formatError('history には --id, --unresolved, --project, --restore, --purge のいずれかを指定してください。');
 }
@@ -46,7 +51,10 @@ function listHistoryById(db, contextId) {
 }
 
 function listUnresolved(db, options) {
-  const project = options.project || null;
+  let project = options.project || null;
+  if (!project) {
+    project = resolveProject(db, process.cwd());
+  }
   const params = [];
   let projectFilter = '';
   if (project) {
