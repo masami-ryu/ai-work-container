@@ -10,6 +10,9 @@ const SCOPE_LIMITS = {
   workspace: 50,
 };
 
+// content 文字数の推奨上限
+const CONTENT_LENGTH_WARN = 300;
+
 function isSameSource(existingSource, newSource) {
   if (existingSource === null && newSource === null) return true;
   if (existingSource === null || newSource === null) return false;
@@ -116,6 +119,13 @@ export function handleWrite(db, options) {
 
     return id;
   });
+
+  // content 文字数チェック
+  if (content.length > CONTENT_LENGTH_WARN) {
+    warnings.push(formatWarning(
+      `content が ${content.length} 文字です（推奨: ${CONTENT_LENGTH_WARN} 以下）。抽象度を上げることを検討してください。`
+    ));
+  }
 
   // エントリ上限チェック
   const limit = SCOPE_LIMITS[scope];

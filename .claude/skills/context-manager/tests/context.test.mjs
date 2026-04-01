@@ -347,4 +347,25 @@ describe('context', () => {
     const archivedResult = handleRead(db, { scope: 'all', project: 'testproj', category: 'rule', title: 'arch-read', 'include-archived': true });
     assert.ok(archivedResult.includes('archived content'));
   });
+
+  // --- content 文字数警告テスト ---
+
+  it('write（content 300文字以下で警告なし）', () => {
+    const result = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'short-content',
+      content: 'a'.repeat(300), source: null,
+    });
+    assert.ok(result.includes('保存しました'));
+    assert.ok(!result.includes('推奨'));
+  });
+
+  it('write（content 300文字超で警告あり）', () => {
+    const result = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'long-content',
+      content: 'a'.repeat(301), source: null,
+    });
+    assert.ok(result.includes('保存しました'));
+    assert.ok(result.includes('301 文字'));
+    assert.ok(result.includes('推奨'));
+  });
 });

@@ -22,6 +22,13 @@ description: >
 3. （マルチエージェント環境時）`history --unresolved --project <name>` で未解決の上書き競合を確認（あれば `verify` / `restore` で解決）
 4. 必要に応じて `search` で関連する過去の決定事項を検索
 
+### コンテキストの品質基準
+
+- **抽象化**: ソースコードを読めばわかる具体詳細（メソッド名一覧、定数値、引数リスト等）は不要。構造的な判断材料・ナビゲーション情報を記録する
+- **簡潔さ**: 1エントリ300文字以内を目安に。超過すると write 時に警告が出る。超過時は分割か抽象度を上げる
+- **非重複**: 他エントリとの重複がないか `index` / `search` で確認してから登録する
+- **陳腐化リスク**: 変更頻度の高い情報（定数値、環境変数一覧等）は登録しない。ソースの const 定義を見るほうが正確
+
 ### コンテキスト保存の判断基準
 
 カテゴリは自由文字列。以下は代表例:
@@ -116,9 +123,12 @@ node scripts/context-db.mjs search --query "OpenAPI" --scope all --project mypro
 
 ```bash
 node scripts/context-db.mjs delete --id <uuid>
+node scripts/context-db.mjs delete --id <uuid1> --id <uuid2> --id <uuid3>
 node scripts/context-db.mjs verify --id <uuid>
+node scripts/context-db.mjs verify --id <uuid1> --id <uuid2>
 ```
 
+`--id` は複数指定で一括操作が可能。
 `verify`: `verified_at` を更新し、未解決の上書き履歴も解決済みにする。
 
 ### export — エクスポート
