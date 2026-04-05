@@ -1,6 +1,9 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb, createFileDb, cleanupFileDb, closeTestDb } from './helpers.mjs';
+import { resolveShortId, generateId } from '../scripts/lib/database.mjs';
+import { registerProject } from '../scripts/lib/project.mjs';
+import { handleWrite } from '../scripts/lib/context.mjs';
 
 describe('database', () => {
   let db;
@@ -62,5 +65,56 @@ describe('database', () => {
     db = createTestDb();
     const { user_version } = db.prepare('PRAGMA user_version').get();
     assert.equal(user_version, 1);
+  });
+
+  // --- resolveShortId テスト ---
+
+  it('resolveShortId: フルUUIDはそのまま返す', () => {
+    db = createTestDb();
+    registerProject(db, 'testproj', '/tmp/testproj');
+    const r = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'test', title: 'full-uuid',
+      content: 'x', source: null,
+    });
+    const fullId = r.match(/ID: (.+)/)[1];
+    assert.equal(resolveShortId(db, fullId), fullId);
+  });
+
+  it('resolveShortId: 短縮IDで一意解決', () => {
+    db = createTestDb();
+    registerProject(db, 'testproj', '/tmp/testproj');
+    const r = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'test', title: 'short-resolve',
+      content: 'x', source: null,
+    });
+    const fullId = r.match(/ID: (.+)/)[1];
+    assert.equal(resolveShortId(db, fullId.slice(0, 8)), fullId);
+  });
+
+  it('resolveShortId: 該当なしは null', () => {
+    db = createTestDb();
+    assert.equal(resolveShortId(db, 'zzzzzzzz'), null);
+  });
+
+  it('resolveShortId: overwrite_history テーブル対応', () => {
+    db = createTestDb();
+    registerProject(db, 'testproj', '/tmp/testproj');
+    handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'test', title: 'hist-resolve',
+      content: 'v1', source: 'a',
+    });
+    handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'test', title: 'hist-resolve',
+      content: 'v2', source: 'b',
+    });
+    const hist = db.prepare('SELECT history_id FROM overwrite_history LIMIT 1').get();
+    assert.ok(hist);
+    const resolved = resolveShortId(db, hist.history_id.slice(0, 8), 'overwrite_history');
+    assert.equal(resolved, hist.history_id);
+  });
+
+  it('resolveShortId: 不正なテーブル名はエラー', () => {
+    db = createTestDb();
+    assert.throws(() => resolveShortId(db, 'abc', 'invalid_table'), /不正なテーブル/);
   });
 });

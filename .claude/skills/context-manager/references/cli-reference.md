@@ -50,12 +50,18 @@ node scripts/context-db.mjs write --category decision --title db-choice --conten
 ```
 
 - 同一論理キー（scope + project + workspace + category + title）への再 write は上書き
-- 異なる `--source` による上書き時は旧内容を履歴に退避
+- 異なる `--source` による上書き時は旧内容を履歴に退避し、警告を1件表示
 - スコープ別上限（global: 100, project: 200, workspace: 50）超過時は警告表示（書き込みは継続）
 
 ## read — 詳細オプション
 
 ```bash
+# ID 指定（短縮IDも可）
+node scripts/context-db.mjs read --id a1b2c3d4
+
+# 複数 ID 指定
+node scripts/context-db.mjs read --id a1b2c3d4 --id e5f6g7h8
+
 # カテゴリ + タイトル指定
 node scripts/context-db.mjs read --scope project --project myproject --category decision --title api-design
 
@@ -181,7 +187,7 @@ node scripts/context-db.mjs index --scope all --project myproject --full-id
 node scripts/context-db.mjs index --scope project --project myproject --category decision
 ```
 
-- `--full-id`: ID列にフルUUID（36桁）を表示。省略時は先頭8桁
+- `--full-id`: ID列にフルUUID（36桁）を表示。省略時は先頭8桁（短縮IDは他コマンドでそのまま使用可能）
 
 ### 出力例
 

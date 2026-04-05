@@ -160,4 +160,20 @@ describe('history', () => {
     const result = handleHistory(db, { unresolved: true });
     assert.ok(result.includes('unres-cwd'));
   });
+
+  // --- 短縮ID対応テスト ---
+
+  it('history --id（短縮ID）', () => {
+    const r = handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'hist-short', content: 'v1', source: 'a' });
+    handleWrite(db, { scope: 'project', project: 'testproj', category: 'rule', title: 'hist-short', content: 'v2', source: 'b' });
+    const fullId = r.match(/ID: (.+)/)[1];
+    const shortId = fullId.slice(0, 8);
+    const result = handleHistory(db, { id: shortId });
+    assert.ok(result.includes('上書き履歴'));
+  });
+
+  it('history --id（存在しない短縮ID）', () => {
+    const result = handleHistory(db, { id: 'zzzzzzzz' });
+    assert.ok(result.includes('見つかりません'));
+  });
 });

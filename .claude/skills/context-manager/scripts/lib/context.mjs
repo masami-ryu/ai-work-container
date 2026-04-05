@@ -1,4 +1,4 @@
-import { transaction, generateId } from './database.mjs';
+import { transaction, generateId, resolveShortId } from './database.mjs';
 import { validateScope, workspaceExists, buildScopeFilter } from './scope.mjs';
 import { resolveProject, projectExists } from './project.mjs';
 import { formatTable, formatWarning, formatError } from './formatter.mjs';
@@ -86,12 +86,6 @@ export function handleWrite(db, options) {
           `異なる source による上書きを検出しました（${existing.source || '(なし)'} → ${source || '(なし)'}）。履歴を保存しました。`
         ));
       }
-      // source 未指定 × 既存 source あり
-      if (source === null && existing.source !== null) {
-        warnings.push(formatWarning(
-          `既存エントリに source "${existing.source}" が設定されていますが、新規 write では source が指定されていません。`
-        ));
-      }
 
       // UPDATE
       db.prepare(`
@@ -154,16 +148,27 @@ export function handleRead(db, options) {
   const includeArchived = !!options['include-archived'];
 
   if (options.id) {
-    const ids = [].concat(options.id);
-    const entry = db.prepare(`
-      SELECT c.*, GROUP_CONCAT(t.tag, ', ') AS tags
-      FROM contexts c
-      LEFT JOIN context_tags t ON c.id = t.context_id
-      WHERE c.id = ?
-      GROUP BY c.id
-    `).get(ids[0]);
-    if (!entry) return formatError(`ID "${ids[0]}" が見つかりません。`);
-    return formatEntry(entry);
+    const rawIds = [].concat(options.id);
+    const entries = [];
+    for (const rawId of rawIds) {
+      let id;
+      try {
+        id = resolveShortId(db, rawId);
+      } catch (e) {
+        return formatError(e.message);
+      }
+      if (!id) return formatError(`ID "${rawId}" が見つかりません。`);
+      const entry = db.prepare(`
+        SELECT c.*, GROUP_CONCAT(t.tag, ', ') AS tags
+        FROM contexts c
+        LEFT JOIN context_tags t ON c.id = t.context_id
+        WHERE c.id = ?
+        GROUP BY c.id
+      `).get(id);
+      if (!entry) return formatError(`ID "${rawId}" が見つかりません。`);
+      entries.push(entry);
+    }
+    return entries.map(formatEntry).join('\n---\n');
   }
 
   // カテゴリ / タイトル / スコープ指定
@@ -269,10 +274,21 @@ export function handleIndex(db, options) {
  */
 export function handleDelete(db, options) {
   if (!options.id) return formatError('--id は必須です。');
-  const ids = [].concat(options.id);
+  const rawIds = [].concat(options.id);
+  const resolvedIds = [];
+  for (const rawId of rawIds) {
+    let id;
+    try {
+      id = resolveShortId(db, rawId);
+    } catch (e) {
+      return formatError(e.message);
+    }
+    if (!id) return formatError(`ID "${rawId}" が見つかりません。`);
+    resolvedIds.push(id);
+  }
   let deleted = 0;
   transaction(db, () => {
-    for (const id of ids) {
+    for (const id of resolvedIds) {
       const { changes } = db.prepare('DELETE FROM contexts WHERE id = ?').run(id);
       deleted += changes;
     }
@@ -301,10 +317,21 @@ export function handleVerify(db, options) {
   }
 
   if (!options.id) return formatError('--id または --all は必須です。');
-  const ids = [].concat(options.id);
+  const rawIds = [].concat(options.id);
+  const resolvedIds = [];
+  for (const rawId of rawIds) {
+    let id;
+    try {
+      id = resolveShortId(db, rawId);
+    } catch (e) {
+      return formatError(e.message);
+    }
+    if (!id) return formatError(`ID "${rawId}" が見つかりません。`);
+    resolvedIds.push(id);
+  }
   let verified = 0;
   transaction(db, () => {
-    for (const id of ids) {
+    for (const id of resolvedIds) {
       const { changes } = db.prepare(`
         UPDATE contexts SET verified_at = datetime('now') WHERE id = ?
       `).run(id);

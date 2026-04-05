@@ -171,3 +171,28 @@ export function transaction(db, fn) {
 export function generateId() {
   return randomUUID();
 }
+
+const VALID_ID_TABLES = {
+  contexts: 'id',
+  overwrite_history: 'history_id',
+};
+
+/**
+ * 短縮ID（先頭8文字等）をフルUUIDに解決する。
+ * フルUUID（36文字以上）はそのまま返す。
+ * 一意に特定できない場合はエラーをスローする。
+ * 該当なしの場合は null を返す。
+ */
+export function resolveShortId(db, shortId, table = 'contexts') {
+  if (shortId.length >= 36) return shortId;
+  const column = VALID_ID_TABLES[table];
+  if (!column) throw new Error(`不正なテーブル: ${table}`);
+  const rows = db.prepare(
+    `SELECT ${column} FROM ${table} WHERE ${column} LIKE ? || '%'`
+  ).all(shortId);
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    throw new Error(`ID "${shortId}" は複数のエントリに一致します（${rows.length}件）。より長いIDを指定してください。`);
+  }
+  return rows[0][column];
+}

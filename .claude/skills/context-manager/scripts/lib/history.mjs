@@ -1,4 +1,4 @@
-import { transaction, generateId } from './database.mjs';
+import { transaction, generateId, resolveShortId } from './database.mjs';
 import { resolveProject } from './project.mjs';
 import { formatTable, formatError } from './formatter.mjs';
 
@@ -17,7 +17,14 @@ export function handleHistory(db, options) {
   }
   if (options.id) {
     const ids = [].concat(options.id);
-    return listHistoryById(db, ids[0]);
+    let contextId;
+    try {
+      contextId = resolveShortId(db, ids[0], 'contexts');
+    } catch (e) {
+      return formatError(e.message);
+    }
+    if (!contextId) return formatError(`ID "${ids[0]}" が見つかりません。`);
+    return listHistoryById(db, contextId);
   }
   if (options.project) {
     return listHistoryByProject(db, options.project);
@@ -117,8 +124,15 @@ function restoreHistory(db, options) {
   if (!historyIds || historyIds.length === 0) {
     return formatError('--history-id は必須です。');
   }
-  const historyId = historyIds[0];
   const source = options.source ?? 'system:restore';
+
+  let historyId;
+  try {
+    historyId = resolveShortId(db, historyIds[0], 'overwrite_history');
+  } catch (e) {
+    return formatError(e.message);
+  }
+  if (!historyId) return formatError(`履歴ID "${historyIds[0]}" が見つかりません。`);
 
   try {
     transaction(db, () => {
@@ -146,9 +160,21 @@ function restoreHistory(db, options) {
 }
 
 function purgeHistory(db, options) {
-  const historyIds = options['history-id'];
-  if (!historyIds || historyIds.length === 0) {
+  const rawHistoryIds = options['history-id'];
+  if (!rawHistoryIds || rawHistoryIds.length === 0) {
     return formatError('--history-id は必須です。');
+  }
+
+  const historyIds = [];
+  for (const rawId of [].concat(rawHistoryIds)) {
+    let hid;
+    try {
+      hid = resolveShortId(db, rawId, 'overwrite_history');
+    } catch (e) {
+      return formatError(e.message);
+    }
+    if (!hid) return formatError(`履歴ID "${rawId}" が見つかりません。`);
+    historyIds.push(hid);
   }
 
   try {

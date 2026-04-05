@@ -198,7 +198,7 @@ describe('context', () => {
     assert.ok(result.includes('異なる source'));
   });
 
-  it('source 未指定警告', () => {
+  it('source 未指定での上書き（異なる source 警告のみ）', () => {
     handleWrite(db, {
       scope: 'project', project: 'testproj', category: 'rule', title: 'src-warn',
       content: 'v1', source: 'agent-a',
@@ -207,7 +207,9 @@ describe('context', () => {
       scope: 'project', project: 'testproj', category: 'rule', title: 'src-warn',
       content: 'v2', source: null,
     });
-    assert.ok(result.includes('source が指定されていません'));
+    assert.ok(result.includes('異なる source'));
+    // 冗長な2つ目の警告は出ないことを確認
+    assert.ok(!result.includes('source が指定されていません'));
   });
 
   it('タグ保存', () => {
@@ -400,5 +402,62 @@ describe('context', () => {
     assert.ok(result.includes('保存しました'));
     assert.ok(result.includes('301 文字'));
     assert.ok(result.includes('推奨'));
+  });
+
+  // --- 短縮ID対応テスト ---
+
+  it('read（短縮ID）', () => {
+    const writeResult = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'short-id-test',
+      content: 'short id content', source: null,
+    });
+    const fullId = writeResult.match(/ID: (.+)/)[1];
+    const shortId = fullId.slice(0, 8);
+    const result = handleRead(db, { id: shortId });
+    assert.ok(result.includes('short id content'));
+    assert.ok(result.includes(fullId));
+  });
+
+  it('read（複数ID）', () => {
+    const r1 = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'multi-read-1',
+      content: 'content-one', source: null,
+    });
+    const r2 = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'multi-read-2',
+      content: 'content-two', source: null,
+    });
+    const id1 = r1.match(/ID: (.+)/)[1];
+    const id2 = r2.match(/ID: (.+)/)[1];
+    const result = handleRead(db, { id: [id1, id2] });
+    assert.ok(result.includes('content-one'));
+    assert.ok(result.includes('content-two'));
+  });
+
+  it('delete（短縮ID）', () => {
+    const writeResult = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'del-short',
+      content: 'to delete', source: null,
+    });
+    const fullId = writeResult.match(/ID: (.+)/)[1];
+    const shortId = fullId.slice(0, 8);
+    const result = handleDelete(db, { id: shortId });
+    assert.ok(result.includes('1 件'));
+  });
+
+  it('verify（短縮ID）', () => {
+    const writeResult = handleWrite(db, {
+      scope: 'project', project: 'testproj', category: 'rule', title: 'ver-short',
+      content: 'to verify', source: null,
+    });
+    const fullId = writeResult.match(/ID: (.+)/)[1];
+    const shortId = fullId.slice(0, 8);
+    const result = handleVerify(db, { id: shortId });
+    assert.ok(result.includes('1 件'));
+  });
+
+  it('read（存在しない短縮ID）', () => {
+    const result = handleRead(db, { id: 'zzzzzzzz' });
+    assert.ok(result.includes('見つかりません'));
   });
 });

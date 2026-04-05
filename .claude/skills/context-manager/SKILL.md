@@ -91,8 +91,8 @@ node <skill-dir>/scripts/context-db.mjs <操作> [オプション...]
 
 デフォルト動作:
 - `--scope` 省略時は project。`--project` 省略時は CWD から自動解決
-- `index` の ID は先頭8桁。`--full-id` でフルUUID表示（`verify`/`delete` にそのまま使用可能）
+- `index` の ID は先頭8桁。短縮ID（8桁等）は `read`/`delete`/`verify`/`history --id` でそのまま使用可能（一意に解決できない場合はエラー）。`--full-id` でフルUUID表示
 - `verify --all --project <name>` で一括検証。`verify` は未解決の上書き履歴も解決済みにする
-- `--id` は複数指定可（例: `--id <uuid1> --id <uuid2>`）
+- `--id` は複数指定可（例: `--id <id1> --id <id2>`）。`read` も複数ID対応
 
 各コマンドの詳細オプション・構文・出力例は [references/cli-reference.md](references/cli-reference.md) を参照。
