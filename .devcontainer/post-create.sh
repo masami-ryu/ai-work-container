@@ -41,14 +41,27 @@ else
   echo "tmux をインストールしました: $(tmux -V)"
 fi
 
+# dev-home-data named volume は初回マウント時に root 所有になるため、利用前に所有者を補正する
+TARGET_UID="$(id -u)"
+TARGET_GID="$(id -g)"
+if ! sudo -n true 2>/dev/null; then
+  echo "[エラー] dev-home-data volume の初期化にはパスワード不要の sudo が必要です。"
+  exit 1
+fi
+
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
-chown -R vscode:vscode "$HOME_DIR" || true
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$HOME_DIR" || true
+
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR"
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR/codex"
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR/tmux"
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
 
 # dev-home-data volume 配下に永続化対象を集約
 echo "永続化ディレクトリをセットアップ中..."
 mkdir -p "$DEV_HOME_DATA_DIR/codex" "$DEV_HOME_DATA_DIR/tmux"
-chown -R vscode:vscode "$DEV_HOME_DATA_DIR" || true
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
 chmod 700 "$DEV_HOME_DATA_DIR" "$DEV_HOME_DATA_DIR/codex" || true
 
 CODEX_HOME="$HOME_DIR/.codex"
@@ -84,7 +97,7 @@ if [ ! -e "$TMUX_CONF" ] && [ ! -L "$TMUX_CONF" ]; then
   ln -s "$TMUX_CONF_DATA" "$TMUX_CONF"
 fi
 
-chown -R vscode:vscode "$DEV_HOME_DATA_DIR" || true
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
 chmod -R go-rwx "$CODEX_DATA_DIR" || true
 
 # anyenv のインストール
