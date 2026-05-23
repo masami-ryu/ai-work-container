@@ -29,6 +29,17 @@ on_error() {
 }
 trap on_error ERR
 
+# tmux のインストール
+echo "tmux を確認中..."
+if command -v tmux >/dev/null 2>&1; then
+  echo "tmux は既にインストールされています: $(tmux -V)"
+else
+  echo "tmux をインストール中..."
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends tmux
+  echo "tmux をインストールしました: $(tmux -V)"
+fi
+
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
 chown -R vscode:vscode "$HOME_DIR" || true
