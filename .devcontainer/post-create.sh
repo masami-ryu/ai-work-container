@@ -29,12 +29,6 @@ on_error() {
 }
 trap on_error ERR
 
-# /workspaces/tmp の権限設定（anyenv セットアップの前）
-if [ -f "/workspaces/ai-work-container/.devcontainer/init-tmp-volume.sh" ]; then
-  echo "==== /workspaces/tmp 権限設定開始: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ===="
-  bash /workspaces/ai-work-container/.devcontainer/init-tmp-volume.sh
-fi
-
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
 chown -R vscode:vscode "$HOME_DIR" || true
@@ -265,85 +259,6 @@ else
   echo "[警告] nodenv がインストールされていません。Node.js のセットアップをスキップします。"
 fi
 
-# Claude Code CLI のnpmパッケージインストール
-echo "Claude Code CLI をインストール中..."
-
-# インストール済みチェック(冪等性確保)
-if command -v claude >/dev/null 2>&1; then
-  INSTALLED_VERSION=$(claude --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
-  echo "Claude Code CLI は既にインストールされています: v${INSTALLED_VERSION}"
-  echo "再インストールをスキップします。"
-else
-  # ログファイルの設定(日付ローテーション)
-  LOG_DIR="${HOME}/.cache/claude-install-logs"
-  mkdir -p "$LOG_DIR"
-  LOGFILE_CLAUDE="${LOG_DIR}/install-$(date '+%Y%m%d').log"
-  touch "$LOGFILE_CLAUDE"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Claude Code CLI (npm) インストール開始" | tee -a "$LOGFILE_CLAUDE"
-
-  # 古いログファイルのクリーンアップ(7日以上前のログを削除)
-  find "$LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
-
-  # Node.js のバージョン確認
-  NODE_VERSION=$(node -v 2>/dev/null || echo "none")
-  echo "Node.js バージョン: $NODE_VERSION" | tee -a "$LOGFILE_CLAUDE"
-
-  # Node.js 18+ の確認
-  if ! node -v >/dev/null 2>&1; then
-    echo "[エラー] Node.js が見つかりません。Claude Code のインストールには Node.js 18+ が必要です。" | tee -a "$LOGFILE_CLAUDE"
-    exit 1
-  fi
-
-  # npm グローバルインストール
-  MAX_RETRIES=3
-  RETRY_COUNT=0
-
-  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if npm install -g @anthropic-ai/claude-code 2>&1 | tee -a "$LOGFILE_CLAUDE"; then
-      echo "Claude Code CLI のインストールに成功しました。" | tee -a "$LOGFILE_CLAUDE"
-      break
-    else
-      RETRY_COUNT=$((RETRY_COUNT + 1))
-      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-        echo "[警告] インストール失敗。リトライ中... ($RETRY_COUNT/$MAX_RETRIES)" | tee -a "$LOGFILE_CLAUDE"
-        sleep 2
-      else
-        echo "[エラー] Claude Code CLI のインストールに失敗しました。ログを確認してください: $LOGFILE_CLAUDE" | tee -a "$LOGFILE_CLAUDE"
-      fi
-    fi
-  done
-
-  # npm global bin ディレクトリの確認
-  NPM_BIN_DIR=$(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")
-  echo "npm global bin ディレクトリ: $NPM_BIN_DIR" | tee -a "$LOGFILE_CLAUDE"
-
-  # PATH への追加(存在しない場合のみ)
-  if [ -d "$NPM_BIN_DIR" ]; then
-    export PATH="$NPM_BIN_DIR:$PATH"
-
-    # 各シェル設定ファイルへの PATH 追加(bash / zsh 対応)
-    for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [ -f "$SHELL_RC" ]; then
-        if ! grep -q "# Claude Code CLI (npm)" "$SHELL_RC"; then
-          echo "" >> "$SHELL_RC"
-          echo "# Claude Code CLI (npm)" >> "$SHELL_RC"
-          echo "NPM_BIN_DIR=\$(npm bin -g 2>/dev/null || echo \"\$HOME/.npm-global/bin\")" >> "$SHELL_RC"
-          echo "export PATH=\"\$NPM_BIN_DIR:\$PATH\"" >> "$SHELL_RC"
-          echo "$(basename $SHELL_RC) に Claude Code CLI (npm) の PATH を追加しました" | tee -a "$LOGFILE_CLAUDE"
-        fi
-      fi
-    done
-  fi
-
-  # インストール確認
-  if command -v claude >/dev/null 2>&1; then
-    FINAL_VERSION=$(claude --version 2>/dev/null || echo "version check failed")
-    echo "Claude Code CLI が正常にインストールされました: ${FINAL_VERSION}" | tee -a "$LOGFILE_CLAUDE"
-  else
-    echo "[警告] Claude Code CLI が見つかりません。手動でインストールしてください。" | tee -a "$LOGFILE_CLAUDE"
-  fi
-fi
-
 # ======================================
 # uv (Astral Python Package Manager) のインストール
 # ======================================
@@ -436,18 +351,3 @@ else
   fi
 fi
 
-# Claude Code 環境変数(オプション)
-if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
-  echo "" >> ~/.bashrc
-  echo "# Claude Code 環境変数" >> ~/.bashrc
-  echo "export CLAUDE_CODE_EXIT_AFTER_STOP_DELAY=5000" >> ~/.bashrc
-  echo "export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0" >> ~/.bashrc
-  echo "export DISABLE_AUTOUPDATER=0" >> ~/.bashrc
-  echo "Claude Code 環境変数を .bashrc に追加しました"
-fi
-
-# works/ 配下のシンボリックリンク自動化（anyenv セットアップの後）
-if [ -f "/workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh" ]; then
-  echo "==== works/ シンボリックリンク自動化開始: $(date -u +"%Y-%m-%dT%H:%M:%SZ") ===="
-  bash /workspaces/ai-work-container/.devcontainer/setup-tmp-symlinks.sh
-fi

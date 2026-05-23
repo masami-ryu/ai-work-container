@@ -6,8 +6,6 @@ services:
     volumes:
       # ワークスペース全体をマウント
       - ..:/workspaces/ai-work-container:cached
-      # 一時ファイル用のボリュームをマウント
-      - ai-work-container-tmp:/workspaces/tmp
     # コンテナを起動し続ける
     command: sleep infinity
     # ネットワーク設定
@@ -16,6 +14,3 @@ services:
 networks:
   dev-network:
     driver: bridge
-
-volumes:
-  ai-work-container-tmp:
