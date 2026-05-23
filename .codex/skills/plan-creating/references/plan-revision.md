@@ -31,7 +31,7 @@ Standard/Comprehensiveワークフローではプラン作成後にレビュー�
 
 ### ステータス遷移ルール
 
-<!-- 依存: .claude/skills/code-reviewing/references/plan-review-guidelines.md の移動/改名時は本リンクも更新 -->
+<!-- 依存: .codex/skills/code-reviewing/references/plan-review-guidelines.md の移動/改名時は本リンクも更新 -->
 評価スコア基準は [plan-review-guidelines.md](../../code-reviewing/references/plan-review-guidelines.md) を参照。
 
 | 遷移 | 条件 |

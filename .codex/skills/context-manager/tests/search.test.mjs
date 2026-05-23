@@ -107,8 +107,8 @@ describe('search', () => {
 
   it('フォールバック検索', () => {
     // FTS無効化のため新しいDBを作成
-    const origEnv = process.env.CLAUDE_CONTEXT_DISABLE_FTS;
-    process.env.CLAUDE_CONTEXT_DISABLE_FTS = '1';
+    const origEnv = process.env.CODEX_CONTEXT_DISABLE_FTS;
+    process.env.CODEX_CONTEXT_DISABLE_FTS = '1';
     try {
       const fbDb = createTestDb();
       assert.equal(fbDb.ftsEnabled, false);
@@ -122,9 +122,9 @@ describe('search', () => {
       closeTestDb(fbDb);
     } finally {
       if (origEnv === undefined) {
-        delete process.env.CLAUDE_CONTEXT_DISABLE_FTS;
+        delete process.env.CODEX_CONTEXT_DISABLE_FTS;
       } else {
-        process.env.CLAUDE_CONTEXT_DISABLE_FTS = origEnv;
+        process.env.CODEX_CONTEXT_DISABLE_FTS = origEnv;
       }
     }
   });
@@ -137,8 +137,8 @@ describe('search', () => {
   });
 
   it('フォールバックスニペット', () => {
-    const origEnv = process.env.CLAUDE_CONTEXT_DISABLE_FTS;
-    process.env.CLAUDE_CONTEXT_DISABLE_FTS = '1';
+    const origEnv = process.env.CODEX_CONTEXT_DISABLE_FTS;
+    process.env.CODEX_CONTEXT_DISABLE_FTS = '1';
     try {
       const fbDb = createTestDb();
       registerProject(fbDb, 'fbproj2', '/tmp/fbproj2');
@@ -151,9 +151,9 @@ describe('search', () => {
       closeTestDb(fbDb);
     } finally {
       if (origEnv === undefined) {
-        delete process.env.CLAUDE_CONTEXT_DISABLE_FTS;
+        delete process.env.CODEX_CONTEXT_DISABLE_FTS;
       } else {
-        process.env.CLAUDE_CONTEXT_DISABLE_FTS = origEnv;
+        process.env.CODEX_CONTEXT_DISABLE_FTS = origEnv;
       }
     }
   });

@@ -18,7 +18,7 @@ describe('e2e', () => {
   before(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ctx-e2e-'));
     dbPath = join(tmpDir, 'e2e.db');
-    env = { ...process.env, CLAUDE_CONTEXT_DB_PATH: dbPath };
+    env = { ...process.env, CODEX_CONTEXT_DB_PATH: dbPath };
   });
 
   after(() => {

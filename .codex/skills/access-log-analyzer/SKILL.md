@@ -15,7 +15,7 @@ Webサーバーのアクセスログを解析し、ページアクセス・流�
 
 ```bash
 # 基本
-bash /home/vscode/.claude/skills/access-log-analyzer/scripts/analyze_access_log.sh <logfile>
+bash .codex/skills/access-log-analyzer/scripts/analyze_access_log.sh <logfile>
 
 # 時間帯フィルタ（改修前後の比較等に使用）
 bash .../analyze_access_log.sh <logfile> --from 22        # 22:00以降のみ

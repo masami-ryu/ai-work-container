@@ -78,8 +78,9 @@ description: >
 
 ## データストレージ
 
-- デフォルト: `~/.claude/context/context.db`（初回実行時に自動作成）
-- 環境変数 `CLAUDE_CONTEXT_DB_PATH` でパスをカスタマイズ可能
+- デフォルト: `~/.codex/context/context.db`（初回実行時に自動作成）
+- 環境変数 `CODEX_CONTEXT_DB_PATH` でパスをカスタマイズ可能
+- 互換性のため、`CLAUDE_CONTEXT_DB_PATH` もフォールバックとして参照する
 
 ## CLI
 
