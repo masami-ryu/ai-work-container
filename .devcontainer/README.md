@@ -9,6 +9,7 @@
 1. **Node.js ツールチェーンのセットアップ**: `anyenv` / `nodenv` / `node-build` を準備し、プロジェクト設定に応じた Node.js を導入
 2. **Python ツールチェーンのセットアップ**: `uv` をインストールし、シェル起動時に参照できるよう `PATH` を調整
 3. **Git worktree サポート**: `/workspaces/` のパーミッション調整により、Git worktree 作成をサポート
+4. **開発ツール設定の永続化**: Docker volume `dev-home-data` を `/home/vscode/.dev-home-data` にマウントし、Codex と tmux の設定を保持
 
 ## スクリプト一覧
 
@@ -20,6 +21,7 @@ DevContainer 作成後の初期セットアップを担当します。
 - `anyenv` / `nodenv` / `node-build` の導入
 - `~/.workspace_node_version`、`.node-version`、`package.json#engines.node` を使った Node.js バージョン自動判定
 - `uv` の導入と `PATH` 設定
+- `~/.codex` と `~/.tmux.conf` を `/home/vscode/.dev-home-data` 配下への symlink として作成
 
 **実行タイミング:** `postCreateCommand`
 

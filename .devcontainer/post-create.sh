@@ -12,6 +12,7 @@ DEFAULT_NODE_VERSION="22.21.1"
 # 環境変数
 # ======================================
 HOME_DIR="/home/vscode"
+DEV_HOME_DATA_DIR="$HOME_DIR/.dev-home-data"
 ANYENV_DIR="$HOME_DIR/.anyenv"
 NODENV_DIR="$HOME_DIR/.nodenv"
 LOGFILE="$HOME_DIR/.anyenv_setup.log"
@@ -43,6 +44,48 @@ fi
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
 chown -R vscode:vscode "$HOME_DIR" || true
+
+# dev-home-data volume 配下に永続化対象を集約
+echo "永続化ディレクトリをセットアップ中..."
+mkdir -p "$DEV_HOME_DATA_DIR/codex" "$DEV_HOME_DATA_DIR/tmux"
+chown -R vscode:vscode "$DEV_HOME_DATA_DIR" || true
+chmod 700 "$DEV_HOME_DATA_DIR" "$DEV_HOME_DATA_DIR/codex" || true
+
+CODEX_HOME="$HOME_DIR/.codex"
+CODEX_DATA_DIR="$DEV_HOME_DATA_DIR/codex"
+TMUX_CONF="$HOME_DIR/.tmux.conf"
+TMUX_CONF_DATA="$DEV_HOME_DATA_DIR/tmux/tmux.conf"
+
+if [ -d "$CODEX_HOME" ] && [ ! -L "$CODEX_HOME" ]; then
+  if [ -z "$(find "$CODEX_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "既存の Codex 設定を dev-home-data に移行します..."
+    rsync -a "$CODEX_HOME/" "$CODEX_DATA_DIR/"
+  fi
+  mv "$CODEX_HOME" "$CODEX_HOME.pre-dev-home-data.$(date +%Y%m%d%H%M%S)"
+fi
+
+if [ ! -e "$CODEX_HOME" ] && [ ! -L "$CODEX_HOME" ]; then
+  ln -s "$CODEX_DATA_DIR" "$CODEX_HOME"
+fi
+
+if [ -f "$TMUX_CONF" ] && [ ! -L "$TMUX_CONF" ]; then
+  if [ ! -f "$TMUX_CONF_DATA" ]; then
+    echo "既存の tmux 設定を dev-home-data に移行します..."
+    cp "$TMUX_CONF" "$TMUX_CONF_DATA"
+  fi
+  mv "$TMUX_CONF" "$TMUX_CONF.pre-dev-home-data.$(date +%Y%m%d%H%M%S)"
+fi
+
+if [ ! -e "$TMUX_CONF_DATA" ]; then
+  printf 'set -g mouse on\n' > "$TMUX_CONF_DATA"
+fi
+
+if [ ! -e "$TMUX_CONF" ] && [ ! -L "$TMUX_CONF" ]; then
+  ln -s "$TMUX_CONF_DATA" "$TMUX_CONF"
+fi
+
+chown -R vscode:vscode "$DEV_HOME_DATA_DIR" || true
+chmod -R go-rwx "$CODEX_DATA_DIR" || true
 
 # anyenv のインストール
 echo "anyenv をセットアップ中..."
@@ -368,14 +411,12 @@ fi
 
 # Codex 設定復元
 CODEX_BACKUP="/workspaces/ai-work-container/backup/.codex"
-CODEX_HOME="/home/vscode/.codex"
 
-if [ ! -d "$CODEX_HOME" ] && [ -d "$CODEX_BACKUP" ]; then
+if [ -z "$(find "$CODEX_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] && [ -d "$CODEX_BACKUP" ]; then
   echo "Codex 設定をバックアップから復元します..."
-  mkdir -p "$CODEX_HOME"
-  rsync -a "$CODEX_BACKUP/" "$CODEX_HOME/"
-  chown -R vscode:vscode "$CODEX_HOME"
-  chmod -R go-rwx "$CODEX_HOME"
+  rsync -a "$CODEX_BACKUP/" "$CODEX_DATA_DIR/"
+  chown -R vscode:vscode "$CODEX_DATA_DIR"
+  chmod -R go-rwx "$CODEX_DATA_DIR"
 fi
 
 # Codex インストール
