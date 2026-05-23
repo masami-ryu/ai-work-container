@@ -6,6 +6,8 @@ services:
     volumes:
       # ワークスペース全体をマウント
       - ..:/workspaces/ai-work-container:cached
+      # Codex の認証情報・設定・セッションを rebuild 後も保持
+      - codex-data:/home/vscode/.codex
     # コンテナを起動し続ける
     command: sleep infinity
     # ネットワーク設定
@@ -14,3 +16,6 @@ services:
 networks:
   dev-network:
     driver: bridge
+
+volumes:
+  codex-data:
