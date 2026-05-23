@@ -351,3 +351,30 @@ else
   fi
 fi
 
+# ======================================
+# Codex 環境設定
+# ======================================
+
+# Codex 設定復元
+CODEX_BACKUP="/workspaces/ai-work-container/backup/.codex"
+CODEX_HOME="/home/vscode/.codex"
+
+if [ ! -d "$CODEX_HOME" ] && [ -d "$CODEX_BACKUP" ]; then
+  echo "Codex 設定をバックアップから復元します..."
+  mkdir -p "$CODEX_HOME"
+  rsync -a "$CODEX_BACKUP/" "$CODEX_HOME/"
+  chown -R vscode:vscode "$CODEX_HOME"
+  chmod -R go-rwx "$CODEX_HOME"
+fi
+
+# Codex インストール
+if command -v codex >/dev/null 2>&1; then
+  echo "Codex は既にインストールされています: $(codex --version 2>/dev/null || echo version unknown)"
+else
+  npm install -g @openai/codex
+fi
+
+# rehash
+if command -v nodenv >/dev/null 2>&1; then
+  nodenv rehash
+fi
