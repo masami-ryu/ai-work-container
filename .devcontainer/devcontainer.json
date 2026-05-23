@@ -10,7 +10,7 @@
   "service": "devcontainer",
   "workspaceFolder": "/workspaces/ai-work-container",
   "shutdownAction": "none",
-  "forwardPorts": [6080],
+  // "forwardPorts": [6080],
   "portsAttributes": {
     "6080": {
       "label": "Playwright Recorder noVNC"

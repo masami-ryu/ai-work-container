@@ -15,7 +15,7 @@ websockify --web=/usr/share/novnc/ 0.0.0.0:6080 localhost:5900 >/tmp/websockify.
 cd /workspaces/ai-work-container/tools/playwright-recorder
 
 if [ ! -d node_modules ]; then
-  pnpm install --frozen-lockfile >/tmp/pnpm-install.log 2>&1 || pnpm install >/tmp/pnpm-install.log 2>&1
+  pnpm install --frozen-lockfile || pnpm install
 fi
 
 xterm -fa Monospace -fs 11 -geometry 140x40+20+20 -e bash -lc 'cd /workspaces/ai-work-container/tools/playwright-recorder; printf "Playwright recorder ready.\\nUse pnpm codegen:auth <URL> or pnpm codegen:shift <URL>.\\n"; exec bash' >/tmp/xterm.log 2>&1 &
