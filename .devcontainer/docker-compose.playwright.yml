@@ -1,0 +1,14 @@
+services:
+  playwright-recorder:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    volumes:
+      - ..:/workspaces/ai-work-container:cached
+    working_dir: /workspaces/ai-work-container/tools/playwright-recorder
+    command: /usr/local/bin/start-playwright-vnc.sh
+    shm_size: 1gb
+    ports:
+      - "6080:6080"
+    networks:
+      - dev-network

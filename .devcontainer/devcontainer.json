@@ -3,10 +3,19 @@
   "name": "Dev Container (anyenv + nodenv)",
 
   // Docker Compose設定
-  "dockerComposeFile": "docker-compose.yml",
+  "dockerComposeFile": [
+    "docker-compose.yml",
+    "docker-compose.playwright.yml"
+  ],
   "service": "devcontainer",
   "workspaceFolder": "/workspaces/ai-work-container",
   "shutdownAction": "none",
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "Playwright Recorder noVNC"
+    }
+  },
   
   // VS Code カスタマイズ
   "customizations": {

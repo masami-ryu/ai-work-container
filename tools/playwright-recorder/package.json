@@ -1,0 +1,14 @@
+{
+  "name": "playwright-recorder",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "codegen": "playwright codegen",
+    "codegen:auth": "playwright codegen --save-storage=.auth/user.json",
+    "codegen:shift": "playwright codegen --load-storage=.auth/user.json",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1"
+  }
+}

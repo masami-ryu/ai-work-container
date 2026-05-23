@@ -90,6 +90,26 @@ claude
 
 詳しくは [Claude Code使用方法ガイド](./docs/claude-code-usage.md) を参照してください。
 
+### Playwright recorder
+
+Windows 側に Node.js を入れずに Playwright の `codegen` を使いたい場合は、録画専用 sidecar コンテナを使います。Dev Container を再ビルドすると `playwright-recorder` サービスも起動し、`6080` 番ポートで noVNC を公開します。
+
+1. Dev Container を再ビルドする
+2. VS Code の Ports かブラウザで `http://localhost:6080` を開く
+3. noVNC デスクトップで自動起動した `xterm` から録画コマンドを実行する
+
+```bash
+cd /workspaces/ai-work-container/tools/playwright-recorder
+
+# 初回ログイン用。認証状態を .auth/user.json に保存
+pnpm codegen:auth https://example.com/login
+
+# 認証済み状態で業務操作だけ録画
+pnpm codegen:shift https://example.com/shifts
+```
+
+認証状態ファイル `tools/playwright-recorder/.auth/user.json` は `.gitignore` 済みです。録画後は生成コードを `tools/playwright-recorder/tests/` などに整理して保管してください。
+
 ## ドキュメント
 
 - [Claude Code 使用方法ガイド](./docs/claude-code-usage.md) - 基本的な使い方とMCP活用方法

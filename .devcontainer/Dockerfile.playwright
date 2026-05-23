@@ -1,0 +1,22 @@
+FROM mcr.microsoft.com/playwright:v1.59.1-noble
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:99
+
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    fluxbox \
+    novnc \
+    websockify \
+    x11vnc \
+    xterm \
+    xvfb \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable pnpm
+
+COPY start-playwright-vnc.sh /usr/local/bin/start-playwright-vnc.sh
+RUN chmod +x /usr/local/bin/start-playwright-vnc.sh
+
+USER pwuser
