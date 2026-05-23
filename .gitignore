@@ -28,3 +28,10 @@ slack-bridge/session.db
 ai/**/*
 
 .vscode/claude-monitor-mcp.json
+
+tools/playwright-recorder/.auth/
+tools/playwright-recorder/node_modules/
+tools/playwright-recorder/playwright-report/
+tools/playwright-recorder/test-results/
+
+backup
