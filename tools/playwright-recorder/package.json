@@ -6,6 +6,7 @@
     "codegen": "playwright codegen",
     "codegen:auth": "playwright codegen --save-storage=.auth/user.json",
     "codegen:shift": "playwright codegen --load-storage=.auth/user.json",
+    "chrome": "node run-chrome.js",
     "test": "playwright test"
   },
   "devDependencies": {
