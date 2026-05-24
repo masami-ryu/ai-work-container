@@ -33,6 +33,11 @@ tools/playwright-recorder/.auth/
 tools/playwright-recorder/node_modules/
 tools/playwright-recorder/playwright-report/
 tools/playwright-recorder/test-results/
+tools/playwright-recorder/screenshots/
+tools/playwright-recorder/snapshots/
+tools/playwright-recorder/.playwright-cli/
+tools/playwright-recorder/.playwright/*
+!tools/playwright-recorder/.playwright/cli.config.json
 
 backup
 

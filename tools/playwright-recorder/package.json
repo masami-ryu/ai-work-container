@@ -7,9 +7,22 @@
     "codegen:auth": "playwright codegen --save-storage=.auth/user.json",
     "codegen:shift": "playwright codegen --load-storage=.auth/user.json",
     "chrome": "node run-chrome.js",
+    "cli": "playwright-cli",
+    "cli:open": "playwright-cli open",
+    "cli:snapshot": "playwright-cli snapshot",
+    "cli:show": "playwright-cli show",
+    "cli:close": "playwright-cli close",
+    "cli:help": "playwright-cli --help",
+    "command:server": "node command-server.js",
+    "shared:open": "playwright-cli open --headed --persistent --profile .pw-profile-shared",
+    "shared:snapshot": "playwright-cli snapshot",
+    "shared:show": "playwright-cli show",
+    "shared:close": "playwright-cli close",
+    "shared:reset": "playwright-cli delete-data",
     "test": "playwright test"
   },
   "devDependencies": {
+    "@playwright/cli": "^0.1.13",
     "@playwright/test": "1.59.1"
   }
 }

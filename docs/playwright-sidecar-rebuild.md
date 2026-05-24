@@ -33,3 +33,10 @@ docker compose \
 ## 注意
 
 `-p "$PROJECT_NAME"` を付けないと、VS Code Dev Containers が作成した compose project とは別扱いになり、新しいコンテナが作成される。
+
+環境によっては、例えば次のような値になる。
+
+```bash
+cd projects/private/ai-work-container/.devcontainer
+PROJECT_NAME=ai-work-container_devcontainer
+```

@@ -108,6 +108,39 @@ pnpm codegen:auth https://example.com/login
 pnpm codegen:shift https://example.com/shifts
 ```
 
+AI からブラウザを操作する場合は Playwright CLI を使います。`snapshot` で element ref を取得し、`click` / `fill` などの短いコマンドで操作します。
+
+```bash
+cd /workspaces/ai-work-container/tools/playwright-recorder
+pnpm cli:open https://example.com
+pnpm cli:snapshot
+pnpm cli -- click e1
+pnpm cli:close
+```
+
+ユーザーが noVNC で操作したブラウザを AI が続きから操作する場合は、共有操作用の persistent profile を使います。
+
+```bash
+cd /workspaces/ai-work-container/tools/playwright-recorder
+pnpm shared:open https://example.com
+
+# ユーザーが noVNC で操作した後、AI が現在状態を取得して続きから操作
+pnpm shared:snapshot
+pnpm cli -- click e1
+pnpm shared:close
+```
+
+AI からの続き操作は noVNC へのキー入力ではなく、sidecar の command server を使います。
+command server は Docker ネットワーク内の `http://playwright-recorder:6090` から利用します。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"snapshot","args":["--filename=snapshots/current.md"]}'
+```
+
+`@playwright/cli` は alpha 系の Playwright 依存を含むため、現時点では共有ブラウザ操作のための実験的な補助として扱います。
+
 認証状態ファイル `tools/playwright-recorder/.auth/user.json` は `.gitignore` 済みです。録画後は生成コードを `tools/playwright-recorder/tests/` などに整理して保管してください。
 
 ## ドキュメント
