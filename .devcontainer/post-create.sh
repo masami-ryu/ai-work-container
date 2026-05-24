@@ -16,6 +16,7 @@ DEV_HOME_DATA_DIR="$HOME_DIR/.dev-home-data"
 ANYENV_DIR="$HOME_DIR/.anyenv"
 NODENV_DIR="$HOME_DIR/.nodenv"
 LOGFILE="$HOME_DIR/.anyenv_setup.log"
+WORKSPACE_ROOT="/workspaces/ai-work-container"
 
 # ログファイルへの出力設定(詳細ログはファイルに記録、ターミナルには重要情報のみ)
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -29,6 +30,25 @@ on_error() {
   exit 1
 }
 trap on_error ERR
+
+# よく使うディレクトリへの移動エイリアス
+echo "ワークスペース移動エイリアスを設定中..."
+for SHELL_RC in "$HOME_DIR/.bashrc" "$HOME_DIR/.zshrc"; do
+  if [ ! -f "$SHELL_RC" ]; then
+    touch "$SHELL_RC"
+  fi
+
+  if ! grep -qF "alias caw='cd $WORKSPACE_ROOT'" "$SHELL_RC"; then
+    {
+      echo ""
+      echo "# Workspace directory aliases"
+      echo "alias caw='cd $WORKSPACE_ROOT'"
+    } >> "$SHELL_RC"
+    echo "$(basename "$SHELL_RC") に caw エイリアスを追加しました。"
+  else
+    echo "$(basename "$SHELL_RC") には caw エイリアスが既にあります（スキップ）。"
+  fi
+done
 
 # tmux のインストール
 echo "tmux を確認中..."
