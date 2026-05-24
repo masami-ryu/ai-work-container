@@ -35,3 +35,5 @@ tools/playwright-recorder/playwright-report/
 tools/playwright-recorder/test-results/
 
 backup
+
+tools/playwright-recorder/.pw-profile-salonboard
