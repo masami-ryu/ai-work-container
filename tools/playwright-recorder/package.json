@@ -19,6 +19,7 @@
     "shared:show": "playwright-cli show",
     "shared:close": "playwright-cli close",
     "shared:reset": "playwright-cli delete-data",
+    "salonboard:shift": "node scripts/salonboard-shift-input.js",
     "test": "playwright test"
   },
   "devDependencies": {

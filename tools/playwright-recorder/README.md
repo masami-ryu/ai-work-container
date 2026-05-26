@@ -129,3 +129,30 @@ http://playwright-recorder:6080/vnc.html
 ```bash
 pnpm chrome
 ```
+
+## SALON BOARD シフト入力
+
+ログイン済みの `.pw-profile-shared` を使って、シフト設定画面のセル入力を自動化できる。既定ではモーダル内の入力確定まで行い、スタッフ行の最終「設定」ボタンは押さない。
+
+```bash
+pnpm salonboard:shift -- \
+  --url "https://salonboard.com/KLP/set/shiftSetup/?date=202607" \
+  --staff "岩橋" \
+  --date 2026-07-01 \
+  --schedule 10:00-12:00 \
+  --schedule 18:00-23:00
+```
+
+スタッフ行の最終「設定」ボタンまで押す場合だけ `--final-save` を付ける。
+
+```bash
+pnpm salonboard:shift -- \
+  --url "https://salonboard.com/KLP/set/shiftSetup/?date=202607" \
+  --staff "岩橋" \
+  --date 2026-07-01 \
+  --schedule 10:00-12:00 \
+  --schedule 18:00-23:00 \
+  --final-save
+```
+
+このスクリプトは Playwright で `.pw-profile-shared` を直接開くため、同じ profile の共有 Chrome が起動中の場合は先に閉じる。
