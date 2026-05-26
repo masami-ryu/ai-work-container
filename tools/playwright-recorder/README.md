@@ -42,6 +42,25 @@ sidecar 起動時に `6090` 番ポートで command server が起動する。AI 
 
 ```bash
 curl -sS http://playwright-recorder:6090/health
+curl -sS http://playwright-recorder:6090/status
+```
+
+`/status` は共有ブラウザの想定状態に加えて、`.pw-profile-shared` の lock 状態を返す。Chrome プロセスが存在しない stale lock は `shared-open` 実行前に自動削除される。
+
+noVNC に表示される共有ブラウザを起動する。API 経由の `open` は既定で `--headed --persistent --profile .pw-profile-shared` を付けて実行される。意図を明確にしたい場合は `shared-open` を使う。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-open","args":["https://www.google.com/"]}'
+```
+
+共有 profile を明示的に初期化する場合は、最終手段として `shared-reset --confirm` を使う。通常の stale lock 復旧は `shared-open` が lock ファイルだけを自動削除する。`shared-reset --confirm` は実行前に `.pw-profile-shared.backup-<timestamp>` へ profile 全体を退避してから削除する。Chrome が実行中の場合は失敗し、noVNC 側で Chrome を閉じるように返す。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-reset","args":["--confirm"]}'
 ```
 
 現在のページ状態を snapshot として取得する。
@@ -65,6 +84,10 @@ curl -sS http://playwright-recorder:6090/run \
 ```
 
 実行できるのは `command-server.js` で許可した Playwright CLI コマンドだけ。任意 shell コマンドとページ上の任意 JavaScript は実行しない。
+
+コマンドは同時に 1 つだけ実行される。既定で 30 秒を超えたコマンドはタイムアウトし、`PLAYWRIGHT_COMMAND_TIMEOUT_MS` で変更できる。
+
+共有 profile が lock されて起動できない場合は、応答に `errorCode: "PROFILE_LOCKED"`、`profileLock`、`recoveryHint` が含まれる。`shared-reset` の成功応答には `backup.path` が含まれる。
 
 ## CLI 操作
 

@@ -131,13 +131,21 @@ pnpm shared:close
 ```
 
 AI からの続き操作は noVNC へのキー入力ではなく、sidecar の command server を使います。
-command server は Docker ネットワーク内の `http://playwright-recorder:6090` から利用します。
+command server は Docker ネットワーク内の `http://playwright-recorder:6090` から利用します。API 経由の `open` は noVNC に表示される共有ブラウザとして起動されます。意図を明確にしたい場合は `shared-open` を使います。
 
 ```bash
+curl -sS http://playwright-recorder:6090/status
+
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-open","args":["https://www.google.com/"]}'
+
 curl -sS http://playwright-recorder:6090/run \
   -H 'content-type: application/json' \
   -d '{"command":"snapshot","args":["--filename=snapshots/current.md"]}'
 ```
+
+`/status` は共有 profile の lock 状態も返します。stale lock は `shared-open` 前に lock ファイルだけ自動削除されます。共有 profile の初期化は最終手段として `shared-reset --confirm` を使います。実行前に `.pw-profile-shared.backup-<timestamp>` へ profile 全体を退避します。
 
 `@playwright/cli` は alpha 系の Playwright 依存を含むため、現時点では共有ブラウザ操作のための実験的な補助として扱います。
 
