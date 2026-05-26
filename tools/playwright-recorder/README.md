@@ -122,14 +122,6 @@ http://localhost:6080/vnc.html
 http://playwright-recorder:6080/vnc.html
 ```
 
-## 人間操作用 Chrome
-
-既存の手動操作用ブラウザは次で起動する。
-
-```bash
-pnpm chrome
-```
-
 ## SALON BOARD シフト入力
 
 ログイン済みの `.pw-profile-shared` を使って、シフト設定画面のセル入力を自動化できる。既定ではモーダル内の入力確定まで行い、スタッフ行の最終「設定」ボタンは押さない。
