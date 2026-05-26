@@ -7,6 +7,8 @@ set -euo pipefail
 # プロジェクトに .node-version や package.json の engines.node が
 # 指定されていない場合に使用されるデフォルトの Node.js バージョン
 DEFAULT_NODE_VERSION="22.21.1"
+# コンテナ内に python3 が存在しない場合に uv でインストールする Python バージョン
+DEFAULT_PYTHON_VERSION="3.12"
 
 # ======================================
 # 環境変数
@@ -436,6 +438,61 @@ else
   else
     echo "[警告] uv が見つかりません。手動でインストールしてください。" | tee -a "$UV_LOGFILE"
   fi
+fi
+
+# ======================================
+# uv-managed Python のセットアップ
+# ======================================
+echo "Python を確認中..."
+
+UV_BIN_DIR="$HOME/.local/bin"
+mkdir -p "$UV_BIN_DIR"
+export PATH="$UV_BIN_DIR:$PATH"
+
+# uv が既に入っている環境でも python3 の PATH が通るようにする
+for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [ ! -f "$SHELL_RC" ]; then
+    touch "$SHELL_RC"
+  fi
+
+  if ! grep -qF "$UV_BIN_DIR" "$SHELL_RC"; then
+    {
+      echo ""
+      echo "# uv-managed Python"
+      echo "case \":\$PATH:\" in"
+      echo "  *:\"$UV_BIN_DIR\":*) ;;"
+      echo "  *) export PATH=\"$UV_BIN_DIR:\$PATH\" ;;"
+      echo "esac"
+    } >> "$SHELL_RC"
+    echo "$(basename "$SHELL_RC") に uv-managed Python の PATH を追加しました。"
+  fi
+done
+
+if command -v python3 >/dev/null 2>&1; then
+  echo "python3 は既に利用可能です: $(python3 --version 2>/dev/null || echo version unknown)"
+elif command -v uv >/dev/null 2>&1; then
+  echo "python3 が見つからないため、uv で Python $DEFAULT_PYTHON_VERSION をインストールします。"
+  if uv python install --preview-features python-install-default "$DEFAULT_PYTHON_VERSION" --default; then
+    echo "uv-managed Python をインストールしました。"
+  else
+    echo "[警告] uv-managed Python のインストールに失敗しました。"
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3 が利用可能になりました: $(python3 --version 2>/dev/null || echo version unknown)"
+  else
+    PYTHON_BIN="$(uv python find --managed-python --no-project "$DEFAULT_PYTHON_VERSION" 2>/dev/null || true)"
+    if [ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ]; then
+      ln -sfn "$PYTHON_BIN" "$UV_BIN_DIR/python3"
+      ln -sfn "$PYTHON_BIN" "$UV_BIN_DIR/python"
+      echo "python3/python を $PYTHON_BIN にリンクしました。"
+      python3 --version || echo "[警告] python3 の動作確認に失敗しました。"
+    else
+      echo "[警告] uv-managed Python の実体が見つかりません。"
+    fi
+  fi
+else
+  echo "[警告] uv が見つからないため、Python のセットアップをスキップします。"
 fi
 
 # ======================================
