@@ -9,12 +9,19 @@ const cwd = __dirname;
 const sharedProfile = '.pw-profile-shared';
 const sharedProfilePath = path.join(cwd, sharedProfile);
 const sharedProfileBackupPrefix = `${sharedProfile}.backup`;
+const sharedCdpSession = 'shared-cdp';
 const commandTimeoutMs = Number(process.env.PLAYWRIGHT_COMMAND_TIMEOUT_MS || 30000);
 
 const allowedCommands = new Set([
   'open',
   'shared-open',
+  'shared-pages',
   'shared-reset',
+  'shared-attach-target',
+  'shared-guard',
+  'shared-cdp-snapshot',
+  'shared-snapshot',
+  'shared-targets',
   'goto',
   'snapshot',
   'screenshot',
@@ -162,6 +169,251 @@ function firstUrl(args) {
   return args.find(arg => /^https?:\/\//.test(arg)) || null;
 }
 
+function argValue(args, option) {
+  const exactIndex = args.indexOf(option);
+  if (exactIndex >= 0) return args[exactIndex + 1] || null;
+
+  const prefixed = args.find(arg => arg.startsWith(`${option}=`));
+  return prefixed ? prefixed.slice(option.length + 1) : null;
+}
+
+function parseProcCmdline(content) {
+  return content.split('\0').filter(Boolean);
+}
+
+function listChromeProcesses() {
+  const procEntries = fs.readdirSync('/proc', { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && /^\d+$/.test(entry.name));
+  const result = [];
+
+  for (const entry of procEntries) {
+    const pid = Number(entry.name);
+    let args;
+    try {
+      args = parseProcCmdline(fs.readFileSync(path.join('/proc', entry.name, 'cmdline'), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!args.length || !/(chrome|chromium)/.test(path.basename(args[0]))) continue;
+
+    result.push({
+      pid,
+      executable: args[0],
+      userDataDir: argValue(args, '--user-data-dir'),
+      remoteDebuggingPort: argValue(args, '--remote-debugging-port'),
+      remoteDebuggingPipe: args.includes('--remote-debugging-pipe'),
+      display: argValue(args, '--display'),
+      urlArgs: args.filter(arg => /^https?:\/\//.test(arg) || arg.startsWith('chrome://')),
+    });
+  }
+
+  return result.sort((a, b) => a.pid - b.pid);
+}
+
+function findDevToolsActivePorts(rootDir) {
+  const result = [];
+  const stack = [{ dir: rootDir, depth: 0 }];
+
+  while (stack.length) {
+    const { dir, depth } = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name === 'DevToolsActivePort') {
+        try {
+          const [portLine, browserPath = ''] = fs.readFileSync(entryPath, 'utf8').trim().split('\n');
+          const port = Number(portLine);
+          result.push({
+            path: path.relative(cwd, entryPath),
+            port: Number.isFinite(port) ? port : null,
+            browserPath,
+          });
+        } catch (error) {
+          result.push({
+            path: path.relative(cwd, entryPath),
+            error: error.message,
+          });
+        }
+      } else if (entry.isDirectory() && depth < 4) {
+        stack.push({ dir: entryPath, depth: depth + 1 });
+      }
+    }
+  }
+
+  return result;
+}
+
+function requestJson(url) {
+  return new Promise(resolve => {
+    const request = http.get(url, { timeout: 1500 }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => {
+        body += chunk;
+        if (body.length > 1024 * 1024) request.destroy(new Error('response too large'));
+      });
+      response.on('end', () => {
+        try {
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            statusCode: response.statusCode,
+            body: JSON.parse(body),
+          });
+        } catch (error) {
+          resolve({
+            ok: false,
+            statusCode: response.statusCode,
+            error: error.message,
+            raw: body.slice(0, 500),
+          });
+        }
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('timeout')));
+    request.on('error', error => resolve({ ok: false, error: error.message }));
+  });
+}
+
+function requestText(url) {
+  return new Promise(resolve => {
+    const request = http.get(url, { timeout: 1500 }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => {
+        body += chunk;
+        if (body.length > 1024 * 1024) request.destroy(new Error('response too large'));
+      });
+      response.on('end', () => resolve({
+        ok: response.statusCode >= 200 && response.statusCode < 300,
+        statusCode: response.statusCode,
+        body,
+      }));
+    });
+    request.on('timeout', () => request.destroy(new Error('timeout')));
+    request.on('error', error => resolve({ ok: false, error: error.message }));
+  });
+}
+
+async function collectCdpTargets() {
+  const processes = listChromeProcesses();
+  const activePorts = findDevToolsActivePorts(sharedProfilePath);
+  const ports = new Set();
+
+  for (const processInfo of processes) {
+    const port = Number(processInfo.remoteDebuggingPort);
+    if (Number.isFinite(port) && port > 0) ports.add(port);
+  }
+  for (const activePort of activePorts) {
+    if (Number.isFinite(activePort.port) && activePort.port > 0) ports.add(activePort.port);
+  }
+
+  const cdp = [];
+  for (const port of [...ports].sort((a, b) => a - b)) {
+    const endpoint = `http://127.0.0.1:${port}`;
+    const [version, targets] = await Promise.all([
+      requestJson(`${endpoint}/json/version`),
+      requestJson(`${endpoint}/json/list`),
+    ]);
+    cdp.push({
+      endpoint,
+      version,
+      targets: targets.ok && Array.isArray(targets.body)
+        ? targets.body.map(target => ({
+          id: target.id,
+          type: target.type,
+          title: target.title,
+          url: target.url,
+          attached: target.attached,
+          webSocketDebuggerUrl: target.webSocketDebuggerUrl,
+        }))
+        : targets,
+    });
+  }
+
+  return { processes, activePorts, cdp, ports };
+}
+
+function pageTargets(cdpInfo) {
+  const result = [];
+  for (const endpointInfo of cdpInfo.cdp) {
+    if (!Array.isArray(endpointInfo.targets)) continue;
+    for (const target of endpointInfo.targets) {
+      if (target.type === 'page') {
+        result.push({
+          endpoint: endpointInfo.endpoint,
+          ...target,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+function findPageTarget(cdpInfo, urlHint = 'salonboard.com') {
+  const pages = pageTargets(cdpInfo);
+  const hint = urlHint.toLowerCase();
+  return pages.find(target => target.url.toLowerCase().includes(hint))
+    || pages.find(target => target.url !== 'about:blank')
+    || pages[0]
+    || null;
+}
+
+function cdpCommand(webSocketDebuggerUrl, method, params = {}) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    const id = 1;
+    const timer = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {
+      }
+      reject(new Error(`CDP command timed out: ${method}`));
+    }, 5000);
+
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+    ws.addEventListener('message', event => {
+      let message;
+      try {
+        message = JSON.parse(String(event.data));
+      } catch {
+        return;
+      }
+      if (message.id !== id) return;
+      clearTimeout(timer);
+      ws.close();
+      if (message.error) {
+        reject(new Error(`${message.error.message || 'CDP error'}${message.error.data ? `: ${message.error.data}` : ''}`));
+      } else {
+        resolve(message.result);
+      }
+    });
+    ws.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error(`CDP websocket error: ${webSocketDebuggerUrl}`));
+    });
+  });
+}
+
+function safeOutputPath(filename) {
+  const resolved = path.resolve(cwd, filename);
+  if (resolved !== cwd && !resolved.startsWith(`${cwd}${path.sep}`)) {
+    throw new Error(`output path is outside recorder workspace: ${filename}`);
+  }
+  return resolved;
+}
+
+function markdownEscape(value) {
+  return String(value ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
 function jstTimestamp() {
   const date = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const value = date.toISOString().replace(/[-:]/g, '').replace('T', '_').slice(2, 15);
@@ -300,6 +552,189 @@ async function resetSharedProfile(args) {
   };
 }
 
+async function runSharedPagesDiagnostic() {
+  return await runPlaywrightCli('run-code', ['--filename=scripts/shared-pages-diagnostic.js']);
+}
+
+async function runSharedTargetsDiagnostic() {
+  const { processes, activePorts, cdp, ports } = await collectCdpTargets();
+
+  return {
+    code: 0,
+    stdout: `${JSON.stringify({
+      processes,
+      activePorts,
+      cdp,
+      note: ports.size
+        ? 'CDP targets were collected from detected remote debugging ports.'
+        : 'No CDP port was detected. Restart the shared browser after enabling --remote-debugging-port.',
+    }, null, 2)}\n`,
+    stderr: '',
+  };
+}
+
+async function runSharedGuard() {
+  const [pagesResult, cdpInfo] = await Promise.all([
+    runSharedPagesDiagnostic(),
+    collectCdpTargets(),
+  ]);
+  const cliSeesFout = /https:\/\/js\.fout\.jp\/beacon\.html/.test(pagesResult.stdout || '');
+  const target = findPageTarget(cdpInfo, 'salonboard.com');
+  const warning = Boolean(cliSeesFout && target?.url?.includes('salonboard.com'));
+
+  return {
+    code: 0,
+    stdout: `${JSON.stringify({
+      ok: true,
+      warning,
+      message: warning
+        ? 'Playwright CLI current target is js.fout.jp, but CDP sees a Salonboard page target. Use shared-attach-target before snapshot/actions.'
+        : 'No CLI/CDP target mismatch detected.',
+      recommendedCommand: warning ? 'shared-attach-target' : null,
+      cdpPageTargets: pageTargets(cdpInfo),
+      cliPagesRaw: pagesResult.stdout,
+    }, null, 2)}\n`,
+    stderr: pagesResult.stderr || '',
+  };
+}
+
+async function runSharedAttachTarget(args) {
+  const urlHint = args[0] || 'salonboard.com';
+  const cdpInfo = await collectCdpTargets();
+  const target = findPageTarget(cdpInfo, urlHint);
+  if (!target) {
+    return {
+      code: 1,
+      stdout: `${JSON.stringify({ ok: false, error: `No page target found for ${urlHint}`, cdpPageTargets: pageTargets(cdpInfo) }, null, 2)}\n`,
+      stderr: '',
+    };
+  }
+
+  const activateResult = await requestText(`${target.endpoint}/json/activate/${encodeURIComponent(target.id)}`);
+  const attachResult = await runPlaywrightCli('attach', ['--cdp', target.endpoint, '--session', sharedCdpSession]);
+  return {
+    ...attachResult,
+    stdout: `${JSON.stringify({
+      selectedTarget: target,
+      activateResult,
+      attachSession: sharedCdpSession,
+    }, null, 2)}\n${attachResult.stdout}`,
+  };
+}
+
+async function runSharedCdpSnapshot(args) {
+  const filename = args[0] || 'snapshots/current.md';
+  const urlHint = args[1] || 'salonboard.com';
+  const cdpInfo = await collectCdpTargets();
+  const target = findPageTarget(cdpInfo, urlHint);
+  if (!target?.webSocketDebuggerUrl) {
+    return {
+      code: 1,
+      stdout: `${JSON.stringify({ ok: false, error: `No CDP page target found for ${urlHint}`, cdpPageTargets: pageTargets(cdpInfo) }, null, 2)}\n`,
+      stderr: '',
+      errorCode: 'NO_CDP_TARGET',
+    };
+  }
+
+  const expression = `(() => {
+    const fieldInfo = element => ({
+      tag: element.tagName.toLowerCase(),
+      type: element.getAttribute('type'),
+      id: element.getAttribute('id'),
+      name: element.getAttribute('name'),
+      placeholder: element.getAttribute('placeholder'),
+      autocomplete: element.getAttribute('autocomplete'),
+      visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length)
+    });
+    return {
+      url: location.href,
+      title: document.title,
+      inputs: Array.from(document.querySelectorAll('input, textarea, select')).slice(0, 30).map(fieldInfo),
+      frameCount: window.frames.length
+    };
+  })()`;
+  const result = await cdpCommand(target.webSocketDebuggerUrl, 'Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: true,
+  });
+  const pageInfo = result.result?.value || {};
+  const outputPath = safeOutputPath(filename);
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  const lines = [
+    '# CDP Page Snapshot',
+    '',
+    `- Page URL: ${pageInfo.url || target.url}`,
+    `- Page Title: ${pageInfo.title || target.title || ''}`,
+    `- Target ID: ${target.id}`,
+    `- Frame Count: ${pageInfo.frameCount ?? ''}`,
+    '',
+    '## Input Fields',
+    '',
+    '| index | tag | type | id | name | placeholder | autocomplete | visible |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const [index, input] of (pageInfo.inputs || []).entries()) {
+    lines.push(`| ${index} | ${markdownEscape(input.tag)} | ${markdownEscape(input.type)} | ${markdownEscape(input.id)} | ${markdownEscape(input.name)} | ${markdownEscape(input.placeholder)} | ${markdownEscape(input.autocomplete)} | ${markdownEscape(input.visible)} |`);
+  }
+  if (!pageInfo.inputs?.length) lines.push('| | | | | | | | |');
+  lines.push('', '<!-- Input values are intentionally not captured. -->', '');
+  await fs.promises.writeFile(outputPath, lines.join('\n'), 'utf8');
+
+  return {
+    code: 0,
+    stdout: `${JSON.stringify({
+      ok: true,
+      mode: 'cdp',
+      selectedTarget: target,
+      output: path.relative(cwd, outputPath),
+      page: pageInfo,
+    }, null, 2)}\n`,
+    stderr: '',
+  };
+}
+
+async function runSharedSnapshot(args) {
+  const filename = args[0] || 'snapshots/current.md';
+  const guardResult = await runSharedGuard();
+  let guard;
+  try {
+    guard = JSON.parse(guardResult.stdout);
+  } catch {
+    guard = null;
+  }
+  if (guard?.warning) {
+    const attachResult = await runSharedAttachTarget(['salonboard.com']);
+    if (attachResult.code !== 0) {
+      return await runSharedCdpSnapshot([filename, 'salonboard.com']);
+    }
+    const snapshotResult = await runPlaywrightCliInSession(sharedCdpSession, 'snapshot', [`--filename=${filename}`]);
+    if (snapshotResult.code !== 0) {
+      const cdpSnapshotResult = await runSharedCdpSnapshot([filename, 'salonboard.com']);
+      return {
+        ...cdpSnapshotResult,
+        stdout: `${JSON.stringify({
+          attachSession: sharedCdpSession,
+          fallback: 'cdp',
+          failedSnapshot: {
+            code: snapshotResult.code,
+            timedOut: Boolean(snapshotResult.timedOut),
+            stderr: snapshotResult.stderr,
+          },
+        }, null, 2)}\n${cdpSnapshotResult.stdout}`,
+      };
+    }
+    return {
+      ...snapshotResult,
+      stdout: `${JSON.stringify({
+        guard: JSON.parse(guardResult.stdout),
+        attachSession: sharedCdpSession,
+      }, null, 2)}\n${attachResult.stdout}${snapshotResult.stdout}`,
+    };
+  }
+  return await runPlaywrightCli('snapshot', [`--filename=${filename}`]);
+}
+
 function enhanceResult(command, result) {
   const enhanced = { ...result };
   if (/Browser is already in use for \.pw-profile-shared/.test(result.stderr || '')) {
@@ -314,8 +749,16 @@ function enhanceResult(command, result) {
 }
 
 function runPlaywrightCli(command, args) {
+  return runPlaywrightCliArgs([command, ...args]);
+}
+
+function runPlaywrightCliInSession(sessionName, command, args) {
+  return runPlaywrightCliArgs([`-s=${sessionName}`, command, ...args]);
+}
+
+function runPlaywrightCliArgs(cliArgs) {
   return new Promise((resolve) => {
-    const child = spawn('pnpm', ['exec', 'playwright-cli', command, ...args], {
+    const child = spawn('pnpm', ['exec', 'playwright-cli', ...cliArgs], {
       cwd,
       env: {
         ...process.env,
@@ -397,7 +840,19 @@ async function handleRun(req, res) {
     // If callers need burst execution later, replace this guard with a FIFO queue.
     const rawResult = command === 'shared-reset'
       ? await resetSharedProfile(args)
-      : await runPlaywrightCli(command, args);
+      : command === 'shared-pages'
+        ? await runSharedPagesDiagnostic()
+        : command === 'shared-attach-target'
+          ? await runSharedAttachTarget(args)
+        : command === 'shared-guard'
+          ? await runSharedGuard()
+        : command === 'shared-cdp-snapshot'
+          ? await runSharedCdpSnapshot(args)
+        : command === 'shared-snapshot'
+          ? await runSharedSnapshot(args)
+        : command === 'shared-targets'
+          ? await runSharedTargetsDiagnostic()
+        : await runPlaywrightCli(command, args);
     const result = enhanceResult(command, rawResult);
     updateSharedBrowserState(command, args, result);
     lastCommand = {

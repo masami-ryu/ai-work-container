@@ -71,6 +71,56 @@ curl -sS http://playwright-recorder:6090/run \
   -d '{"command":"snapshot","args":["--filename=snapshots/current.md"]}'
 ```
 
+noVNC の前面タブと Playwright CLI の current tab がずれる場合は、共有ブラウザ内の全ページを診断する。これは `page.context().pages()` から URL、タイトル、viewport、入力欄のメタ情報だけを取得し、入力値は取得しない。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-pages","args":[]}'
+```
+
+`shared-pages` でも noVNC 側のページが見えない場合は、Chrome DevTools Protocol の target 一覧を診断する。共有ブラウザは `.playwright/cli.config.json` で `--remote-debugging-port=9222` を付けて起動する。設定変更後は共有ブラウザを閉じて開き直す。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-targets","args":[]}'
+```
+
+noVNC の実ページと Playwright CLI の current target がずれていないか確認する。ズレている場合は `shared-attach-target` を推奨する警告を返す。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-guard","args":[]}'
+```
+
+CDP target 一覧から指定した URL 断片に一致する page target を選び、別セッション `shared-cdp` として attach する。既存の `default` セッションは閉じない。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-attach-target","args":["example.com"]}'
+```
+
+`shared-snapshot` は snapshot 前に target ズレを検査する。ズレを検出した場合は対象の page target へ `shared-cdp` セッションで attach し、そのセッションで snapshot を取得する。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-snapshot","args":["snapshots/current.md"]}'
+```
+
+`shared-cdp` への attach がタイムアウトする場合は、CDP から直接ページメタ情報を取得して Markdown に保存する。
+
+```bash
+curl -sS http://playwright-recorder:6090/run \
+  -H 'content-type: application/json' \
+  -d '{"command":"shared-cdp-snapshot","args":["snapshots/current.md","example.com"]}'
+```
+
+ID/パスワード欄などの機密入力は、入力値を取得しない。診断コマンドで扱うのは URL、タイトル、target 種別、入力欄の `type` / `id` / `name` / `placeholder` / `autocomplete` / 表示状態などのメタ情報だけにする。
+
 同じ共有ブラウザを続きから操作する。
 
 ```bash
@@ -121,30 +171,3 @@ http://localhost:6080/vnc.html
 ```text
 http://playwright-recorder:6080/vnc.html
 ```
-
-## SALON BOARD シフト入力
-
-ログイン済みの `.pw-profile-shared` を使って、シフト設定画面のセル入力を自動化できる。既定ではモーダル内の入力確定まで行い、スタッフ行の最終「設定」ボタンは押さない。
-
-```bash
-pnpm salonboard:shift -- \
-  --url "https://salonboard.com/KLP/set/shiftSetup/?date=202607" \
-  --staff "岩橋" \
-  --date 2026-07-01 \
-  --schedule 10:00-12:00 \
-  --schedule 18:00-23:00
-```
-
-スタッフ行の最終「設定」ボタンまで押す場合だけ `--final-save` を付ける。
-
-```bash
-pnpm salonboard:shift -- \
-  --url "https://salonboard.com/KLP/set/shiftSetup/?date=202607" \
-  --staff "岩橋" \
-  --date 2026-07-01 \
-  --schedule 10:00-12:00 \
-  --schedule 18:00-23:00 \
-  --final-save
-```
-
-このスクリプトは Playwright で `.pw-profile-shared` を直接開くため、同じ profile の共有 Chrome が起動中の場合は先に閉じる。
