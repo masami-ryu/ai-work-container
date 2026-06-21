@@ -13,3 +13,16 @@ services:
       - "6080:6080"
     networks:
       - dev-network
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: ap-northeast-1
+    volumes:
+      - localstack-data:/var/lib/localstack
+    networks:
+      - dev-network
+
+volumes:
+  localstack-data:
