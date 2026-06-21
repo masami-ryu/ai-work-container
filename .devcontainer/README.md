@@ -21,6 +21,7 @@ DevContainer 作成後の初期セットアップを担当します。
 - `anyenv` / `nodenv` / `node-build` の導入
 - `~/.workspace_node_version`、`.node-version`、`package.json#engines.node` を使った Node.js バージョン自動判定
 - `uv` の導入と `PATH` 設定
+- `.devcontainer/shell-aliases.sh` に定義したワークスペース移動 alias の読み込み設定
 - `~/.codex` と `~/.tmux.conf` を `/home/vscode/.dev-home-data` 配下への symlink として作成
 
 **実行タイミング:** `postCreateCommand`
