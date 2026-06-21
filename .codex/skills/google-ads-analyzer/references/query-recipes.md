@@ -6,6 +6,7 @@
 
 - [基本分析（Phase 2）](#基本分析phase-2) — キャンペーン概要、トレンド、デバイス別、CV アクション別、予算
 - [深掘り分析（Phase 3）](#深掘り分析phase-3) — CV値診断、入札戦略詳細、デバイス×日別、広告グループ、アカウント情報、MCC
+- [P-MAX 設定確認](#p-max-設定確認) — サイトリンク、デバイス条件、YouTube動画アセット
 - [よく使うフィールド一覧](#よく使うフィールド一覧) — メトリクス、セグメント、キャンペーン属性
 - [GAQL クエリの注意事項](#gaql-クエリの注意事項)
 
@@ -54,6 +55,7 @@
     "metrics.clicks",
     "metrics.cost_micros",
     "metrics.conversions",
+    "metrics.conversions_value",
     "metrics.ctr",
     "metrics.average_cpc",
     "metrics.cost_per_conversion"
@@ -80,6 +82,7 @@
     "metrics.clicks",
     "metrics.cost_micros",
     "metrics.conversions",
+    "metrics.conversions_value",
     "metrics.ctr",
     "metrics.average_cpc",
     "metrics.cost_per_conversion"
@@ -106,6 +109,7 @@
     "metrics.clicks",
     "metrics.cost_micros",
     "metrics.conversions",
+    "metrics.conversions_value",
     "metrics.ctr",
     "metrics.average_cpc",
     "metrics.cost_per_conversion"
@@ -134,6 +138,7 @@
     "metrics.clicks",
     "metrics.cost_micros",
     "metrics.conversions",
+    "metrics.conversions_value",
     "metrics.ctr"
   ],
   "conditions": [
@@ -238,7 +243,8 @@
     "metrics.impressions",
     "metrics.clicks",
     "metrics.cost_micros",
-    "metrics.conversions"
+    "metrics.conversions",
+    "metrics.conversions_value"
   ],
   "conditions": [
     "segments.date >= '<START_DATE>'",
@@ -248,6 +254,33 @@
   "orderings": ["segments.date ASC"]
 }
 ```
+
+### 配信面別（Search / Maps / YouTube など）
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "campaign",
+  "fields": [
+    "campaign.name",
+    "segments.ad_network_type",
+    "metrics.impressions",
+    "metrics.clicks",
+    "metrics.cost_micros",
+    "metrics.conversions",
+    "metrics.conversions_value",
+    "metrics.ctr",
+    "metrics.average_cpc"
+  ],
+  "conditions": [
+    "segments.date >= '<START_DATE>'",
+    "segments.date <= '<END_DATE>'",
+    "campaign.status = 'ENABLED'"
+  ]
+}
+```
+
+**用途**: P-MAX の Search / Maps / YouTube / Content などの費用配分、CPA、ROAS を比較する。短期期間では CV 計測ラグを踏まえ、配信面別の悪化を断定しない。
 
 ### 広告グループ別（検索キャンペーン向け、P-MAX では空）
 
@@ -263,6 +296,7 @@
     "metrics.clicks",
     "metrics.cost_micros",
     "metrics.conversions",
+    "metrics.conversions_value",
     "metrics.ctr",
     "metrics.average_cpc"
   ],
@@ -307,6 +341,131 @@
 }
 ```
 
+## P-MAX 設定確認
+
+設定変更の前に、必ずこのセクションのレシピで対象 `resource_name` と現在値を取得する。変更手順は [operations-recipes.md](operations-recipes.md) を参照。
+
+### P-MAX のキャンペーンサイトリンク
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "campaign_asset",
+  "fields": [
+    "campaign.id",
+    "campaign.name",
+    "campaign_asset.resource_name",
+    "campaign_asset.status",
+    "campaign_asset.field_type",
+    "asset.id",
+    "asset.final_urls",
+    "asset.sitelink_asset.link_text",
+    "asset.sitelink_asset.description1",
+    "asset.sitelink_asset.description2"
+  ],
+  "conditions": [
+    "campaign.id = <CAMPAIGN_ID>",
+    "campaign_asset.field_type = 'SITELINK'"
+  ]
+}
+```
+
+**用途**: P-MAX から特定サイトリンクを外す前に、対象 `campaign_asset.resource_name` を特定する。
+
+### アカウント階層のサイトリンク
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "customer_asset",
+  "fields": [
+    "customer_asset.resource_name",
+    "customer_asset.status",
+    "customer_asset.field_type",
+    "asset.id",
+    "asset.final_urls",
+    "asset.sitelink_asset.link_text"
+  ],
+  "conditions": [
+    "customer_asset.field_type = 'SITELINK'"
+  ]
+}
+```
+
+**用途**: キャンペーン直下ではなくアカウント階層で有効なサイトリンクがないか確認する。
+
+### P-MAX のデバイス条件
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "campaign_criterion",
+  "fields": [
+    "campaign.id",
+    "campaign.name",
+    "campaign_criterion.resource_name",
+    "campaign_criterion.criterion_id",
+    "campaign_criterion.type",
+    "campaign_criterion.status",
+    "campaign_criterion.negative",
+    "campaign_criterion.bid_modifier",
+    "campaign_criterion.device.type"
+  ],
+  "conditions": [
+    "campaign.id = <CAMPAIGN_ID>",
+    "campaign_criterion.type = 'DEVICE'"
+  ]
+}
+```
+
+**用途**: 非モバイル抑制前に、`DESKTOP`、`MOBILE`、`TABLET`、`CONNECTED_TV` の `resource_name` と `bid_modifier` を確認する。
+
+### P-MAX の有効な YouTube 動画アセット
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "asset_group_asset",
+  "fields": [
+    "asset_group.id",
+    "asset_group.name",
+    "asset_group_asset.resource_name",
+    "asset_group_asset.status",
+    "asset_group_asset.field_type",
+    "asset.id",
+    "asset.resource_name",
+    "asset.type"
+  ],
+  "conditions": [
+    "asset_group_asset.field_type = 'YOUTUBE_VIDEO'",
+    "asset_group_asset.status = 'ENABLED'"
+  ]
+}
+```
+
+**用途**: YouTubeサイトリンクではなく、P-MAX の動画素材として有効な YouTube アセットを確認する。
+
+### YouTube 動画アセット詳細
+
+```json
+{
+  "customer_id": "<CUSTOMER_ID>",
+  "resource": "asset",
+  "fields": [
+    "asset.id",
+    "asset.resource_name",
+    "asset.type",
+    "asset.youtube_video_asset.youtube_video_id",
+    "asset.youtube_video_asset.youtube_video_title"
+  ],
+  "conditions": [
+    "asset.type = 'YOUTUBE_VIDEO'"
+  ]
+}
+```
+
+**用途**: `asset_group_asset` で取得した `asset.id` の動画ID・タイトルを確認する。
+
 ## よく使うフィールド一覧
 
 ### メトリクス
@@ -333,7 +492,7 @@
 | `segments.day_of_week` | `MONDAY` | 曜日分析 |
 | `segments.device` | `MOBILE`, `DESKTOP`, `TABLET` | デバイス分析 |
 | `segments.conversion_action_name` | `通話ボタンをクリック` | CV内訳分析 |
-| `segments.ad_network_type` | `SEARCH`, `CONTENT`, `YOUTUBE_WATCH` | 配信面分析 |
+| `segments.ad_network_type` | `SEARCH`, `SEARCH_PARTNERS`, `YOUTUBE`, `MAPS` | 配信面分析 |
 
 ### キャンペーン属性
 
