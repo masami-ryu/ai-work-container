@@ -8,24 +8,11 @@ services:
     working_dir: /workspaces/ai-work-container/tools/playwright-recorder
     user: "1000:1000"
     command: /usr/local/bin/start-playwright-vnc.sh
-    environment:
-      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-test}"
-      AWS_REGION: "${AWS_REGION:-ap-northeast-1}"
-      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-test}"
-      CDP_ENDPOINT: "${CDP_ENDPOINT:-http://127.0.0.1:9222}"
-      QUEUE_ENDPOINT: "${QUEUE_ENDPOINT:-http://localstack:4566}"
-      QUEUE_NAME: "${QUEUE_NAME:-pw-batch-jobs}"
-      PW_BATCH_CONSUMER_LOG: "${PW_BATCH_CONSUMER_LOG:-/tmp/pw-batch-consumer.log}"
-      PW_BATCH_DIR: "${PW_BATCH_DIR:-/workspaces/ai-work-container/works_pw_batch/pw_batch}"
-      PW_BATCH_ENABLED: "${PW_BATCH_ENABLED:-0}"
-      PW_BATCH_OUTPUT_DIR: "${PW_BATCH_OUTPUT_DIR:-out}"
     shm_size: 1gb
     ports:
       - "6080:6080"
     networks:
       - dev-network
-    depends_on:
-      - localstack
 
   localstack:
     image: localstack/localstack:3
