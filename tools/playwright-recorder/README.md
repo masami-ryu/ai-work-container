@@ -28,10 +28,10 @@ pnpm cli -- screenshot --filename=screenshots/current.png
 pnpm shared:close
 ```
 
-ログイン状態や profile を消して初期化したい場合は次を使う。
+ログイン状態や profile を消して初期化したい場合は、最終手段として次を使う。`shared:reset` は profile 全体を backup し、lock 状態を確認してから削除する。`--confirm` がない場合は実行しない。
 
 ```bash
-pnpm shared:reset
+pnpm shared:reset -- --confirm
 ```
 
 コンテナ内 Chrome は sandbox 用 namespace を作れないことがあるため、`.playwright/cli.config.json` で `--no-sandbox` を指定している。
@@ -45,7 +45,7 @@ curl -sS http://playwright-recorder:6090/health
 curl -sS http://playwright-recorder:6090/status
 ```
 
-`/status` は共有ブラウザの想定状態に加えて、`.pw-profile-shared` の lock 状態を返す。Chrome プロセスが存在しない stale lock は `shared-open` 実行前に自動削除される。
+`/status` は共有ブラウザの想定状態に加えて、CDP で観測した実ブラウザ状態、`.pw-profile-shared` の lock 状態、直近コマンドの要約を返す。`sharedBrowser` / `sharedBrowserExpected` は最後に API が期待した状態、`observedBrowser.currentUrl` / `observedBrowser.targets` は実際に開いているページとして読む。直近コマンドが失敗した場合は、`lastCommand.errorCode`、`lastCommand.hint`、`lastCommand.output`、`lastCommand.target` から復旧ヒント、失敗 Markdown、対象ページを確認できる。Chrome プロセスが存在しない stale lock は `shared-open` 実行前に自動削除される。
 
 noVNC に表示される共有ブラウザを起動する。API 経由の `open` は既定で `--headed --persistent --profile .pw-profile-shared` を付けて実行される。意図を明確にしたい場合は `shared-open` を使う。
 
@@ -111,7 +111,7 @@ curl -sS http://playwright-recorder:6090/run \
   -d '{"command":"shared-snapshot","args":["snapshots/current.md"]}'
 ```
 
-`shared-cdp` への attach がタイムアウトする場合は、CDP から直接ページメタ情報を取得して Markdown に保存する。
+`shared-cdp` への attach がタイムアウトする場合は、CDP から直接ページメタ情報を取得して Markdown に保存する。詳細な可視要素・フォーム・テーブル情報は Markdown に保存し、API レスポンスには `output` と要約だけを返す。
 
 ```bash
 curl -sS http://playwright-recorder:6090/run \
@@ -119,7 +119,11 @@ curl -sS http://playwright-recorder:6090/run \
   -d '{"command":"shared-cdp-snapshot","args":["snapshots/current.md","example.com"]}'
 ```
 
-ID/パスワード欄などの機密入力は、入力値を取得しない。診断コマンドで扱うのは URL、タイトル、target 種別、入力欄の `type` / `id` / `name` / `placeholder` / `autocomplete` / 表示状態などのメタ情報だけにする。
+ID/パスワード欄などの機密入力は、入力値を取得しない。診断コマンドで扱うのは URL、タイトル、target 種別、可視テキスト、入力欄の `type` / `id` / `name` / `label` / `placeholder` / `autocomplete` / option preview / 表示状態などのメタ情報だけにする。
+
+command-server API 経由のファイル出力は、snapshot 系は `snapshots/*.md`、screenshot は `screenshots/*.png` に制限する。絶対パス、`..` を含むパス、拡張子不一致は実行前に拒否する。
+
+ブラウザの `alert` / `confirm` / `prompt` などの JavaScript dialog が表示中の場合、CDP の `Runtime.evaluate` がブロックされることがある。この場合は `errorCode: "JAVASCRIPT_DIALOG_OPEN"` または `errorCode: "CDP_RUNTIME_EVALUATE_TIMEOUT"` を返し、失敗内容を指定した Markdown ファイルに保存する。OK/キャンセルは noVNC 上でユーザーが判断して操作する。
 
 同じ共有ブラウザを続きから操作する。
 
@@ -138,6 +142,21 @@ curl -sS http://playwright-recorder:6090/run \
 コマンドは同時に 1 つだけ実行される。既定で 30 秒を超えたコマンドはタイムアウトし、`PLAYWRIGHT_COMMAND_TIMEOUT_MS` で変更できる。
 
 共有 profile が lock されて起動できない場合は、応答に `errorCode: "PROFILE_LOCKED"`、`profileLock`、`recoveryHint` が含まれる。`shared-reset` の成功応答には `backup.path` が含まれる。
+
+## コード構成
+
+`command-server.js` は HTTP API、コマンド実行、共有ブラウザ状態の更新を担当する。副作用の少ない補助処理は `lib/` 配下へ分ける。
+
+- `lib/cdp-targets.js`: CDP target の選択、要約、`observedBrowser` の組み立て
+- `lib/cdp-client.js`: Chrome プロセス/DevTools endpoint の探索、CDP HTTP/WebSocket 通信
+- `lib/cdp-snapshot-runner.js`: `shared-cdp-snapshot` の target 選択、CDP 評価、Markdown 出力
+- `lib/command-diagnostics.js`: CDP snapshot 失敗分類、stdout からの診断情報抽出、`lastCommand` 要約
+- `lib/markdown.js`: Markdown 表の生成補助
+- `lib/output-path-policy.js`: command-server API 経由の出力パス制限
+- `lib/page-snapshot-expression.js`: CDP `Runtime.evaluate` へ渡す DOM collector expression
+- `lib/page-summary.js`: CDP snapshot の API レスポンス向けページ要約
+- `lib/shared-profile.js`: 共有 Chrome profile の lock 判定、stale lock cleanup、backup/reset
+- `scripts/shared-reset.js`: sidecar xterm 用の安全な共有 profile reset wrapper
 
 ## CLI 操作
 

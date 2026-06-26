@@ -17,7 +17,7 @@
     "shared:snapshot": "playwright-cli snapshot",
     "shared:show": "playwright-cli show",
     "shared:close": "playwright-cli close",
-    "shared:reset": "playwright-cli delete-data",
+    "shared:reset": "node scripts/shared-reset.js",
     "salonboard:shift": "node scripts/salonboard-shift-input.js",
     "test": "playwright test"
   },

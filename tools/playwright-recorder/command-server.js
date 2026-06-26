@@ -1,16 +1,41 @@
 const http = require('http');
 const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const {
+  buildObservedBrowserStatus,
+  findPageTarget,
+  pageTargets,
+  summarizeTarget,
+} = require('./lib/cdp-targets');
+const {
+  buildLastCommand,
+  classifyCdpSnapshotError,
+  extractJsonObjectsFromText,
+  extractResultDiagnostics,
+} = require('./lib/command-diagnostics');
+const { createCdpClient } = require('./lib/cdp-client');
+const { createCdpSnapshotRunner } = require('./lib/cdp-snapshot-runner');
+const { InvalidOutputPathError, sanitizeCommandOutputArgs } = require('./lib/output-path-policy');
+const { createSharedProfileManager } = require('./lib/shared-profile');
 
 const host = process.env.PLAYWRIGHT_COMMAND_HOST || '0.0.0.0';
 const port = Number(process.env.PLAYWRIGHT_COMMAND_PORT || 6090);
 const cwd = __dirname;
 const sharedProfile = '.pw-profile-shared';
-const sharedProfilePath = path.join(cwd, sharedProfile);
-const sharedProfileBackupPrefix = `${sharedProfile}.backup`;
 const sharedCdpSession = 'shared-cdp';
 const commandTimeoutMs = Number(process.env.PLAYWRIGHT_COMMAND_TIMEOUT_MS || 30000);
+const sharedProfileManager = createSharedProfileManager({
+  workspaceRoot: cwd,
+  profile: sharedProfile,
+});
+const sharedProfilePath = sharedProfileManager.profilePath;
+const {
+  collectCdpTargets,
+  cdpCommand,
+  requestText,
+} = createCdpClient({
+  sharedProfilePath,
+  workspaceRoot: cwd,
+});
 
 const allowedCommands = new Set([
   'open',
@@ -50,13 +75,17 @@ const allowedCommands = new Set([
 
 let runningCommand = false;
 let lastCommand = null;
-let sharedBrowser = {
-  expected: false,
-  headed: false,
-  persistent: false,
-  profile: null,
-  url: null,
-};
+let sharedBrowser = emptySharedBrowserState();
+
+function emptySharedBrowserState() {
+  return {
+    expected: false,
+    headed: false,
+    persistent: false,
+    profile: null,
+    url: null,
+  };
+}
 
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body, null, 2);
@@ -87,72 +116,6 @@ function validateArg(arg) {
   return typeof arg === 'string' && arg.length <= 4096 && !/[\0\r\n]/.test(arg);
 }
 
-function isProcessRunning(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === 'EPERM';
-  }
-}
-
-function pathExistsOrBrokenSymlink(targetPath) {
-  try {
-    fs.lstatSync(targetPath);
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
-function getProfileLockStatus() {
-  const lockPaths = ['SingletonCookie', 'SingletonLock', 'SingletonSocket']
-    .map(name => path.join(sharedProfilePath, name));
-  const existing = lockPaths.filter(lockPath => pathExistsOrBrokenSymlink(lockPath));
-  const lockPath = path.join(sharedProfilePath, 'SingletonLock');
-  let lockTarget = null;
-  let lockPid = null;
-  let lockPidRunning = false;
-
-  if (pathExistsOrBrokenSymlink(lockPath)) {
-    try {
-      lockTarget = fs.readlinkSync(lockPath);
-      const match = lockTarget.match(/-(\d+)$/);
-      lockPid = match ? Number(match[1]) : null;
-      lockPidRunning = isProcessRunning(lockPid);
-    } catch (error) {
-      lockTarget = `unreadable: ${error.message}`;
-    }
-  }
-
-  return {
-    profile: sharedProfile,
-    exists: fs.existsSync(sharedProfilePath),
-    locked: existing.length > 0,
-    stale: existing.length > 0 && !lockPidRunning,
-    lockTarget,
-    lockPid,
-    lockPidRunning,
-    files: existing.map(lockPath => path.basename(lockPath)),
-  };
-}
-
-function cleanupStaleProfileLock() {
-  const lockStatus = getProfileLockStatus();
-  if (!lockStatus.stale) return { cleaned: false, lockStatus };
-
-  for (const name of ['SingletonCookie', 'SingletonLock', 'SingletonSocket']) {
-    fs.rmSync(path.join(sharedProfilePath, name), { force: true });
-  }
-
-  return {
-    cleaned: true,
-    lockStatus: getProfileLockStatus(),
-  };
-}
-
 function hasOption(args, option) {
   return args.some(arg => arg === option || arg.startsWith(`${option}=`));
 }
@@ -169,266 +132,22 @@ function firstUrl(args) {
   return args.find(arg => /^https?:\/\//.test(arg)) || null;
 }
 
-function argValue(args, option) {
-  const exactIndex = args.indexOf(option);
-  if (exactIndex >= 0) return args[exactIndex + 1] || null;
+const runSharedCdpSnapshot = createCdpSnapshotRunner({
+  workspaceRoot: cwd,
+  collectCdpTargets,
+  cdpCommand,
+});
 
-  const prefixed = args.find(arg => arg.startsWith(`${option}=`));
-  return prefixed ? prefixed.slice(option.length + 1) : null;
-}
-
-function parseProcCmdline(content) {
-  return content.split('\0').filter(Boolean);
-}
-
-function listChromeProcesses() {
-  const procEntries = fs.readdirSync('/proc', { withFileTypes: true })
-    .filter(entry => entry.isDirectory() && /^\d+$/.test(entry.name));
-  const result = [];
-
-  for (const entry of procEntries) {
-    const pid = Number(entry.name);
-    let args;
-    try {
-      args = parseProcCmdline(fs.readFileSync(path.join('/proc', entry.name, 'cmdline'), 'utf8'));
-    } catch {
-      continue;
-    }
-    if (!args.length || !/(chrome|chromium)/.test(path.basename(args[0]))) continue;
-
-    result.push({
-      pid,
-      executable: args[0],
-      userDataDir: argValue(args, '--user-data-dir'),
-      remoteDebuggingPort: argValue(args, '--remote-debugging-port'),
-      remoteDebuggingPipe: args.includes('--remote-debugging-pipe'),
-      display: argValue(args, '--display'),
-      urlArgs: args.filter(arg => /^https?:\/\//.test(arg) || arg.startsWith('chrome://')),
-    });
+async function getObservedBrowserStatus() {
+  try {
+    return buildObservedBrowserStatus(await collectCdpTargets(), { sharedProfilePath });
+  } catch (error) {
+    return {
+      ok: false,
+      source: 'cdp',
+      error: error.stack || error.message || String(error),
+    };
   }
-
-  return result.sort((a, b) => a.pid - b.pid);
-}
-
-function findDevToolsActivePorts(rootDir) {
-  const result = [];
-  const stack = [{ dir: rootDir, depth: 0 }];
-
-  while (stack.length) {
-    const { dir, depth } = stack.pop();
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === 'DevToolsActivePort') {
-        try {
-          const [portLine, browserPath = ''] = fs.readFileSync(entryPath, 'utf8').trim().split('\n');
-          const port = Number(portLine);
-          result.push({
-            path: path.relative(cwd, entryPath),
-            port: Number.isFinite(port) ? port : null,
-            browserPath,
-          });
-        } catch (error) {
-          result.push({
-            path: path.relative(cwd, entryPath),
-            error: error.message,
-          });
-        }
-      } else if (entry.isDirectory() && depth < 4) {
-        stack.push({ dir: entryPath, depth: depth + 1 });
-      }
-    }
-  }
-
-  return result;
-}
-
-function requestJson(url) {
-  return new Promise(resolve => {
-    const request = http.get(url, { timeout: 1500 }, response => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', chunk => {
-        body += chunk;
-        if (body.length > 1024 * 1024) request.destroy(new Error('response too large'));
-      });
-      response.on('end', () => {
-        try {
-          resolve({
-            ok: response.statusCode >= 200 && response.statusCode < 300,
-            statusCode: response.statusCode,
-            body: JSON.parse(body),
-          });
-        } catch (error) {
-          resolve({
-            ok: false,
-            statusCode: response.statusCode,
-            error: error.message,
-            raw: body.slice(0, 500),
-          });
-        }
-      });
-    });
-    request.on('timeout', () => request.destroy(new Error('timeout')));
-    request.on('error', error => resolve({ ok: false, error: error.message }));
-  });
-}
-
-function requestText(url) {
-  return new Promise(resolve => {
-    const request = http.get(url, { timeout: 1500 }, response => {
-      let body = '';
-      response.setEncoding('utf8');
-      response.on('data', chunk => {
-        body += chunk;
-        if (body.length > 1024 * 1024) request.destroy(new Error('response too large'));
-      });
-      response.on('end', () => resolve({
-        ok: response.statusCode >= 200 && response.statusCode < 300,
-        statusCode: response.statusCode,
-        body,
-      }));
-    });
-    request.on('timeout', () => request.destroy(new Error('timeout')));
-    request.on('error', error => resolve({ ok: false, error: error.message }));
-  });
-}
-
-async function collectCdpTargets() {
-  const processes = listChromeProcesses();
-  const activePorts = findDevToolsActivePorts(sharedProfilePath);
-  const ports = new Set();
-
-  for (const processInfo of processes) {
-    const port = Number(processInfo.remoteDebuggingPort);
-    if (Number.isFinite(port) && port > 0) ports.add(port);
-  }
-  for (const activePort of activePorts) {
-    if (Number.isFinite(activePort.port) && activePort.port > 0) ports.add(activePort.port);
-  }
-
-  const cdp = [];
-  for (const port of [...ports].sort((a, b) => a - b)) {
-    const endpoint = `http://127.0.0.1:${port}`;
-    const [version, targets] = await Promise.all([
-      requestJson(`${endpoint}/json/version`),
-      requestJson(`${endpoint}/json/list`),
-    ]);
-    cdp.push({
-      endpoint,
-      version,
-      targets: targets.ok && Array.isArray(targets.body)
-        ? targets.body.map(target => ({
-          id: target.id,
-          type: target.type,
-          title: target.title,
-          url: target.url,
-          attached: target.attached,
-          webSocketDebuggerUrl: target.webSocketDebuggerUrl,
-        }))
-        : targets,
-    });
-  }
-
-  return { processes, activePorts, cdp, ports };
-}
-
-function pageTargets(cdpInfo) {
-  const result = [];
-  for (const endpointInfo of cdpInfo.cdp) {
-    if (!Array.isArray(endpointInfo.targets)) continue;
-    for (const target of endpointInfo.targets) {
-      if (target.type === 'page') {
-        result.push({
-          endpoint: endpointInfo.endpoint,
-          ...target,
-        });
-      }
-    }
-  }
-  return result;
-}
-
-function findPageTarget(cdpInfo, urlHint = 'salonboard.com') {
-  const pages = pageTargets(cdpInfo);
-  const hint = urlHint.toLowerCase();
-  return pages.find(target => target.url.toLowerCase().includes(hint))
-    || pages.find(target => target.url !== 'about:blank')
-    || pages[0]
-    || null;
-}
-
-function cdpCommand(webSocketDebuggerUrl, method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(webSocketDebuggerUrl);
-    const id = 1;
-    const timer = setTimeout(() => {
-      try {
-        ws.close();
-      } catch {
-      }
-      reject(new Error(`CDP command timed out: ${method}`));
-    }, 5000);
-
-    ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-    ws.addEventListener('message', event => {
-      let message;
-      try {
-        message = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      if (message.id !== id) return;
-      clearTimeout(timer);
-      ws.close();
-      if (message.error) {
-        reject(new Error(`${message.error.message || 'CDP error'}${message.error.data ? `: ${message.error.data}` : ''}`));
-      } else {
-        resolve(message.result);
-      }
-    });
-    ws.addEventListener('error', () => {
-      clearTimeout(timer);
-      reject(new Error(`CDP websocket error: ${webSocketDebuggerUrl}`));
-    });
-  });
-}
-
-function safeOutputPath(filename) {
-  const resolved = path.resolve(cwd, filename);
-  if (resolved !== cwd && !resolved.startsWith(`${cwd}${path.sep}`)) {
-    throw new Error(`output path is outside recorder workspace: ${filename}`);
-  }
-  return resolved;
-}
-
-function markdownEscape(value) {
-  return String(value ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
-}
-
-function jstTimestamp() {
-  const date = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const value = date.toISOString().replace(/[-:]/g, '').replace('T', '_').slice(2, 15);
-  return value;
-}
-
-function profileBackupPath() {
-  const base = path.join(cwd, `${sharedProfileBackupPrefix}-${jstTimestamp()}`);
-  let candidate = base;
-  let index = 2;
-  while (fs.existsSync(candidate)) {
-    candidate = `${base}-${index}`;
-    index += 1;
-  }
-  return candidate;
 }
 
 function normalizeCommand(command, args) {
@@ -480,76 +199,12 @@ function updateSharedBrowserState(command, args, result) {
   }
 
   if (command === 'close') {
-    sharedBrowser = {
-      expected: false,
-      headed: false,
-      persistent: false,
-      profile: null,
-      url: null,
-    };
-  }
-}
-
-function backupSharedProfile() {
-  if (!fs.existsSync(sharedProfilePath)) return null;
-
-  const backupPath = profileBackupPath();
-  fs.cpSync(sharedProfilePath, backupPath, {
-    recursive: true,
-    dereference: false,
-    errorOnExist: true,
-  });
-
-  return {
-    path: path.relative(cwd, backupPath),
-    absolutePath: backupPath,
-    files: ['Default/Bookmarks', 'Default/Bookmarks.bak']
-      .filter(file => fs.existsSync(path.join(backupPath, file))),
-  };
-}
-
-async function resetSharedProfile(args) {
-  if (!args.includes('--confirm')) {
-    return {
-      code: 1,
-      stdout: '',
-      stderr: 'shared-reset requires --confirm because it deletes the shared Chrome profile after creating a backup',
-      errorCode: 'CONFIRMATION_REQUIRED',
-      recoveryHint: 'Use shared-open first. Run shared-reset --confirm only as a last resort.',
-      profileLock: getProfileLockStatus(),
-    };
+    sharedBrowser = emptySharedBrowserState();
   }
 
-  const closeResult = await runPlaywrightCli('close', []);
-  const lockStatus = getProfileLockStatus();
-  if (lockStatus.locked && !lockStatus.stale) {
-    return {
-      code: 1,
-      stdout: closeResult.stdout,
-      stderr: closeResult.stderr,
-      errorCode: 'PROFILE_LOCKED',
-      recoveryHint: 'Close Chrome from noVNC before running shared-reset.',
-      profileLock: lockStatus,
-    };
+  if (command === 'shared-reset') {
+    sharedBrowser = emptySharedBrowserState();
   }
-
-  const backup = backupSharedProfile();
-  fs.rmSync(sharedProfilePath, { recursive: true, force: true });
-  sharedBrowser = {
-    expected: false,
-    headed: false,
-    persistent: false,
-    profile: null,
-    url: null,
-  };
-
-  return {
-    code: 0,
-    stdout: `${closeResult.stdout}Shared profile backup: ${backup ? backup.path : '(profile did not exist)'}\nShared profile reset: ${sharedProfile}\n`,
-    stderr: closeResult.stderr,
-    backup,
-    profileLock: getProfileLockStatus(),
-  };
 }
 
 async function runSharedPagesDiagnostic() {
@@ -622,78 +277,6 @@ async function runSharedAttachTarget(args) {
   };
 }
 
-async function runSharedCdpSnapshot(args) {
-  const filename = args[0] || 'snapshots/current.md';
-  const urlHint = args[1] || 'salonboard.com';
-  const cdpInfo = await collectCdpTargets();
-  const target = findPageTarget(cdpInfo, urlHint);
-  if (!target?.webSocketDebuggerUrl) {
-    return {
-      code: 1,
-      stdout: `${JSON.stringify({ ok: false, error: `No CDP page target found for ${urlHint}`, cdpPageTargets: pageTargets(cdpInfo) }, null, 2)}\n`,
-      stderr: '',
-      errorCode: 'NO_CDP_TARGET',
-    };
-  }
-
-  const expression = `(() => {
-    const fieldInfo = element => ({
-      tag: element.tagName.toLowerCase(),
-      type: element.getAttribute('type'),
-      id: element.getAttribute('id'),
-      name: element.getAttribute('name'),
-      placeholder: element.getAttribute('placeholder'),
-      autocomplete: element.getAttribute('autocomplete'),
-      visible: Boolean(element.offsetWidth || element.offsetHeight || element.getClientRects().length)
-    });
-    return {
-      url: location.href,
-      title: document.title,
-      inputs: Array.from(document.querySelectorAll('input, textarea, select')).slice(0, 30).map(fieldInfo),
-      frameCount: window.frames.length
-    };
-  })()`;
-  const result = await cdpCommand(target.webSocketDebuggerUrl, 'Runtime.evaluate', {
-    expression,
-    returnByValue: true,
-    awaitPromise: true,
-  });
-  const pageInfo = result.result?.value || {};
-  const outputPath = safeOutputPath(filename);
-  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
-  const lines = [
-    '# CDP Page Snapshot',
-    '',
-    `- Page URL: ${pageInfo.url || target.url}`,
-    `- Page Title: ${pageInfo.title || target.title || ''}`,
-    `- Target ID: ${target.id}`,
-    `- Frame Count: ${pageInfo.frameCount ?? ''}`,
-    '',
-    '## Input Fields',
-    '',
-    '| index | tag | type | id | name | placeholder | autocomplete | visible |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
-  ];
-  for (const [index, input] of (pageInfo.inputs || []).entries()) {
-    lines.push(`| ${index} | ${markdownEscape(input.tag)} | ${markdownEscape(input.type)} | ${markdownEscape(input.id)} | ${markdownEscape(input.name)} | ${markdownEscape(input.placeholder)} | ${markdownEscape(input.autocomplete)} | ${markdownEscape(input.visible)} |`);
-  }
-  if (!pageInfo.inputs?.length) lines.push('| | | | | | | | |');
-  lines.push('', '<!-- Input values are intentionally not captured. -->', '');
-  await fs.promises.writeFile(outputPath, lines.join('\n'), 'utf8');
-
-  return {
-    code: 0,
-    stdout: `${JSON.stringify({
-      ok: true,
-      mode: 'cdp',
-      selectedTarget: target,
-      output: path.relative(cwd, outputPath),
-      page: pageInfo,
-    }, null, 2)}\n`,
-    stderr: '',
-  };
-}
-
 async function runSharedSnapshot(args) {
   const filename = args[0] || 'snapshots/current.md';
   const guardResult = await runSharedGuard();
@@ -740,10 +323,10 @@ function enhanceResult(command, result) {
   if (/Browser is already in use for \.pw-profile-shared/.test(result.stderr || '')) {
     enhanced.errorCode = 'PROFILE_LOCKED';
     enhanced.recoveryHint = 'The shared Chrome profile is locked. If Chrome is not visible in noVNC, run shared-reset or retry after stale lock cleanup.';
-    enhanced.profileLock = getProfileLockStatus();
+    enhanced.profileLock = sharedProfileManager.getProfileLockStatus();
   }
   if (command === 'open' && result.code !== 0) {
-    enhanced.profileLock = enhanced.profileLock || getProfileLockStatus();
+    enhanced.profileLock = enhanced.profileLock || sharedProfileManager.getProfileLockStatus();
   }
   return enhanced;
 }
@@ -830,16 +413,35 @@ async function handleRun(req, res) {
     return;
   }
 
+  let command = requestedCommand;
+  let args = requestedArgs;
+  try {
+    ({ command, args } = normalizeCommand(requestedCommand, requestedArgs));
+    args = sanitizeCommandOutputArgs(command, args, { workspaceRoot: cwd });
+  } catch (error) {
+    const status = error instanceof InvalidOutputPathError ? 400 : 500;
+    sendJson(res, status, {
+      ok: false,
+      command: requestedCommand,
+      executedCommand: command,
+      args,
+      error: error.message,
+      errorCode: error.errorCode || 'COMMAND_FAILED',
+    });
+    return;
+  }
+
   runningCommand = true;
   try {
-    const { command, args } = normalizeCommand(requestedCommand, requestedArgs);
     let staleLockCleanup = null;
     if (command === 'open' && optionValue(args, '--profile') === sharedProfile) {
-      staleLockCleanup = cleanupStaleProfileLock();
+      staleLockCleanup = sharedProfileManager.cleanupStaleProfileLock();
     }
     // If callers need burst execution later, replace this guard with a FIFO queue.
     const rawResult = command === 'shared-reset'
-      ? await resetSharedProfile(args)
+      ? await sharedProfileManager.resetSharedProfile(args, {
+        closeSharedBrowser: () => runPlaywrightCli('close', []),
+      })
       : command === 'shared-pages'
         ? await runSharedPagesDiagnostic()
         : command === 'shared-attach-target'
@@ -855,16 +457,12 @@ async function handleRun(req, res) {
         : await runPlaywrightCli(command, args);
     const result = enhanceResult(command, rawResult);
     updateSharedBrowserState(command, args, result);
-    lastCommand = {
+    lastCommand = buildLastCommand({
       requestedCommand,
       command,
       args,
-      code: result.code,
-      ok: result.code === 0,
-      timedOut: Boolean(result.timedOut),
-      finishedAt: new Date().toISOString(),
-      errorCode: result.errorCode || null,
-    };
+      result,
+    });
     sendJson(res, result.code === 0 ? 200 : 500, {
       ok: result.code === 0,
       command: requestedCommand,
@@ -873,34 +471,71 @@ async function handleRun(req, res) {
       staleLockCleanup,
       ...result,
     });
+  } catch (error) {
+    lastCommand = {
+      requestedCommand,
+      command,
+      args,
+      code: 1,
+      ok: false,
+      timedOut: false,
+      finishedAt: new Date().toISOString(),
+      errorCode: 'COMMAND_FAILED',
+    };
+    sendJson(res, 500, {
+      ok: false,
+      command: requestedCommand,
+      executedCommand: command,
+      args,
+      error: error.stack || error.message || String(error),
+      errorCode: 'COMMAND_FAILED',
+    });
   } finally {
     runningCommand = false;
   }
 }
 
-const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/health') {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === 'GET' && req.url === '/status') {
-    sendJson(res, 200, {
-      ok: true,
-      runningCommand,
-      commandTimeoutMs,
-      sharedBrowser,
-      profileLock: getProfileLockStatus(),
-      lastCommand,
-    });
-    return;
-  }
-  if (req.method === 'POST' && req.url === '/run') {
-    await handleRun(req, res);
-    return;
-  }
-  sendJson(res, 404, { ok: false, error: 'not found' });
-});
+function createServer() {
+  return http.createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/health') {
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/status') {
+      sendJson(res, 200, {
+        ok: true,
+        runningCommand,
+        commandTimeoutMs,
+        sharedBrowser,
+        sharedBrowserExpected: sharedBrowser,
+        observedBrowser: await getObservedBrowserStatus(),
+        profileLock: sharedProfileManager.getProfileLockStatus(),
+        lastCommand,
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/run') {
+      await handleRun(req, res);
+      return;
+    }
+    sendJson(res, 404, { ok: false, error: 'not found' });
+  });
+}
 
-server.listen(port, host, () => {
-  console.log(`Playwright command server listening on http://${host}:${port}`);
-});
+if (require.main === module) {
+  createServer().listen(port, host, () => {
+    console.log(`Playwright command server listening on http://${host}:${port}`);
+  });
+}
+
+module.exports = {
+  createServer,
+  __test: {
+    buildObservedBrowserStatus,
+    buildLastCommand,
+    classifyCdpSnapshotError,
+    extractJsonObjectsFromText,
+    extractResultDiagnostics,
+    summarizeTarget,
+  },
+};
