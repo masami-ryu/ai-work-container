@@ -58,7 +58,7 @@ description: >
 
 ### 言語の規約
 
-- コンテキストの `--content` は、プロジェクトの CLAUDE.md で指定された言語で記述する
+- コンテキストの `--content` は、プロジェクトの AGENTS.md で指定された言語で記述する
 - ダッシュボード・レポート等の成果物も同様
 - `export` の `--lang` オプションで言語を明示的に指定可能
 
@@ -80,7 +80,6 @@ description: >
 
 - デフォルト: `~/.codex/context/context.db`（初回実行時に自動作成）
 - 環境変数 `CODEX_CONTEXT_DB_PATH` でパスをカスタマイズ可能
-- 互換性のため、`CLAUDE_CONTEXT_DB_PATH` もフォールバックとして参照する
 
 ## CLI
 

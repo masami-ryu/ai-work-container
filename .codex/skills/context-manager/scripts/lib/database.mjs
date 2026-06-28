@@ -126,10 +126,7 @@ function initSchema(db) {
 }
 
 function detectFts(db) {
-  if (
-    process.env.CODEX_CONTEXT_DISABLE_FTS === '1'
-    || process.env.CLAUDE_CONTEXT_DISABLE_FTS === '1'
-  ) {
+  if (process.env.CODEX_CONTEXT_DISABLE_FTS === '1') {
     db.ftsEnabled = false;
     return;
   }
@@ -145,7 +142,6 @@ function detectFts(db) {
 export function getDatabase(dbPath) {
   dbPath = dbPath
     ?? process.env.CODEX_CONTEXT_DB_PATH
-    ?? process.env.CLAUDE_CONTEXT_DB_PATH
     ?? DEFAULT_DB_PATH;
   if (dbPath !== ':memory:') {
     mkdirSync(dirname(dbPath), { recursive: true });

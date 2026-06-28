@@ -2,7 +2,7 @@
 AIエージェント作業コンテナ
 
 ## 概要
-このプロジェクトは、AI支援開発のためのdevcontainer環境です。Node.js（nodenv経由）とClaude Codeが統合されており、MCP (Model Context Protocol)を通じて複数の外部サービスと連携します。
+このプロジェクトは、AI支援開発のための devcontainer 環境です。Node.js（nodenv 経由）と Codex CLI を中心に、MCP (Model Context Protocol) を通じて複数の外部サービスと連携します。
 
 ## 主要機能
 
@@ -12,8 +12,8 @@ AIエージェント作業コンテナ
 - **Git統合**: GitLens、GitHub Pull Request、GitHub Actions拡張機能
 
 ### AI支援ツール
-- **Claude Code CLI**: ターミナルからAnthropicのClaude AIを利用
-- **Claude Code VS Code拡張**: IDE内でのAI支援コーディング
+- **Codex CLI**: ターミナルから Codex を利用
+- **Codex Skills**: `.codex/skills` に配置したワークフローを利用
 - **MCP統合**: 複数の外部サービスとの接続
   - Microsoft Learn (msdocs): 公式ドキュメント検索
   - Context7: コード例・スニペット検索
@@ -44,11 +44,12 @@ code .
 - "Dev Containers: Reopen in Container" を選択
 - コンテナのビルドと起動を待つ
 
-4. Claude Codeの認証（初回のみ）:
+4. Codex の確認:
 ```bash
-claude whoami
+codex --version
+codex doctor
 ```
-ブラウザが開き、Anthropicアカウントでログインします。
+未ログインの場合は、`codex login` または `codex` 起動時の案内に従って認証します。
 
 ### GitHub MCP設定（オプション）
 
@@ -60,35 +61,24 @@ GitHub関連の機能を使用する場合は、Personal Access Tokenが必要�
 echo 'export GITHUB_MCP_PAT=ghp_your_token_here' >> ~/.bashrc
 source ~/.bashrc
 ```
-3. MCPサーバーを再設定:
-```bash
-bash /workspaces/ai-work-container/.devcontainer/setup-claude-mcp.sh
-```
+3. Codex または MCP を利用するクライアントを再起動して環境変数を反映します。
 
 ## 使い方
 
-### Claude Code CLI
+### Codex CLI
 
 ```bash
 # 対話型セッション
-claude
+codex
 
-# ワンショット質問
-claude -p "このコードを説明してください" < src/app.js
+# 初期プロンプト付きで起動
+codex "このリポジトリの構成を説明してください"
 
-# MCP機能の使用
-claude
-> /mcp
-# 利用可能なMCPツールから選択
+# 非対話実行
+codex exec "git status を確認して要約してください"
 ```
 
-### VS Code拡張機能
-
-1. サイドバーのClaude Codeアイコンをクリック
-2. ファイルをドラッグ&ドロップしてコンテキストに追加
-3. チャットで質問や編集依頼を入力
-
-詳しくは [Claude Code使用方法ガイド](./docs/claude-code-usage.md) を参照してください。
+設定は `~/.codex/config.toml` を使います。devcontainer rebuild 後も Codex 認証と設定を維持する手順は [開発ツール設定の永続化と Codex 認証情報のバックアップ](./docs/codex-backup-restore.md) を参照してください。
 
 ### Playwright recorder
 
@@ -153,28 +143,29 @@ curl -sS http://playwright-recorder:6090/run \
 
 ## ドキュメント
 
-- [Claude Code 使用方法ガイド](./docs/claude-code-usage.md) - 基本的な使い方とMCP活用方法
-- [セットアップガイド](./docs/claude-code-mcp-setup.md) - 詳細なセットアップ手順とトラブルシューティング
+- [Codex sandbox 運用メモ](./docs/codex-sandbox.md) - devcontainer 内での sandbox 設定
+- [Codex Skills セットアップ](./docs/codex-skills-setup.md) - `.codex/skills` と互換パスの構成
+- [開発ツール設定の永続化と Codex 認証情報のバックアップ](./docs/codex-backup-restore.md) - rebuild 後の設定復元
 
 ## トラブルシューティング
 
-### Claude CLIが見つからない
+### Codex CLIが見つからない
 
-Claude Code CLIはnpmパッケージとしてインストールされています。
+Codex CLI は `@openai/codex` としてインストールされます。
 
 #### 原因1: nodenv rehashが必要
 
-**最も一般的な原因**: `npm install -g` でグローバルパッケージをインストールした後、nodenvのshimを更新していない。
+**最も一般的な原因**: グローバルパッケージをインストールした後、nodenv の shim を更新していない。
 
 ```bash
 # nodenv rehash を実行
 nodenv rehash
 
 # 確認
-claude --version
+codex --version
 ```
 
-**重要**: `npm install -g`、`npm uninstall -g`、`npm update -g` などのグローバルパッケージ操作の後は、必ず `nodenv rehash` を実行してください。
+**重要**: グローバルパッケージ操作の後は、必ず `nodenv rehash` を実行してください。
 
 #### 原因2: PATHが正しく設定されていない
 
@@ -185,12 +176,12 @@ export PATH="$NPM_BIN_DIR:$PATH"
 source ~/.bashrc
 
 # インストール状況を確認
-npm list -g @anthropic-ai/claude-code
+npm list -g @openai/codex
 ```
 
 ### Node.jsのバージョンが古い
 
-Claude Code CLI には Node.js 18+ が必要です。
+Codex CLI には Node.js が必要です。
 
 ```bash
 # 現在のバージョンを確認
@@ -208,15 +199,15 @@ nodenv rehash
 
 ```bash
 npm cache clean --force
-npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex
 ```
 
-### MCPサーバーの確認
+### Codexの診断
+
 ```bash
-claude mcp list
+codex doctor
+codex mcp --help
 ```
-
-詳細は [トラブルシューティングガイド](./docs/claude-code-mcp-setup.md#トラブルシューティング) を参照してください。
 
 ## ライセンス
 

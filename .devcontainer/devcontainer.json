@@ -24,8 +24,7 @@
       "extensions": [
         "eamodio.gitlens",
         "github.vscode-pull-request-github",
-        "github.vscode-github-actions",
-        "anthropic.claude-code"
+        "github.vscode-github-actions"
       ],
       // VS Code 設定
       "settings": {
