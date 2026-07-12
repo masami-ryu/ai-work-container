@@ -1,0 +1,4 @@
+interface:
+  display_name: "開発サイクル"
+  short_description: "次タスク提案から実装・レビュー・コミットまでを管理"
+  default_prompt: "$development-cycle を使って、次タスクの提案または採用済みタスクの実装・レビュー・コミットを進めてください。"
