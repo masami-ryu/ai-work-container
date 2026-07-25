@@ -8,6 +8,8 @@
   - 単一ファイル: `YYMMDD_HHmm_[概要].md`（レビュー、Express プラン）
   - ディレクトリ: `YYMMDD_HHmm_[概要]/plan.md`（Standard / Comprehensive プラン）
   - 取得例: `TZ=Asia/Tokyo date +%y%m%d_%H%M`
+- 継続的に更新・参照する正本ファイルには日時を付けず、内容を表す安定した名前を使用する
+  - 例: `仕訳ルール.md`、`経理システム_要件定義書_CSV方式.md`
 
 ## 作業ルール
 
