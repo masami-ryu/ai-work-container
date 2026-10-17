@@ -42,3 +42,5 @@ tools/playwright-recorder/.playwright/*
 backup
 
 tools/playwright-recorder/.pw-profile-*
+
+.gcloud/
