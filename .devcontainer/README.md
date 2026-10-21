@@ -11,6 +11,22 @@
 3. **Git worktree サポート**: `/workspaces/` のパーミッション調整により、Git worktree 作成をサポート
 4. **開発ツール設定の永続化**: Docker volume `dev-home-data` を `/home/vscode/.dev-home-data` にマウントし、Codex と tmux の設定を保持
 
+## Node.js のセキュリティ更新
+
+- 共通環境は `.node-version` と `post-create.sh` の既定値で `22.23.4` を指定する。
+- `node-build/22.23.4` に公式チェックサム付きの定義を同梱する。既存の node-build に新バージョンが登録されていなくても導入できる。
+- 導入失敗や実バージョンの不一致がある場合はセットアップを停止する。セットアップ中は選択したバージョンを `NODENV_VERSION` に設定する。
+- Playwright sidecar はベースイメージの Node.js 24 系を維持し、`Dockerfile.playwright` で修正版 `24.22.1` を指定する。変更後はホスト側で sidecar を再ビルド・再作成する。
+- 既存プロセスは旧 Node.js で動き続けるため、作業が終わった時点で再起動する。VS Code Server 内蔵の Node.js は別管理のため、VS Code 側の更新も確認する。
+
+既存シェルの `NODENV_VERSION` が旧版を固定している場合は、修正版の導入後にワークスペースルートで次を実行する。
+
+```bash
+unset NODENV_VERSION NODENV_DIR
+eval "$(nodenv init -)"
+node --version
+```
+
 ## スクリプト一覧
 
 ### post-create.sh

@@ -6,7 +6,7 @@ set -euo pipefail
 # ======================================
 # プロジェクトに .node-version や package.json の engines.node が
 # 指定されていない場合に使用されるデフォルトの Node.js バージョン
-DEFAULT_NODE_VERSION="22.21.1"
+DEFAULT_NODE_VERSION="22.23.4"
 # コンテナ内に python3 が存在しない場合に uv でインストールする Python バージョン
 DEFAULT_PYTHON_VERSION="3.12"
 
@@ -289,6 +289,8 @@ detect_node_version() {
 
 # nodenv が利用可能な場合のみ、Node.js のセットアップを実行
 if command -v nodenv >/dev/null 2>&1; then
+  # node-build 本体の更新を待たず、同梱したチェックサム付き定義を利用する。
+  export NODE_BUILD_DEFINITIONS="$SCRIPT_DIR/node-build${NODE_BUILD_DEFINITIONS:+:$NODE_BUILD_DEFINITIONS}"
   # バージョン検出
   NODE_VER_RAW=$(detect_node_version || true)
   NODE_VER=$(echo "$NODE_VER_RAW" | tr -d ' \n\r' || true)
@@ -306,25 +308,35 @@ if command -v nodenv >/dev/null 2>&1; then
     # インストール処理
     if ! nodenv versions --bare | grep -qx "$NODE_VER"; then
       echo "Node.js $NODE_VER をインストール中..."
-      nodenv install -s "$NODE_VER" || nodenv install "$NODE_VER" || {
-        echo "[警告] Node.js $NODE_VER のインストールに失敗しました。"
+      nodenv install -s "$NODE_VER" || {
+        echo "[エラー] Node.js $NODE_VER のインストールに失敗しました。" >&2
+        exit 1
       }
     else
       echo "Node.js $NODE_VER は既にインストールされています。"
     fi
 
+    NODE_INSTALL_PREFIX="$(nodenv prefix "$NODE_VER")"
+    if [ "$("$NODE_INSTALL_PREFIX/bin/node" --version)" != "v$NODE_VER" ]; then
+      echo "[エラー] 導入された Node.js が指定バージョンと一致しません。" >&2
+      exit 1
+    fi
+
+    # 既存シェルから継承した旧バージョン指定を、このセットアップ内で切り替える。
+    export NODENV_VERSION="$NODE_VER"
+
     # グローバル設定（.node-versionがあってもglobalは設定する）
     echo "グローバルの Node.js バージョンを $NODE_VER に設定します。"
-    nodenv global "$NODE_VER" || echo "[警告] nodenv global の設定に失敗しました。"
+    nodenv global "$NODE_VER"
 
     # プロジェクトに.node-versionがある場合はローカル設定も行う
     if [ -f ".node-version" ]; then
       echo "ローカルの Node.js バージョンも $NODE_VER に設定します。"
-      nodenv local "$NODE_VER" || echo "[警告] nodenv local の設定に失敗しました。"
+      nodenv local "$NODE_VER"
     fi
 
     # rehash
-    nodenv rehash || echo "[警告] nodenv rehash に失敗しました。"
+    nodenv rehash
 
     # 設定確認
     CURRENT_GLOBAL=$(nodenv global 2>/dev/null || echo "未設定")
