@@ -34,6 +34,7 @@ ENV PATH="$NODENV_ROOT/bin:$NODENV_ROOT/shims:$PATH"
 
 # post-create スクリプトをコンテナにコピーして実行権限を付与
 COPY post-create.sh /usr/local/bin/devcontainer-post-create.sh
+COPY node-build/ /usr/local/bin/node-build/
 USER root
 RUN chmod +x /usr/local/bin/devcontainer-post-create.sh \
   && chown vscode:vscode /usr/local/bin/devcontainer-post-create.sh

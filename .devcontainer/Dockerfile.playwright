@@ -11,6 +11,7 @@ RUN apt-get update \
     fluxbox \
     gnupg \
     novnc \
+    nodejs=24.22.1-1nodesource1 \
     websockify \
     x11vnc \
     xterm \
@@ -24,6 +25,8 @@ RUN apt-get update \
   && apt-get update \
   && apt-get install -y --no-install-recommends google-chrome-stable \
   && rm -rf /var/lib/apt/lists/*
+
+RUN test "$(node --version)" = "v24.22.1"
 
 RUN corepack enable pnpm
 
