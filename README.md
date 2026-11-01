@@ -16,6 +16,7 @@ Node.js（nodenv 経由）、pnpm、Python / uv、Codex CLI を使う共通環�
 | `.agents/skills` | `.codex/skills` への互換用 symlink |
 | `.vscode/` | VS Code の設定と MCP サーバー定義 |
 | `tools/playwright-recorder/` | 共有ブラウザ操作・録画用ツール |
+| `tools/tmux-codex-sidebar/` | tmuxのwindow一覧・Codex状態表示・マウス操作 |
 | `docs/` | セットアップ・運用手順 |
 | `ai/` | プラン・レビューなどのローカル成果物（成果物は Git 管理対象外） |
 | `works*` | 独立リポジトリなどを置く作業ディレクトリ（Git 管理対象外） |
@@ -138,6 +139,7 @@ curl -sS http://playwright-recorder:6090/run \
 - [Codex Skills セットアップ](./docs/codex-skills-setup.md) - `.codex/skills` と互換パスの構成
 - [開発ツール設定の永続化と Codex 認証情報のバックアップ](./docs/codex-backup-restore.md) - rebuild 後の設定復元
 - [Playwright recorder](./tools/playwright-recorder/README.md) - 共有ブラウザ操作・診断 API
+- [tmux Codexサイドバー](./tools/tmux-codex-sidebar/README.md) - window一覧・状態表示・改名・並べ替え
 - [Playwright sidecar だけ rebuild する手順](./docs/playwright-sidecar-rebuild.md)
 - [devcontainer で Git ローディングが終わらない問題](./docs/devcontainer-git-loading-issue.md) - 過去の調査記録と適用済みの対処
 
