@@ -11,7 +11,7 @@
 3. **Git worktree サポート**: `/workspaces/` のパーミッション調整により、Git worktree 作成をサポート
 4. **開発ツール設定の永続化**: Docker volume `dev-home-data` を `/home/vscode/.dev-home-data` にマウントし、Codex と tmux の設定を保持
 
-## 開発ツールのバージョン
+## 初期導入する開発ツールのバージョン
 
 Node.js はルートの `.node-version` を基準にする。フォールバックは `post-create.sh` の `DEFAULT_NODE_VERSION` に定義する。
 
@@ -26,12 +26,16 @@ pnpm・npm・Codex の固定バージョンは `node-tools.env` に定義する�
 | npm | 11.21.1 |
 | Codex | 0.163.0 |
 
+この表はセットアップ時の固定値。導入後に個別更新したツールの実行バージョンは `node --version`、`pnpm --version`、`codex --version` で確認する。
+
 - npm は Node.js 同梱版の依存に脆弱性が残っていたため、同梱依存の監査を通過した 11.21.1 に更新する。
 - Node.js の依存管理には pnpm を使う。ツール導入時のライフサイクルスクリプトは無効にする。
 - インストールに失敗した場合、未固定の最新版へフォールバックせず処理を停止する。
 - バージョン変更後は新しいターミナルを開く。既存の開発サーバーは旧 Node.js で動き続けるため、作業が終わった時点で再起動する。
 
 Playwright sidecar はベースイメージの Node.js 24 系を維持し、`Dockerfile.playwright` でセキュリティ修正版 `24.22.1` を指定する。変更後はホスト側で sidecar を再ビルド・再作成する。VS Code Server 内蔵の Node.js は別管理のため、VS Code 側の更新も確認する。
+
+sidecar の pnpm は [`tools/playwright-recorder/package.json`](../tools/playwright-recorder/package.json) の `packageManager`（`pnpm@10.12.1`）に従う。Dev Container 本体の固定値とは別に管理する。再ビルドの手順は [Playwright sidecar だけ rebuild する手順](../docs/playwright-sidecar-rebuild.md) を参照。
 
 既存シェルの `NODENV_VERSION` が旧版を固定している場合は、ワークスペースルートで次を実行する。
 
@@ -77,19 +81,23 @@ pnpm list -g --depth 0
 DevContainer 作成後の初期セットアップを担当します。
 
 **主な機能:**
+
 - `anyenv` / `nodenv` / `node-build` の導入
 - `~/.workspace_node_version`、`.node-version`、`package.json#engines.node` を使った Node.js バージョン自動判定
 - `uv` の導入と `PATH` 設定
-- `.devcontainer/shell-aliases.sh` に定義したワークスペース移動 alias の読み込み設定
+- ワークスペース移動 alias をシェル起動時に読み込む設定を追加
 - `~/.codex` と `~/.tmux.conf` を `/home/vscode/.dev-home-data` 配下への symlink として作成
 
 **実行タイミング:** `postCreateCommand`
+
+alias の定義元は `.devcontainer/shell-aliases.sh`。Dockerfile が `/usr/local/bin/shell-aliases.sh` にコピーするため、定義変更後は再ビルドする。
 
 ### fix-workspaces-permission.sh
 
 `/workspaces/` のパーミッションを調整し、Git worktree 作成をサポートします。
 
 **主な機能:**
+
 - `/workspaces/ai-work-container` の所有者を `vscode:vscode` に変更
 - `/workspaces/` のグループを `vscode` に変更
 - `/workspaces/` のパーミッションを `2775` に設定（setgid ビット）
@@ -146,6 +154,7 @@ uvx --version
 **原因:** `/workspaces/` のパーミッションが正しく設定されていない
 
 **対処方法:**
+
 ```bash
 bash /workspaces/ai-work-container/.devcontainer/fix-workspaces-permission.sh
 ```

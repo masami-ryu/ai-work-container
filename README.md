@@ -1,67 +1,82 @@
 # ai-work-container
-AIエージェント作業コンテナ
+
+AI エージェント作業用の Dev Container 環境。
 
 ## 概要
-このプロジェクトは、AI支援開発のための devcontainer 環境です。Node.js（nodenv 経由）と Codex CLI を中心に、MCP (Model Context Protocol) を通じて複数の外部サービスと連携します。
+
+Node.js（nodenv 経由）、pnpm、Python / uv、Codex CLI を使う共通環境です。業務プロジェクトは `works*` 配下に別途配置します。
+
+## リポジトリ構成
+
+| パス | 用途 |
+| --- | --- |
+| `.devcontainer/` | コンテナ、ツール導入、sidecar の設定 |
+| `.node-version` | Dev Container 本体で使う Node.js バージョン |
+| `.codex/skills/` | このリポジトリで管理するスキルの正本 |
+| `.agents/skills` | `.codex/skills` への互換用 symlink |
+| `.vscode/` | VS Code の設定と MCP サーバー定義 |
+| `tools/playwright-recorder/` | 共有ブラウザ操作・録画用ツール |
+| `docs/` | セットアップ・運用手順 |
+| `ai/` | プラン・レビューなどのローカル成果物（成果物は Git 管理対象外） |
+| `works*` | 独立リポジトリなどを置く作業ディレクトリ（Git 管理対象外） |
+
+`works*` の中身はこのリポジトリの clone には含まれません。作業時は各ディレクトリや対象リポジトリの `AGENTS.md` があれば確認してください。
 
 ## 主要機能
 
-### 開発環境
-- **Node.js管理**: nodenv経由でプロジェクトごとのNode.jsバージョン管理
-- **VS Code Dev Container**: 一貫性のある開発環境
-- **Git統合**: GitLens、GitHub Pull Request、GitHub Actions拡張機能
+- **開発ツール**: anyenv / nodenv、pnpm、uv、tmux をセットアップ
+- **Codex CLI と Skills**: ターミナルからの作業と `.codex/skills` のワークフロー
+- **設定の永続化**: Docker volume `dev-home-data` で Codex の設定・認証・状態と tmux 設定を保持
+- **Git 統合**: GitLens、GitHub Pull Request、GitHub Actions 拡張機能
+- **MCP 接続**: VS Code 用の Microsoft Learn（`msdocs`）と Context7 の定義を同梱
 
-### AI支援ツール
-- **Codex CLI**: ターミナルから Codex を利用
-- **Codex Skills**: `.codex/skills` に配置したワークフローを利用
-- **MCP統合**: 複数の外部サービスとの接続
-  - Microsoft Learn (msdocs): 公式ドキュメント検索
-  - Context7: コード例・スニペット検索
-  - GitHub MCP Server: リポジトリ情報へのアクセス
+Compose には以下のサービスを定義しています。
+
+| サービス | 用途・接続先 |
+| --- | --- |
+| `devcontainer` | VS Code と AI エージェントの作業環境 |
+| `playwright-recorder` | ホストの `http://localhost:6080/vnc.html` で共有デスクトップを表示。操作 API はコンテナ間の `http://playwright-recorder:6090` |
+| `localstack` | SQS 互換の開発用 queue。コンテナ間の `http://localstack:4566` |
+
+Node.js の指定は [`.node-version`](./.node-version)、pnpm・npm・Codex の初期導入バージョンは [`node-tools.env`](./.devcontainer/node-tools.env) が正本です。詳細は [DevContainer 設定ガイド](./.devcontainer/README.md) を参照してください。
 
 ## セットアップ
 
 ### 前提条件
+
 - Docker Desktop
 - Visual Studio Code
-- Dev Containers拡張機能
+- Dev Containers 拡張機能
 
 ### 起動手順
 
-1. リポジトリをクローン:
-```bash
-git clone https://github.com/masami-ryu/ai-work-container.git
-cd ai-work-container
-```
+1. ホスト側でリポジトリを clone して VS Code で開く。
 
-2. VS Codeでフォルダを開く:
-```bash
-code .
-```
+   ```bash
+   git clone https://github.com/masami-ryu/ai-work-container.git
+   cd ai-work-container
+   code .
+   ```
 
-3. Dev Containerで再起動:
-- コマンドパレット（Ctrl+Shift+P / Cmd+Shift+P）を開く
-- "Dev Containers: Reopen in Container" を選択
-- コンテナのビルドと起動を待つ
+2. コマンドパレット（Ctrl+Shift+P / Cmd+Shift+P）で `Dev Containers: Reopen in Container` を選び、ビルドと初期セットアップの完了を待つ。
 
-4. Codex の確認:
-```bash
-codex --version
-codex doctor
-```
-未ログインの場合は、`codex login` または `codex` 起動時の案内に従って認証します。
+3. Dev Container 内の新しいターミナルで確認する。
 
-### GitHub MCP設定（オプション）
+   ```bash
+   node --version
+   pnpm --version
+   uv --version
+   codex --version
+   codex login status
+   ```
 
-GitHub関連の機能を使用する場合は、Personal Access Tokenが必要です。
+   未ログインの場合は `codex login` または `codex` 起動時の案内に従って認証する。
 
-1. [GitHub PAT取得](https://github.com/settings/tokens)（スコープ: `repo:status`, `public_repo`, `read:org`, `read:user`）
-2. 環境変数に設定:
-```bash
-echo 'export GITHUB_MCP_PAT=ghp_your_token_here' >> ~/.bashrc
-source ~/.bashrc
-```
-3. Codex または MCP を利用するクライアントを再起動して環境変数を反映します。
+### MCP 設定
+
+[`.vscode/mcp.json`](./.vscode/mcp.json) は VS Code 用の設定で、`msdocs` と `context7` を定義しています。GitHub MCP の定義は同梱していません。
+
+Codex の MCP 設定は `~/.codex/config.toml`、または信頼済みプロジェクトの `.codex/config.toml` に置きます。登録状況は `codex mcp list` で確認できます。追加方法は [OpenAI の MCP ドキュメント](https://developers.openai.com/codex/mcp) を参照してください。
 
 ## 使い方
 
@@ -82,11 +97,9 @@ codex exec "git status を確認して要約してください"
 
 ### Playwright recorder
 
-Windows 側に Node.js を入れずに Playwright の `codegen` を使いたい場合は、録画専用 sidecar コンテナを使います。Dev Container を再ビルドすると `playwright-recorder` サービスも起動し、`6080` 番ポートで noVNC を公開します。
+ブラウザは `playwright-recorder` sidecar で動かします。ホストの `http://localhost:6080/vnc.html` を開くと、共有デスクトップを操作できます。
 
-1. Dev Container を再ビルドする
-2. VS Code の Ports かブラウザで `http://localhost:6080` を開く
-3. noVNC デスクトップで自動起動した `xterm` から録画コマンドを実行する
+録画用のコマンドは noVNC デスクトップ内の xterm で実行します。
 
 ```bash
 cd /workspaces/ai-work-container/tools/playwright-recorder
@@ -98,44 +111,21 @@ pnpm codegen:auth https://example.com/login
 pnpm codegen:shift https://example.com/shifts
 ```
 
-AI からブラウザを操作する場合は Playwright CLI を使います。`snapshot` で element ref を取得し、`click` / `fill` などの短いコマンドで操作します。
-
-```bash
-cd /workspaces/ai-work-container/tools/playwright-recorder
-pnpm cli:open https://example.com
-pnpm cli:snapshot
-pnpm cli -- click e1
-pnpm cli:close
-```
-
-ユーザーが noVNC で操作したブラウザを AI が続きから操作する場合は、共有操作用の persistent profile を使います。
-
-```bash
-cd /workspaces/ai-work-container/tools/playwright-recorder
-pnpm shared:open https://example.com
-
-# ユーザーが noVNC で操作した後、AI が現在状態を取得して続きから操作
-pnpm shared:snapshot
-pnpm cli -- click e1
-pnpm shared:close
-```
-
-AI からの続き操作は noVNC へのキー入力ではなく、sidecar の command server を使います。
-command server は Docker ネットワーク内の `http://playwright-recorder:6090` から利用します。API 経由の `open` は noVNC に表示される共有ブラウザとして起動されます。意図を明確にしたい場合は `shared-open` を使います。
+Dev Container 内の AI からは sidecar の command server を使います。`shared-open` は noVNC に表示される共有ブラウザを開きます。
 
 ```bash
 curl -sS http://playwright-recorder:6090/status
 
 curl -sS http://playwright-recorder:6090/run \
   -H 'content-type: application/json' \
-  -d '{"command":"shared-open","args":["https://www.google.com/"]}'
+  -d '{"command":"shared-open","args":["https://example.com/"]}'
 
 curl -sS http://playwright-recorder:6090/run \
   -H 'content-type: application/json' \
   -d '{"command":"snapshot","args":["--filename=snapshots/current.md"]}'
 ```
 
-`/status` は共有 profile の lock 状態も返します。stale lock は `shared-open` 前に lock ファイルだけ自動削除されます。共有 profile の初期化は最終手段として `shared-reset --confirm` を使います。実行前に `.pw-profile-shared.backup-<timestamp>` へ profile 全体を退避します。
+`snapshot` で取得した element ref を `click` / `fill` などに渡します。共有 profile の復旧や診断コマンドは [Playwright recorder の README](./tools/playwright-recorder/README.md) を参照してください。
 
 `@playwright/cli` は alpha 系の Playwright 依存を含むため、現時点では共有ブラウザ操作のための実験的な補助として扱います。
 
@@ -143,69 +133,51 @@ curl -sS http://playwright-recorder:6090/run \
 
 ## ドキュメント
 
+- [DevContainer 設定ガイド](./.devcontainer/README.md) - バージョン管理、初期セットアップ、復旧
 - [Codex sandbox 運用メモ](./docs/codex-sandbox.md) - devcontainer 内での sandbox 設定
 - [Codex Skills セットアップ](./docs/codex-skills-setup.md) - `.codex/skills` と互換パスの構成
 - [開発ツール設定の永続化と Codex 認証情報のバックアップ](./docs/codex-backup-restore.md) - rebuild 後の設定復元
+- [Playwright recorder](./tools/playwright-recorder/README.md) - 共有ブラウザ操作・診断 API
+- [Playwright sidecar だけ rebuild する手順](./docs/playwright-sidecar-rebuild.md)
+- [devcontainer で Git ローディングが終わらない問題](./docs/devcontainer-git-loading-issue.md) - 過去の調査記録と適用済みの対処
 
 ## トラブルシューティング
 
-### Codex CLIが見つからない
+以下のコマンドは Dev Container 内のリポジトリルートで実行します。
 
-Codex CLI は `@openai/codex` としてインストールされます。
+### Node.js の選択が古い・コマンドが見つからない
 
-#### 原因1: nodenv rehashが必要
-
-**最も一般的な原因**: グローバルパッケージをインストールした後、nodenv の shim を更新していない。
+古いシェルのバージョン指定を解除し、nodenv を初期化します。
 
 ```bash
-# nodenv rehash を実行
+unset NODENV_VERSION NODENV_DIR
+eval "$(nodenv init -)"
 nodenv rehash
+nodenv version
+node --version
+```
 
-# 確認
+`.node-version` の Node.js が未導入なら、コンテナを再ビルドして初期セットアップを実行してください。
+
+### pnpm / Codex CLI を導入し直す
+
+Node.js が `.node-version` の指定に一致していることを確認してから、固定バージョンの導入スクリプトを実行します。
+
+```bash
+bash .devcontainer/setup-node-tools.sh "$(nodenv prefix)"
+nodenv rehash
+pnpm --version
+pnpm list -g --depth 0
 codex --version
 ```
 
-**重要**: グローバルパッケージ操作の後は、必ず `nodenv rehash` を実行してください。
+`pnpm add -g` などでグローバルパッケージを変更した後も `nodenv rehash` を実行してください。
 
-#### 原因2: PATHが正しく設定されていない
-
-```bash
-# npm global bin ディレクトリをPATHに追加
-NPM_BIN_DIR=$(npm bin -g 2>/dev/null || echo "$HOME/.npm-global/bin")
-export PATH="$NPM_BIN_DIR:$PATH"
-source ~/.bashrc
-
-# インストール状況を確認
-npm list -g @openai/codex
-```
-
-### Node.jsのバージョンが古い
-
-Codex CLI には Node.js が必要です。
-
-```bash
-# 現在のバージョンを確認
-node -v
-
-# Node.js 18+ をインストール（必要に応じて）
-nodenv install 18.20.1
-nodenv global 18.20.1
-nodenv rehash
-```
-
-### npmのキャッシュをクリア
-
-インストールに失敗する場合は、npmのキャッシュをクリアしてください。
-
-```bash
-npm cache clean --force
-npm install -g @openai/codex
-```
-
-### Codexの診断
+### Codex の診断
 
 ```bash
 codex doctor
+codex mcp list
 codex mcp --help
 ```
 
