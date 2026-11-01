@@ -15,13 +15,15 @@ devcontainer rebuild 後に Codex 認証や tmux 設定を再設定しないた�
 
 `codex-data` volume から `dev-home-data` volume へ切り替える初回 rebuild 前にも実行する。Docker は volume 名変更時に既存 volume の中身を自動移行しない。
 
+退避元には移行前後で共通の `~/.codex/` を使う。バックアップが成功したことを確認してから rebuild する。
+
 ```bash
 mkdir -p /workspaces/ai-work-container/backup
 rsync -a --delete \
   --exclude 'cache/' \
   --exclude 'tmp/' \
   --exclude '.tmp/' \
-  /home/vscode/.dev-home-data/codex/ \
+  /home/vscode/.codex/ \
   /workspaces/ai-work-container/backup/.codex/
 chmod -R go-rwx /workspaces/ai-work-container/backup/.codex
 ```
