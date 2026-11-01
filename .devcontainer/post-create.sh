@@ -240,7 +240,7 @@ echo ""
 echo "使用例:"
 echo "  nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
 echo ""
-echo "重要: npm install -g でグローバルパッケージをインストールした後は、"
+echo "重要: pnpm add -g でグローバルパッケージをインストールした後は、"
 echo "      必ず 'nodenv rehash' を実行してください。"
 echo ""
 
@@ -522,12 +522,14 @@ if [ -z "$(find "$CODEX_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] && [ 
   chmod -R go-rwx "$CODEX_DATA_DIR"
 fi
 
-# Codex インストール
-if command -v codex >/dev/null 2>&1; then
-  echo "Codex は既にインストールされています: $(codex --version 2>/dev/null || echo version unknown)"
-else
-  npm install -g @openai/codex
+# pnpm・npm・Codex を検証済みバージョンにそろえる。
+# 新しい Node.js の prefix を明示し、古い runtime のツールを誤用しない。
+if ! command -v nodenv >/dev/null 2>&1 || [ -z "${NODE_VER:-}" ]; then
+  echo "[エラー] Node.js の準備が完了していないため、ツールの導入を停止します。" >&2
+  exit 1
 fi
+NODE_TOOLS_PREFIX="$(nodenv prefix "$NODE_VER")"
+bash "$SCRIPT_DIR/setup-node-tools.sh" "$NODE_TOOLS_PREFIX"
 
 # rehash
 if command -v nodenv >/dev/null 2>&1; then
