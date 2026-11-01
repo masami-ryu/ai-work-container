@@ -37,6 +37,11 @@ cd "$TOOL_WORK_DIR"
   "npm@$NPM_VERSION" \
   "@openai/codex@$CODEX_VERSION"
 
-echo "Node.js: $("$NODE_PREFIX/bin/node" --version)"
-echo "pnpm: $("$NODE_PREFIX/bin/pnpm" --version)"
-echo "Codex: $("$NODE_PREFIX/bin/codex" --version)"
+# バージョン取得を独立させ、失敗時に set -e で停止する。
+INSTALLED_NODE_VERSION="$("$NODE_PREFIX/bin/node" --version)"
+INSTALLED_PNPM_VERSION="$("$NODE_PREFIX/bin/pnpm" --version)"
+INSTALLED_CODEX_VERSION="$("$NODE_PREFIX/bin/codex" --version)"
+
+echo "Node.js: $INSTALLED_NODE_VERSION"
+echo "pnpm: $INSTALLED_PNPM_VERSION"
+echo "Codex: $INSTALLED_CODEX_VERSION"
