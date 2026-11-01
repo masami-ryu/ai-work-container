@@ -49,6 +49,27 @@ bash .devcontainer/setup-node-tools.sh "$(nodenv prefix)"
 nodenv rehash
 ```
 
+### pnpm のグローバル配置先
+
+`setup-node-tools.sh` は、以下の配置先を pnpm のユーザー設定（通常は `~/.config/pnpm/config.yaml`）に保存する。通常の `pnpm add -g` と Codex 内の更新にも適用される。
+
+| 設定 | 配置先 |
+| --- | --- |
+| `global-dir` | `<nodenv prefix>/lib/pnpm-global` |
+| `global-bin-dir` | `<nodenv prefix>/bin` |
+
+コンテナ再構築時は `post-create.sh` 経由で再設定する。配置先はセットアップ対象の Node.js に固定されるため、別の Node.js に移行するときも `setup-node-tools.sh` を実行する。
+
+既存コンテナで、パッケージを再インストールせずに配置先だけ設定する場合:
+
+```bash
+NODE_TOOLS_PREFIX="$(nodenv prefix)"
+pnpm config set --global global-dir "$NODE_TOOLS_PREFIX/lib/pnpm-global"
+pnpm config set --global global-bin-dir "$NODE_TOOLS_PREFIX/bin"
+pnpm bin -g
+pnpm list -g --depth 0
+```
+
 ## スクリプト一覧
 
 ### post-create.sh

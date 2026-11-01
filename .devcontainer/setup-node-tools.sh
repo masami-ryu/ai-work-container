@@ -24,6 +24,10 @@ cd "$TOOL_WORK_DIR"
 "$NODE_PREFIX/bin/corepack" enable --install-directory "$NODE_PREFIX/bin" pnpm
 "$NODE_PREFIX/bin/corepack" install --global "pnpm@$PNPM_VERSION"
 
+# 通常の pnpm add -g や Codex の更新でも、初回導入と同じ配置先を使う。
+"$NODE_PREFIX/bin/pnpm" config set --global global-dir "$NODE_PREFIX/lib/pnpm-global"
+"$NODE_PREFIX/bin/pnpm" config set --global global-bin-dir "$NODE_PREFIX/bin"
+
 # npm も pnpm で更新する。依存のライフサイクルスクリプトは実行しない。
 "$NODE_PREFIX/bin/pnpm" add --global \
   --global-dir "$NODE_PREFIX/lib/pnpm-global" \
