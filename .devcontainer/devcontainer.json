@@ -1,11 +1,20 @@
 {
   // コンテナ名: anyenv + nodenv を使用した開発環境
   "name": "Dev Container (anyenv + nodenv)",
-  
-  // ビルド設定
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "."
+
+  // Docker Compose設定
+  "dockerComposeFile": [
+    "docker-compose.yml",
+    "docker-compose.playwright.yml"
+  ],
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/ai-work-container",
+  "shutdownAction": "none",
+  // "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "Playwright Recorder noVNC"
+    }
   },
   
   // VS Code カスタマイズ
@@ -15,8 +24,7 @@
       "extensions": [
         "eamodio.gitlens",
         "github.vscode-pull-request-github",
-        "github.vscode-github-actions",
-        "anthropic.claude-code"
+        "github.vscode-github-actions"
       ],
       // VS Code 設定
       "settings": {
@@ -40,10 +48,5 @@
   "remoteUser": "vscode",
 
   // コンテナ起動時に使用するユーザー
-  "containerUser": "vscode",
-  
-  // node_modules のマウント除外設定（パフォーマンス向上）
-  "mounts": [
-    "type=volume,source=ai-work-container-node_modules,target=/workspaces/ai-work-container/node_modules"
-  ]
+  "containerUser": "vscode"
 }

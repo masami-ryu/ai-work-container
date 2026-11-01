@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=sessionStart '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=sessionEnd '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=userPromptSubmitted '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "'__HOOKS_DIR__/copilot-decide.sh'",
+        "timeoutSec": 300,
+        "_source": "claude-monitor"
+      },
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=preToolUse '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=postToolUse '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ],
+    "errorOccurred": [
+      {
+        "type": "command",
+        "bash": "COPILOT_HOOK_EVENT=errorOccurred '__HOOKS_DIR__/copilot-notify.sh'",
+        "_source": "claude-monitor"
+      }
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 LOG_FILE="/tmp/worktree-permission.log"
 TARGET_DIR="/workspaces/ai-work-container"

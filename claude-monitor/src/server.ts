@@ -1,0 +1,1783 @@
+import express from "express";
+import { createServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import { fileURLToPath } from "url";
+import path from "path";
+import fs from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { SessionStore } from "./session-store.js";
+import { DecisionStore } from "./decision-store.js";
+import { QuestionStore } from "./question-store.js";
+import { GroupStore } from "./group-store.js";
+import { PromptTemplateStore } from "./prompt-template-store.js";
+import { TerminalEventStore, parseCaptureConfig } from "./terminal-event-store.js";
+import { TmuxManager } from "./tmux-manager.js";
+import { createMcpHandler } from "./mcp-handler.js";
+import { extractLatestProgress } from "./transcript-parser.js";
+import { getHardTimeoutMs, runCaptureTick, isCaptureEnabled, type PaneCaptureDeps } from "./pane-capture.js";
+import { cleanupPendingAssignments } from "./pending-group-assignments.js";
+import type { PendingAssignment } from "./pending-group-assignments.js";
+import { assignPendingGroupToSession } from "./group-assignment.js";
+import { listCodexSessions } from "./codex-session-index.js";
+import type { HookEvent, DecisionRequest, DecisionResponse, LaunchRequest, WSMessage, Decision, PendingQuestion, CodexLaunchMode, Session, CaptureConfig } from "./types.js";
+import type { PaneInfo } from "./tmux-manager.js";
+
+// --- ServerDeps: createApp の依存注入インターフェース ---
+export interface ServerDeps {
+  sessionStore: SessionStore;
+  decisionStore: DecisionStore;
+  questionStore: QuestionStore;
+  groupStore: GroupStore;
+  promptTemplateStore: PromptTemplateStore;
+  terminalEventStore: TerminalEventStore;
+  tmuxManager: TmuxManager;
+  captureConfig: CaptureConfig;
+  pendingGroupAssignments: Map<string, PendingAssignment>;
+  broadcast: (msg: WSMessage) => void;
+  hookToken: string;
+  allowedOrigins: Set<string>;
+  publicDir?: string;
+}
+
+// --- PaneMonitorDeps: runPaneMonitorTick の依存注入インターフェース ---
+export interface PaneMonitorDeps {
+  tmuxManager: TmuxManager;
+  sessionStore: SessionStore;
+  decisionStore: DecisionStore;
+  pendingGroupAssignments: Map<string, PendingAssignment>;
+  completeSessionWithCleanup: (sessionId: string, message: string) => void;
+  loggedUnknownCommands: Set<string>;
+  codexCaptureApproval?: boolean;
+}
+
+// Copilot Pane Monitor タイムアウト定数
+export const COPILOT_HOOK_TIMEOUT_MS = 60_000;     // フック通信途絶時の完了判定（60秒）
+export const COPILOT_NO_HOOK_TIMEOUT_MS = 120_000; // hooks 未到達時のフォールバック完了判定（120秒）
+export const COPILOT_NO_HOOK_HARD_TIMEOUT_MS = getHardTimeoutMs("copilot"); // 共通ヘルパー（環境変数 COPILOT_HARD_TIMEOUT_MINUTES で上書き可能）
+export const COPILOT_GRACE_PERIOD_MS = 30_000;     // プレセッション作成後のグレースピリオド（30秒）
+export const COPILOT_PROMPT_READY_DELAY_MS = 5_000; // SessionEnd(complete) 後に再送信を許可する静穏期間
+
+// Copilot コマンド検出定数（用途別に分離）
+// 自動プレセッション作成用: 確実にCopilotと識別できるコマンドのみ（誤検出防止）
+const _parsedCopilotCommands = process.env.COPILOT_COMMANDS?.split(",").map(s => s.trim()).filter(Boolean);
+export const COPILOT_AUTO_DETECT_COMMANDS: readonly string[] =
+  _parsedCopilotCommands && _parsedCopilotCommands.length > 0 ? _parsedCopilotCommands : ["copilot"];
+// 既存Copilotセッションの生存判定用: フック通信ベース判定と併用するため広めの集合を許容
+export const COPILOT_ALIVE_COMMANDS: readonly string[] = ["copilot", "node"];
+
+// Codex Pane Monitor 定数
+export const CODEX_HOOK_TIMEOUT_MS = 60_000;
+export const CODEX_NO_HOOK_TIMEOUT_MS = 120_000;
+export const CODEX_NO_HOOK_HARD_TIMEOUT_MS = getHardTimeoutMs("codex"); // 共通ヘルパー（環境変数 CODEX_HARD_TIMEOUT_MINUTES で上書き可能）
+export const CODEX_GRACE_PERIOD_MS = 30_000;
+export const CODEX_PROMPT_READY_DELAY_MS = 5_000;
+
+const _parsedCodexCommands = process.env.CODEX_COMMANDS?.split(",").map(s => s.trim()).filter(Boolean);
+export const CODEX_AUTO_DETECT_COMMANDS: readonly string[] =
+  _parsedCodexCommands && _parsedCodexCommands.length > 0 ? _parsedCodexCommands : ["codex"];
+export const CODEX_ALIVE_COMMANDS: readonly string[] = ["codex", "node"];
+
+// --- Pane Monitor Tick ロジック（テスト可能な独立関数） ---
+export async function runPaneMonitorTick(deps: PaneMonitorDeps): Promise<void> {
+  const { tmuxManager, sessionStore, decisionStore, pendingGroupAssignments, completeSessionWithCleanup, loggedUnknownCommands, codexCaptureApproval } = deps;
+  const panes = await tmuxManager.listActivePanesDetailed();
+  if (!panes) return;
+  if (panes.length === 0) {
+    console.warn("Pane monitor: no active panes detected, skipping check");
+    return;
+  }
+
+  const activePaneIds = new Set(panes.map((p) => p.paneId));
+
+  // pending group assignments のクリーンアップ
+  cleanupPendingAssignments(pendingGroupAssignments, activePaneIds);
+
+  // pane 消失によるセッション完了
+  for (const session of sessionStore.getAll()) {
+    if (!session.tmux_pane) continue;
+    if (session.status === "completed") continue;
+    if (activePaneIds.has(session.tmux_pane)) continue;
+    console.log(`[pane_lost] session ${session.session_id}: tmux pane ${session.tmux_pane} disappeared, completing`);
+    completeSessionWithCleanup(session.session_id, "tmuxペインが終了しました");
+  }
+
+  // copilot プロセス終了検出（pane は存続しているがコマンドが変わった場合）
+  // フック通信ベース + DecisionStore pending ベースの判定
+  const paneCommandMap = new Map(panes.map((p) => [p.paneId, p.command]));
+  for (const session of sessionStore.getAll()) {
+    if (session.cli_tool !== "copilot") continue;
+    if (session.status === "completed") continue;
+    if (!session.tmux_pane) continue;
+    if (!activePaneIds.has(session.tmux_pane)) continue; // pane消失は上のループで処理済み
+
+    const paneCommand = paneCommandMap.get(session.tmux_pane) || "";
+    const commandAlive = COPILOT_ALIVE_COMMANDS.includes(paneCommand);
+    const sessionId = session.session_id;
+
+    // グレースピリオド: last_init_at から一定時間はスキップ
+    const sinceInit = Date.now() - new Date(session.last_init_at).getTime();
+    if (sinceInit < COPILOT_GRACE_PERIOD_MS) {
+      console.debug(`Copilot session ${sessionId}: grace period (${sinceInit}ms < ${COPILOT_GRACE_PERIOD_MS}ms), skipping`);
+      continue;
+    }
+
+    // 条件 0: DecisionStore に pending decision → 承認待ち中のため完了抑止
+    const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === sessionId);
+    if (pendingDecisions.length > 0) {
+      console.debug(`Copilot session ${sessionId}: ${pendingDecisions.length} pending decision(s), keeping active`);
+      continue;
+    }
+
+    const now = Date.now();
+
+    // 条件 0.5: idle + コマンド生存時はタイムアウトをスキップする。
+    // ただし Copilot は status(表示状態) と prompt_ready(送信可否) を分離するため、
+    // SessionEnd(reason=complete) 直後は prompt_ready=false のまま一定静穏期間待機し、後段で true に戻す。
+    if (session.status === "idle" && commandAlive) {
+      if (!session.prompt_ready && session.last_hook_at) {
+        const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+        if (sinceLastHook >= COPILOT_PROMPT_READY_DELAY_MS) {
+          sessionStore.setPromptReady(sessionId, true);
+          console.debug(`Copilot session ${sessionId}: prompt_ready=true after quiet period (${sinceLastHook}ms)`);
+        }
+      }
+      console.debug(`Copilot session ${sessionId}: idle with alive command ('${paneCommand}'), skipping hook timeout`);
+      continue;
+    }
+
+    // 条件 1: コマンドが COPILOT_ALIVE_COMMANDS に含まれる
+    // フック通信ベース判定と併用: 直近フック通信がある場合のみアクティブ維持
+    if (commandAlive) {
+      const isFreshByHook = session.last_hook_at
+        ? (now - new Date(session.last_hook_at).getTime()) < COPILOT_HOOK_TIMEOUT_MS
+        : false;
+      if (isFreshByHook) {
+        continue;
+      }
+      // フック通信途絶/未到達 → 条件2のタイムアウト判定に移行
+    }
+
+    // 条件 2: コマンドがalive commandでない、またはフック通信が途絶している場合
+    if (session.last_hook_at) {
+      // 2a: last_hook_at 設定済み → フックタイムアウト判定
+      const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+      if (sinceLastHook >= COPILOT_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] copilot session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${COPILOT_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
+        continue;
+      }
+    } else {
+      // 2b: last_hook_at 未設定 → no-hook フォールバック
+      // hard timeout: commandAlive に関係なく最終上限で完了
+      if (sinceInit >= COPILOT_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.log(`[hard_timeout] copilot session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
+        completeSessionWithCleanup(sessionId, "copilot フック未到達タイムアウト");
+        continue;
+      }
+      // soft timeout: commandAlive でないプロセスは早期に完了
+      if (!commandAlive && sinceInit >= COPILOT_NO_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] copilot session ${sessionId}: no hooks received after ${sinceInit}ms, command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "copilot プロセス終了を検出しました");
+        continue;
+      }
+    }
+    // 条件 3: タイムアウト未到達 → アクティブ維持
+    console.debug(`Copilot session ${sessionId}: command='${paneCommand}', commandAlive=${commandAlive}, waiting for timeout`);
+  }
+
+  // codex プロセス終了検出
+  // Copilot とは判定ルールを明示的に分離:
+  // - commandAlive かつ running/waiting_answer の場合、フック途絶だけでは完了しない
+  // - hard timeout は last_run_started_at 基準で判定
+  // - コマンド不一致時は従来通りフック途絶で完了
+  for (const session of sessionStore.getAll()) {
+    if (session.cli_tool !== "codex") continue;
+    if (session.status === "completed") continue;
+    if (!session.tmux_pane) continue;
+    if (!activePaneIds.has(session.tmux_pane)) continue;
+
+    const paneCommand = paneCommandMap.get(session.tmux_pane) || "";
+    const commandAlive = CODEX_ALIVE_COMMANDS.includes(paneCommand);
+    const sessionId = session.session_id;
+
+    const sinceInit = Date.now() - new Date(session.last_init_at).getTime();
+    if (sinceInit < CODEX_GRACE_PERIOD_MS) {
+      continue;
+    }
+
+    const now = Date.now();
+
+    // idle + コマンド生存時はスキップ（prompt_ready 復帰のみ）
+    if (session.status === "idle" && commandAlive) {
+      if (!session.prompt_ready && session.last_hook_at) {
+        const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+        if (sinceLastHook >= CODEX_PROMPT_READY_DELAY_MS) {
+          sessionStore.setPromptReady(sessionId, true);
+        }
+      }
+      continue;
+    }
+
+    // --- commandAlive 判定分岐（REQ-001: フック途絶だけで完了しない） ---
+    if (commandAlive) {
+      // フック通信が新鮮ならアクティブ維持
+      const isFreshByHook = session.last_hook_at
+        ? (now - new Date(session.last_hook_at).getTime()) < CODEX_HOOK_TIMEOUT_MS
+        : false;
+      if (isFreshByHook) continue;
+
+      // commandAlive + running/waiting_answer: hard timeout のみで判定
+      // 判定起点: last_run_started_at（未設定時は last_init_at フォールバック）
+      const runStartedAt = session.last_run_started_at || session.last_init_at;
+      const sinceRunStarted = now - new Date(runStartedAt).getTime();
+      if (sinceRunStarted >= CODEX_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.log(`[hard_timeout] codex session ${sessionId}: hard timeout (${sinceRunStarted}ms >= ${CODEX_NO_HOOK_HARD_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "codex フック未到達タイムアウト");
+        continue;
+      }
+      // hard timeout 未到達 → アクティブ維持
+      continue;
+    }
+
+    // --- コマンド不一致判定（REQ-002: 従来通り完了判定） ---
+    if (session.last_hook_at) {
+      const sinceLastHook = now - new Date(session.last_hook_at).getTime();
+      if (sinceLastHook >= CODEX_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] codex session ${sessionId}: hook timeout (${sinceLastHook}ms >= ${CODEX_HOOK_TIMEOUT_MS}ms), command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
+        continue;
+      }
+    } else {
+      if (sinceInit >= CODEX_NO_HOOK_HARD_TIMEOUT_MS) {
+        console.log(`[hard_timeout] codex session ${sessionId}: no hooks received after ${sinceInit}ms (hard timeout), completing`);
+        completeSessionWithCleanup(sessionId, "codex フック未到達タイムアウト");
+        continue;
+      }
+      if (sinceInit >= CODEX_NO_HOOK_TIMEOUT_MS) {
+        console.log(`[command_mismatch] codex session ${sessionId}: no hooks received after ${sinceInit}ms, command='${paneCommand}', completing`);
+        completeSessionWithCleanup(sessionId, "codex プロセス終了を検出しました");
+        continue;
+      }
+    }
+  }
+
+  // copilot/codex 手動起動の自動検出
+  const registeredPanes = new Set(
+    sessionStore.getAll()
+      .filter((s) => s.status !== "completed")
+      .map((s) => s.tmux_pane)
+      .filter(Boolean)
+  );
+
+  for (const pane of panes) {
+    // copilot 自動検出
+    if (COPILOT_AUTO_DETECT_COMMANDS.includes(pane.command)) {
+      if (registeredPanes.has(pane.paneId)) continue;
+      const paneNum = pane.paneId.replace("%", "");
+      const preSessionId = `copilot-pane-${paneNum}`;
+      const syntheticEvent: HookEvent = {
+        event_type: "SessionStart",
+        session_id: preSessionId,
+        cwd: pane.currentPath || process.env.CLAUDE_MONITOR_WORK_DIR || "",
+        model: "",
+        title: "",
+        notification_type: "",
+        message: "",
+        tool_name: "",
+        file_path: "",
+        prompt: "",
+        questions: [],
+        last_message: "",
+        tmux_pane: pane.paneId,
+        reason: "",
+        transcript_path: "",
+        progress_text: "",
+        cli_tool: "copilot",
+        timestamp: new Date().toISOString(),
+      };
+      sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
+      continue;
+    }
+
+    // codex 自動検出
+    if (CODEX_AUTO_DETECT_COMMANDS.includes(pane.command)) {
+      if (registeredPanes.has(pane.paneId)) continue;
+      const paneNum = pane.paneId.replace("%", "");
+      const preSessionId = `codex-pane-${paneNum}`;
+      const syntheticEvent: HookEvent = {
+        event_type: "SessionStart",
+        session_id: preSessionId,
+        cwd: pane.currentPath || process.env.CLAUDE_MONITOR_WORK_DIR || "",
+        model: "",
+        title: "",
+        notification_type: "",
+        message: "",
+        tool_name: "",
+        file_path: "",
+        prompt: "",
+        questions: [],
+        last_message: "",
+        tmux_pane: pane.paneId,
+        reason: "",
+        transcript_path: "",
+        progress_text: "",
+        cli_tool: "codex",
+        timestamp: new Date().toISOString(),
+      };
+      sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
+      continue;
+    }
+
+    // 検出対象外のコマンド（デバッグ用）
+    if (pane.command && !["bash", "zsh", "fish", "claude", "node", "copilot", "codex"].includes(pane.command)) {
+      if (!loggedUnknownCommands.has(pane.command)) {
+        loggedUnknownCommands.add(pane.command);
+        console.debug(`Pane monitor: unknown command "${pane.command}" on ${pane.paneId}`);
+      }
+    }
+  }
+}
+
+// --- Express App Factory ---
+export interface CreateAppResult {
+  app: express.Express;
+  completeSessionWithCleanup: (sessionId: string, message: string) => void;
+}
+
+export function createApp(deps: ServerDeps): CreateAppResult {
+  const {
+    sessionStore, decisionStore, questionStore, groupStore,
+    promptTemplateStore, terminalEventStore, tmuxManager, captureConfig,
+    pendingGroupAssignments,
+    broadcast, hookToken, allowedOrigins, publicDir,
+  } = deps;
+
+  // Codex capture-pane 疑似承認の可否（processEvent オプション注入用）
+  const codexCaptureApproval = tmuxManager.canManagePanes() && isCaptureEnabled(captureConfig, "codex");
+
+  const execFileAsync = promisify(execFile);
+
+  // --- tmux Enter 送信共通ヘルパー ---
+  async function sendEnterKey(pane: string, enterMethod: string): Promise<void> {
+    switch (enterMethod) {
+      case "c-m":
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "C-m"]);
+        break;
+      case "enter-delay":
+        await new Promise(r => setTimeout(r, 100));
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        break;
+      case "double-enter":
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+        break;
+      default:
+        await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+    }
+  }
+
+  // --- Prompt History (in-memory, app 単位) ---
+  const PROMPT_HISTORY_MAX = 50;
+  const promptHistories = new Map<string, string[]>();
+
+  function getPromptHistoryKey(sessionId: string): string {
+    for (const g of groupStore.getAll()) {
+      if (g.session_ids.includes(sessionId)) {
+        return `group:${g.id}`;
+      }
+    }
+    return `session:${sessionId}`;
+  }
+
+  function addPromptHistory(key: string, text: string): void {
+    let history = promptHistories.get(key);
+    if (!history) {
+      history = [];
+      promptHistories.set(key, history);
+    }
+    if (history.length > 0 && history[history.length - 1] === text) return;
+    history.push(text);
+    if (history.length > PROMPT_HISTORY_MAX) {
+      history.splice(0, history.length - PROMPT_HISTORY_MAX);
+    }
+  }
+
+  function getPromptHistory(key: string): string[] {
+    return promptHistories.get(key) || [];
+  }
+
+  function deletePromptHistory(key: string): void {
+    promptHistories.delete(key);
+  }
+
+  // --- Session completion helpers ---
+
+  function cancelSessionDecisions(sessionId: string): void {
+    const cancelled = decisionStore.cancelBySession(sessionId);
+    for (const decision of cancelled) {
+      broadcast({ type: "decision_resolved", payload: decision });
+    }
+  }
+
+  function denySessionDecisions(sessionId: string): void {
+    decisionStore.denyBySession(sessionId);
+  }
+
+  function cancelSessionQuestions(sessionId: string): void {
+    questionStore.cancelBySession(sessionId);
+  }
+
+  function completeSessionWithCleanup(sessionId: string, message: string): void {
+    const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === sessionId);
+    if (pendingDecisions.length > 0) {
+      console.warn(`Completing session ${sessionId} with ${pendingDecisions.length} pending decision(s): ${message}`);
+    }
+    cancelSessionDecisions(sessionId);
+    cancelSessionQuestions(sessionId);
+    sessionStore.completeSession(sessionId, message);
+  }
+
+  // --- Express app ---
+  const app = express();
+  app.use(express.json());
+
+  if (publicDir) {
+    app.use(express.static(publicDir));
+  }
+
+  // Origin 検証ミドルウェア（POST/PUT/DELETE 用）
+  function validateOrigin(req: express.Request, res: express.Response, next: express.NextFunction): void {
+    const origin = req.headers.origin;
+    if (!origin || !allowedOrigins.has(origin)) {
+      res.status(403).json({ error: "Forbidden: invalid origin" });
+      return;
+    }
+    next();
+  }
+
+  // Origin 検証ミドルウェア（GET 用: Origin→Referer フォールバック、いずれも不在時は 403）
+  function validateOriginForGet(req: express.Request, res: express.Response, next: express.NextFunction): void {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (allowedOrigins.has(origin)) {
+        next();
+        return;
+      }
+      res.status(403).json({ error: "Forbidden: invalid origin" });
+      return;
+    }
+    // Origin 不在時は Referer のオリジン部分でフォールバック判定
+    const referer = req.headers.referer;
+    if (referer) {
+      try {
+        const refererOrigin = new URL(referer).origin;
+        if (allowedOrigins.has(refererOrigin)) {
+          next();
+          return;
+        }
+      } catch {
+        // invalid URL — fall through to 403
+      }
+    }
+    res.status(403).json({ error: "Forbidden: origin or referer required" });
+  }
+
+  // --- REST API ---
+
+  // イベント受信（notify.sh から）
+  app.post("/api/events", async (req, res) => {
+    if (hookToken && req.header("x-hook-token") !== hookToken) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const event = req.body as HookEvent;
+    if (!event.session_id || !event.event_type) {
+      res.status(400).json({ error: "session_id and event_type are required" });
+      return;
+    }
+
+    // PreToolUse 時にトランスクリプトから作業工程テキストを抽出
+    if (event.event_type === "PreToolUse" && event.transcript_path) {
+      event.progress_text = await extractLatestProgress(event.transcript_path);
+    }
+
+    const session = sessionStore.processEvent(event, { codexCaptureApproval });
+
+    // Copilot/Codex セッション: フック通信時刻を更新（Pane Monitor の生存判定で使用）
+    if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
+      session.last_hook_at = event.timestamp || new Date().toISOString();
+    }
+
+    // 新規セッションのグループ自動割り当て（SessionStart 時のみ実行）
+    if (event.event_type === "SessionStart" && session.tmux_pane) {
+      await assignPendingGroupToSession(session.session_id, session.tmux_pane, {
+        groupStore, pendingGroupAssignments, broadcast,
+      });
+    }
+
+    // SessionEnd 時に pending decisions / questions を自動キャンセル
+    if (event.event_type === "SessionEnd") {
+      cancelSessionDecisions(event.session_id);
+      cancelSessionQuestions(event.session_id);
+    }
+
+    // Notification イベントは別途 WebSocket 通知
+    if (event.event_type === "Notification") {
+      broadcast({
+        type: "notification",
+        payload: {
+          session_id: event.session_id,
+          message: event.message || event.title || "",
+          notification_type: event.notification_type || "",
+        },
+      });
+    }
+
+    res.json({ ok: true, session_id: session.session_id });
+  });
+
+  // セッション一覧
+  app.get("/api/sessions", (_req, res) => {
+    res.json(sessionStore.getAll());
+  });
+
+  // 決定リクエスト登録（decide.sh から）
+  app.post("/api/decisions", (req, res) => {
+    if (hookToken && req.header("x-hook-token") !== hookToken) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const decReq = req.body as DecisionRequest;
+    if (!decReq.correlation_id || !decReq.session_id) {
+      res.status(400).json({ error: "correlation_id and session_id are required" });
+      return;
+    }
+    const decision = decisionStore.register(decReq);
+    res.status(201).json({ ok: true, id: decision.id });
+  });
+
+  // long-poll で応答待ち（decide.sh から）
+  app.get("/api/decisions/:id/wait", async (req, res) => {
+    const id = req.params.id as string;
+    const result = await decisionStore.waitForDecision(id);
+    res.json(result);
+  });
+
+  // Copilot 自動承認: tmux send-keys で Copilot ネイティブプロンプトに応答
+  async function copilotAutoApprove(session: import("./types.js").Session): Promise<void> {
+    // CON-003: tmux 非接続環境では早期リターン
+    if (!tmuxManager.canManagePanes()) {
+      console.warn(`Copilot auto-approve: tmux not available, skipping for ${session.session_id}`);
+      return;
+    }
+
+    const delayMs = parseInt(process.env.COPILOT_CONFIRM_DELAY_MS || "500", 10);
+    const response = process.env.COPILOT_CONFIRM_RESPONSE || "y";
+    const maxRetries = 3;
+    const retryIntervalMs = 500;
+    const enterMethod = process.env.COPILOT_ENTER_METHOD || "c-m";
+
+    await new Promise(r => setTimeout(r, delayMs));
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", response]);
+        await sendEnterKey(session.tmux_pane, enterMethod);
+        console.log(`Copilot auto-approve: sent '${response}' + ${enterMethod} to ${session.tmux_pane}`);
+        return;
+      } catch (e) {
+        const err = e as { stderr?: string; message?: string };
+        console.error(`Copilot auto-approve attempt ${attempt}/${maxRetries} failed:`, err.stderr || err.message);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, retryIntervalMs));
+        }
+      }
+    }
+
+    // 全リトライ失敗: waiting_permission 状態を維持
+    console.error(`Copilot auto-approve: all ${maxRetries} attempts failed for ${session.tmux_pane}`);
+    if (session.status === "running") {
+      session.status = "waiting_permission";
+      session.updated_at = new Date().toISOString();
+      broadcast({ type: "session_update", payload: session });
+    }
+  }
+
+  // ブラウザから決定結果を送信（Origin 検証付き）
+  app.post("/api/decisions/:id/respond", validateOrigin, (req, res) => {
+    const id = req.params.id as string;
+    const { decision } = req.body as DecisionResponse;
+    if (!decision || !["allow", "deny"].includes(decision)) {
+      res.status(400).json({ error: "decision must be 'allow' or 'deny'" });
+      return;
+    }
+    const updated = decisionStore.respond(id, decision);
+    if (!updated) {
+      res.status(404).json({ error: "Decision not found or already resolved" });
+      return;
+    }
+
+    // Copilot auto-approve: allow 決定時に tmux send-keys で自動承認
+    if (decision === "allow") {
+      const session = sessionStore.get(updated.session_id);
+      if (session && session.cli_tool === "copilot" && session.tmux_pane) {
+        copilotAutoApprove(session).catch(e =>
+          console.error("Copilot auto-approve error:", e)
+        );
+      }
+    }
+
+    res.json({ ok: true });
+  });
+
+  // 保留中の決定一覧
+  app.get("/api/decisions/pending", (_req, res) => {
+    res.json(decisionStore.getPending());
+  });
+
+  // --- Question API ---
+
+  // 保留中の質問一覧（フロントエンド初期取得用）
+  app.get("/api/questions/pending", (_req, res) => {
+    res.json(questionStore.getPending());
+  });
+
+  // ブラウザから回答送信
+  app.post("/api/questions/:id/respond", validateOrigin, (req, res) => {
+    const id = req.params.id as string;
+    const { answers } = req.body as { answers: unknown };
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
+      res.status(400).json({ error: "answers must be a non-null object" });
+      return;
+    }
+    const entries = Object.entries(answers as Record<string, unknown>);
+    if (entries.length === 0 || entries.some(([, v]) => typeof v !== "string")) {
+      res.status(400).json({ error: "answers must be a non-empty Record<string, string>" });
+      return;
+    }
+    const pq = questionStore.get(id);
+    if (!pq) {
+      res.status(404).json({ error: "Question not found or already answered" });
+      return;
+    }
+    const keys = Object.keys(answers as Record<string, unknown>);
+    const expected = Array.from({ length: pq.questions.length }, (_, i) => String(i));
+    const isCanonical = keys.every((k) => /^(0|[1-9]\d*)$/.test(k));
+    if (!isCanonical || keys.length !== expected.length || expected.some((k) => !(k in (answers as Record<string, unknown>)))) {
+      res.status(400).json({ error: `answer keys must be exact strings: 0..${pq.questions.length - 1}` });
+      return;
+    }
+    const updated = questionStore.respond(id, answers as Record<string, string>);
+    if (!updated) {
+      res.status(404).json({ error: "Question not found or already answered" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // セッションの error 状態をリセット
+  app.post("/api/sessions/:id/reset-error", validateOrigin, (req, res) => {
+    const id = req.params.id as string;
+    const session = sessionStore.resetError(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found or not in error state" });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // セッションの waiting_permission / waiting_answer 状態を復帰
+  app.post("/api/sessions/:id/recover", validateOrigin, (req, res) => {
+    const id = req.params.id as string;
+    const session = sessionStore.get(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const wasWaitingPermission = session.status === "waiting_permission";
+    const recovered = sessionStore.recover(id);
+    if (!recovered) {
+      res.status(400).json({ error: "Session is not in waiting_permission or waiting_answer state" });
+      return;
+    }
+    if (wasWaitingPermission) {
+      denySessionDecisions(id);
+    }
+    cancelSessionQuestions(id);
+    res.json({ ok: true });
+  });
+
+  // --- Send Keys API ---
+  const COPILOT_HOOKS_TIMEOUT_MS = 120_000;
+  const VALID_ACTION_TYPES = ["yes", "no", "yes_always", "free_input"] as const;
+  type ActionType = typeof VALID_ACTION_TYPES[number];
+
+  app.post("/api/sessions/:id/send-keys", validateOrigin, async (req, res) => {
+    const id = req.params.id as string;
+
+    // CON-003: tmux 可用性ガード
+    if (!tmuxManager.canManagePanes()) {
+      res.status(503).json({ error: "tmux is not available", errorCode: "TMUX_NOT_AVAILABLE" });
+      return;
+    }
+
+    const session = sessionStore.get(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    if (!session.tmux_pane) {
+      res.status(400).json({ error: "tmux_pane not registered" });
+      return;
+    }
+
+    const { text, action_type, trigger_event_id } = req.body as {
+      text?: unknown;
+      action_type?: unknown;
+      trigger_event_id?: unknown;
+    };
+
+    // --- (1) action_type 形式チェック ---
+    const hasActionType = action_type !== undefined && action_type !== null;
+    const hasTriggerEventId = typeof trigger_event_id === "string" && trigger_event_id.length > 0;
+
+    if (hasActionType) {
+      if (typeof action_type !== "string" || !(VALID_ACTION_TYPES as readonly string[]).includes(action_type)) {
+        res.status(400).json({ error: "Invalid action_type", errorCode: "INVALID_ACTION_TYPE" });
+        return;
+      }
+    }
+
+    const actionType = hasActionType ? action_type as ActionType : null;
+    const isCaptureTriggered = hasTriggerEventId;
+
+    // --- (2) action_type 別の必須/禁止フィールド検証 ---
+    if (actionType === "yes" || actionType === "no" || actionType === "yes_always") {
+      if (text !== undefined && text !== null) {
+        res.status(400).json({ error: `text is not allowed for action_type '${actionType}'`, errorCode: "INVALID_PARAMS" });
+        return;
+      }
+      if (!hasTriggerEventId) {
+        res.status(400).json({ error: "trigger_event_id is required for action_type '" + actionType + "'", errorCode: "TRIGGER_EVENT_REQUIRED" });
+        return;
+      }
+    } else if (actionType === "free_input") {
+      if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
+        res.status(400).json({ error: "text must be a string between 1 and 4096 characters", errorCode: "TEXT_REQUIRED" });
+        return;
+      }
+    } else if (actionType === null) {
+      // 従来互換: action_type 未指定
+      if (hasTriggerEventId) {
+        res.status(400).json({ error: "trigger_event_id is not allowed without action_type", errorCode: "INVALID_PARAMS" });
+        return;
+      }
+      if (typeof text !== "string" || text.length < 1 || text.length > 4096) {
+        res.status(400).json({ error: "text must be a string between 1 and 4096 characters" });
+        return;
+      }
+    }
+
+    // --- (3) capture 検知起点 vs 従来互換の判定分岐 ---
+    if (isCaptureTriggered) {
+      // --- capture 検知起点: decision pending ガード ---
+      const pendingDecisions = decisionStore.getPending().filter(d => d.session_id === id);
+      if (pendingDecisions.length > 0) {
+        res.status(409).json({
+          error: "A decision is pending for this session. Use /api/decisions/:id/respond instead.",
+          errorCode: "DECISION_PENDING",
+        });
+        return;
+      }
+
+      // --- (4) trigger_event_id ライフサイクル検証 ---
+      const consumeResult = terminalEventStore.consumeIfPending(
+        trigger_event_id as string, id, session.run_id
+      );
+      if (!consumeResult.success) {
+        const statusCode = consumeResult.reason === "TRIGGER_SESSION_MISMATCH" || consumeResult.reason === "TRIGGER_RUN_MISMATCH"
+          ? 409 : 410;
+        res.status(statusCode).json({
+          error: `Trigger event validation failed: ${consumeResult.reason}`,
+          errorCode: consumeResult.reason,
+        });
+        return;
+      }
+    } else {
+      // --- 従来互換: status / prompt_ready 判定 ---
+      if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.prompt_ready) {
+        const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+        res.status(403).json({ error: `${toolLabel} session is not ready for prompt input`, errorCode: "PROMPT_NOT_READY" });
+        return;
+      }
+      if (session.status !== "idle") {
+        res.status(403).json({ error: "Session is not idle", errorCode: "SESSION_NOT_IDLE" });
+        return;
+      }
+
+      // Copilot/Codex 固有チェック: 起動状態に応じた制御
+      if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
+        if (!session.first_prompt_sent) {
+          // 初回送信は許可（CLI 起動トリガー）
+        } else if (!session.last_hook_at) {
+          // 2回目以降: CLI がまだ起動中（フック通信なし）
+          const elapsed = Date.now() - new Date(session.last_init_at).getTime();
+          if (elapsed < COPILOT_HOOKS_TIMEOUT_MS) {
+            const toolLabel = session.cli_tool === "copilot" ? "Copilot" : "Codex";
+            res.status(409).json({ error: `${toolLabel} CLI is still starting up. Please wait.` });
+            return;
+          }
+          console.warn(`${session.cli_tool} session ${session.session_id}: hooks timeout (${elapsed}ms), allowing send-keys as fallback`);
+        }
+      }
+    }
+
+    // --- 送信テキスト解決 ---
+    let resolvedText: string;
+    if (actionType === "yes" || actionType === "no" || actionType === "yes_always") {
+      const toolConfig = tmuxManager.getTool(session.cli_tool || "claude");
+      const actionStrings = toolConfig?.actionStrings ?? { yes: "y", yes_always: "!", no: "n" };
+      resolvedText = actionStrings[actionType];
+    } else {
+      resolvedText = (text as string).replace(/\r?\n/g, " ");
+    }
+
+    try {
+      // Copilot/Codex セッション: pane mode ガード（copy-mode 等の入力不可状態を検出・復帰）
+      if (session.cli_tool === "copilot" || session.cli_tool === "codex") {
+        const inMode = await tmuxManager.checkPaneMode(session.tmux_pane);
+        if (inMode) {
+          console.log(`send-keys [${session.session_id}]: pane in copy-mode, attempting recovery`);
+          const recovered = await tmuxManager.cancelCopyMode(session.tmux_pane);
+          if (!recovered) {
+            console.warn(`send-keys [${session.session_id}]: copy-mode recovery failed`);
+            // trigger_event_id 付きの場合は before_text 失敗として記録
+            if (isCaptureTriggered) {
+              terminalEventStore.markFailed(trigger_event_id as string, "copy_mode_stuck", "before_text");
+            }
+            res.status(422).json({ error: "Pane is in copy-mode and recovery failed", errorCode: "COPY_MODE_STUCK" });
+            return;
+          }
+          console.log(`send-keys [${session.session_id}]: copy-mode recovery succeeded`);
+        }
+      }
+
+      // Copilot/Codex セッションでは行クリア（C-u）を送信しない
+      if (session.cli_tool !== "copilot" && session.cli_tool !== "codex") {
+        console.log(`send-keys [${session.session_id}]: clearing line (C-u)`);
+        await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "C-u"]);
+      }
+
+      console.log(`send-keys [${session.session_id}]: sending text (${resolvedText.length} chars)`);
+      await execFileAsync("tmux", ["send-keys", "-t", session.tmux_pane, "-l", resolvedText]);
+
+      // --- text 送信成功: 以降の失敗は after_text ---
+      const textSent = true;
+
+      // Enter 送信方式
+      const enterMethod = session.cli_tool === "copilot"
+        ? (process.env.COPILOT_PROMPT_ENTER_METHOD || "enter")
+        : session.cli_tool === "codex"
+        ? (process.env.CODEX_PROMPT_ENTER_METHOD || process.env.CODEX_ENTER_METHOD || "enter-delay")
+        : "enter";
+      console.log(`send-keys [${session.session_id}]: sending Enter (method: ${enterMethod})`);
+      try {
+        await sendEnterKey(session.tmux_pane, enterMethod);
+      } catch (enterErr) {
+        // Enter 送信失敗: text は既に送信済みのため after_text
+        if (isCaptureTriggered && textSent) {
+          terminalEventStore.markFailed(trigger_event_id as string, "enter_send_failed", "after_text");
+        }
+        throw enterErr;
+      }
+
+      // tmux send-keys 一連成功後に first_prompt_sent を更新
+      if ((session.cli_tool === "copilot" || session.cli_tool === "codex") && !session.first_prompt_sent) {
+        session.first_prompt_sent = true;
+      }
+
+      // Codex: send-keys 成功時に running へ遷移する合成状態更新（従来互換経路のみ）
+      if (!isCaptureTriggered && session.cli_tool === "codex" && session.status === "idle") {
+        session.status = "running";
+        session.prompt_ready = false;
+        session.last_run_started_at = new Date().toISOString();
+        session.updated_at = new Date().toISOString();
+        broadcast({ type: "session_update", payload: session });
+      }
+
+      // プロンプト履歴（free_input/従来互換のみ）
+      if (actionType === null || actionType === "free_input") {
+        const historyKey = getPromptHistoryKey(id);
+        addPromptHistory(historyKey, text as string);
+        const [historyScope, historyId] = historyKey.split(":", 2) as ["group" | "session", string];
+        broadcast({
+          type: "prompt_history_update",
+          payload: { scope: historyScope, id: historyId, history: getPromptHistory(historyKey) },
+        });
+      }
+
+      console.log(`send-keys [${session.session_id}]: completed successfully`);
+      res.json({ ok: true });
+    } catch (e: unknown) {
+      const err = e as { stderr?: string; message?: string };
+      console.error(`send-keys [${session.session_id}] failed:`, err.stderr || err.message);
+      // trigger_event_id 付きで text 未送信の場合は before_text 失敗
+      if (isCaptureTriggered) {
+        const event = terminalEventStore.getEventById(trigger_event_id as string);
+        if (event && event.event_state !== "failed") {
+          terminalEventStore.markFailed(trigger_event_id as string, err.stderr || err.message || "send_keys_failed", "before_text");
+        }
+      }
+      res.status(500).json({ error: "Failed to send keys" });
+    }
+  });
+
+  // --- Close Session API ---
+  app.post("/api/sessions/:id/close", validateOrigin, async (req, res) => {
+    if (!tmuxManager.canManagePanes()) {
+      res.status(503).json({ error: "tmux is not available" });
+      return;
+    }
+
+    const id = req.params.id as string;
+    const session = sessionStore.get(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+    if (!session.tmux_pane) {
+      res.status(400).json({ error: "tmux_pane not registered" });
+      return;
+    }
+    if (session.status === "completed") {
+      res.status(400).json({ error: "Session already completed" });
+      return;
+    }
+
+    let panePresent: boolean;
+    try {
+      panePresent = await tmuxManager.paneExists(session.tmux_pane);
+    } catch (checkErr) {
+      console.error("tmux communication error:", (checkErr as Error).message);
+      res.status(502).json({ error: "tmux communication error" });
+      return;
+    }
+
+    if (panePresent) {
+      try {
+        await tmuxManager.killPane(session.tmux_pane);
+      } catch (e) {
+        const code = (e as Error & { code?: string }).code;
+        if (code === "ERR_SELFPANE_UNKNOWN") {
+          console.error("killPane refused (selfPaneId unknown):", (e as Error).message);
+          res.status(503).json({ error: "Server self-pane ID is not resolved" });
+          return;
+        }
+        if (code === "ERR_REFUSE_SERVER_PANE") {
+          console.error("killPane refused (self-pane protection):", (e as Error).message);
+          res.status(409).json({ error: "Refusing to kill server pane" });
+          return;
+        }
+        let stillExists: boolean;
+        try {
+          stillExists = await tmuxManager.paneExists(session.tmux_pane);
+        } catch (recheckErr) {
+          console.error("tmux communication error:", (recheckErr as Error).message);
+          res.status(502).json({ error: "tmux communication error" });
+          return;
+        }
+        if (stillExists) {
+          console.error("killPane failed:", (e as Error).message);
+          res.status(502).json({ error: "Failed to close tmux pane" });
+          return;
+        }
+        console.warn("killPane: pane already closed");
+      }
+    } else {
+      console.warn("killPane skipped: pane already absent");
+    }
+
+    console.log(`[manual_close] session ${id}: manual close requested`);
+    completeSessionWithCleanup(id, "セッションを手動で終了しました");
+    res.json({ ok: true });
+  });
+
+  // --- Group API ---
+
+  app.get("/api/groups", (_req, res) => {
+    res.json(groupStore.getAll());
+  });
+
+  app.post("/api/groups", validateOrigin, async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!name || name.length > 100) {
+      res.status(400).json({ error: "name is required and must be <= 100 characters" });
+      return;
+    }
+    try {
+      const group = await groupStore.create(name);
+      res.status(201).json(group);
+    } catch (e) {
+      console.error("Failed to create group:", e);
+      res.status(500).json({ error: "Failed to persist group" });
+    }
+  });
+
+  app.put("/api/groups/:id", validateOrigin, async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!name || name.length > 100) {
+      res.status(400).json({ error: "name is required and must be <= 100 characters" });
+      return;
+    }
+    try {
+      const group = await groupStore.update(req.params.id as string, name);
+      if (!group) {
+        res.status(404).json({ error: "Group not found" });
+        return;
+      }
+      res.json(group);
+    } catch (e) {
+      console.error("Failed to update group:", e);
+      res.status(500).json({ error: "Failed to persist group" });
+    }
+  });
+
+  app.delete("/api/groups/:id", validateOrigin, async (req, res) => {
+    const id = req.params.id as string;
+    try {
+      const group = groupStore.get(id);
+      const deleted = await groupStore.delete(id);
+      if (!deleted) {
+        res.status(404).json({ error: "Group not found" });
+        return;
+      }
+      const groupKey = `group:${id}`;
+      const groupHistory = getPromptHistory(groupKey);
+      if (group && groupHistory.length > 0) {
+        for (const sessionId of group.session_ids) {
+          const sessionKey = `session:${sessionId}`;
+          for (const text of groupHistory) {
+            addPromptHistory(sessionKey, text);
+          }
+          broadcast({
+            type: "prompt_history_update",
+            payload: { scope: "session" as const, id: sessionId, history: getPromptHistory(sessionKey) },
+          });
+        }
+      }
+      deletePromptHistory(groupKey);
+      broadcast({ type: "group_delete", payload: { id } });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("Failed to delete group:", e);
+      res.status(500).json({ error: "Failed to persist group deletion" });
+    }
+  });
+
+  app.post("/api/groups/:id/sessions", validateOrigin, async (req, res) => {
+    const { session_id, action } = req.body as { session_id: string; action: "add" | "remove" };
+    if (!session_id || !action || !["add", "remove"].includes(action)) {
+      res.status(400).json({ error: "session_id and action ('add' or 'remove') are required" });
+      return;
+    }
+    try {
+      if (action === "add") {
+        if (!sessionStore.get(session_id)) {
+          res.status(404).json({ error: "Session not found" });
+          return;
+        }
+        const group = await groupStore.addSession(req.params.id as string, session_id);
+        if (!group) {
+          res.status(404).json({ error: "Group not found" });
+          return;
+        }
+        const sessionKey = `session:${session_id}`;
+        const groupKey = `group:${group.id}`;
+        const sessionHistory = getPromptHistory(sessionKey);
+        if (sessionHistory.length > 0) {
+          for (const text of sessionHistory) {
+            addPromptHistory(groupKey, text);
+          }
+          deletePromptHistory(sessionKey);
+          const [historyScope, historyId] = groupKey.split(":", 2) as ["group", string];
+          broadcast({
+            type: "prompt_history_update",
+            payload: { scope: historyScope, id: historyId, history: getPromptHistory(groupKey) },
+          });
+        }
+        res.json(group);
+      } else {
+        const groupId = req.params.id as string;
+        const group = await groupStore.removeSession(groupId, session_id);
+        if (!group) {
+          res.status(404).json({ error: "Group not found or session not in group" });
+          return;
+        }
+        const groupKey = `group:${groupId}`;
+        const sessionKey = `session:${session_id}`;
+        for (const text of getPromptHistory(groupKey)) {
+          addPromptHistory(sessionKey, text);
+        }
+        broadcast({
+          type: "prompt_history_update",
+          payload: { scope: "session" as const, id: session_id, history: getPromptHistory(sessionKey) },
+        });
+        res.json(group);
+      }
+    } catch (e) {
+      console.error("Failed to update group sessions:", e);
+      res.status(500).json({ error: "Failed to persist group session change" });
+    }
+  });
+
+  // --- Prompt Template API ---
+
+  app.get("/api/prompt-templates", (_req, res) => {
+    res.json(promptTemplateStore.getAll());
+  });
+
+  app.post("/api/prompt-templates", validateOrigin, async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+    if (!name || name.length > 100) {
+      res.status(400).json({ error: "name is required and must be <= 100 characters" });
+      return;
+    }
+    if (!body || body.length > 4096) {
+      res.status(400).json({ error: "body is required and must be <= 4096 characters" });
+      return;
+    }
+    try {
+      const template = await promptTemplateStore.create(name, body);
+      res.status(201).json(template);
+    } catch (e) {
+      console.error("Failed to create prompt template:", e);
+      res.status(500).json({ error: "Failed to persist prompt template" });
+    }
+  });
+
+  app.put("/api/prompt-templates/:id", validateOrigin, async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+    if (!name || name.length > 100) {
+      res.status(400).json({ error: "name is required and must be <= 100 characters" });
+      return;
+    }
+    if (!body || body.length > 4096) {
+      res.status(400).json({ error: "body is required and must be <= 4096 characters" });
+      return;
+    }
+    try {
+      const template = await promptTemplateStore.update(req.params.id as string, name, body);
+      if (!template) {
+        res.status(404).json({ error: "Prompt template not found" });
+        return;
+      }
+      res.json(template);
+    } catch (e) {
+      console.error("Failed to update prompt template:", e);
+      res.status(500).json({ error: "Failed to persist prompt template" });
+    }
+  });
+
+  app.delete("/api/prompt-templates/:id", validateOrigin, async (req, res) => {
+    const id = req.params.id as string;
+    try {
+      const deleted = await promptTemplateStore.delete(id);
+      if (!deleted) {
+        res.status(404).json({ error: "Prompt template not found" });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("Failed to delete prompt template:", e);
+      res.status(500).json({ error: "Failed to persist prompt template deletion" });
+    }
+  });
+
+  // --- Prompt History API ---
+
+  app.get("/api/prompt-history/:type/:id", (req, res) => {
+    const type = req.params.type as string;
+    const id = req.params.id as string;
+    if (type !== "group" && type !== "session") {
+      res.status(400).json({ error: "type must be 'group' or 'session'" });
+      return;
+    }
+    res.json(getPromptHistory(`${type}:${id}`));
+  });
+
+  // --- Terminal Events API (TASK-007b) ---
+  app.get("/api/sessions/:id/terminal-events", validateOriginForGet, (req, res) => {
+    const id = req.params.id as string;
+    const session = sessionStore.get(id);
+    if (!session) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    // cursor パラメータ（exclusive: seq > cursor）
+    const cursorRaw = req.query.cursor;
+    let cursor = 0;
+    if (cursorRaw !== undefined) {
+      cursor = parseInt(String(cursorRaw), 10);
+      if (Number.isNaN(cursor) || cursor < 0) cursor = 0;
+    }
+
+    // limit パラメータ（クランプ: 1-100, デフォルト50）
+    const limitRaw = req.query.limit;
+    let limit = 50;
+    if (limitRaw !== undefined) {
+      limit = parseInt(String(limitRaw), 10);
+      if (Number.isNaN(limit) || limit < 1) limit = 1;
+      if (limit > 100) limit = 100;
+    }
+
+    const events = terminalEventStore.getEvents(id, cursor, limit);
+    const latestSeq = terminalEventStore.getLatestSeq(id);
+
+    // next_cursor 契約: events 非空で残件ありなら max(events[].seq)、最終ページなら null
+    let nextCursor: number | null = null;
+    if (events.length > 0) {
+      const maxSeq = events[events.length - 1].sequence;
+      // 残件判定: 返却件数が limit に達し、かつ maxSeq < latestSeq
+      if (events.length >= limit && maxSeq < latestSeq) {
+        nextCursor = maxSeq;
+      }
+    }
+
+    res.json({
+      events,
+      next_cursor: nextCursor,
+      has_more: nextCursor !== null,
+      latest_seq: latestSeq,
+    });
+  });
+
+  // --- Codex Sessions API ---
+  app.get("/api/codex/sessions", async (_req, res) => {
+    try {
+      const sessions = await listCodexSessions();
+      res.json(sessions);
+    } catch (e) {
+      console.error("Codex session index failed:", (e as Error).message);
+      res.status(500).json({ error: "Codex セッション一覧の取得に失敗しました", details: (e as Error).message });
+    }
+  });
+
+  // --- Tools API ---
+  app.get("/api/tools", (_req, res) => {
+    res.json(tmuxManager.getToolsWithAvailability());
+  });
+
+  // --- Launch API ---
+  const fsStatAsync = promisify(fs.stat);
+  const fsRealpathAsync = promisify(fs.realpath);
+
+  app.post("/api/sessions/launch", validateOrigin, async (req, res) => {
+    const { tool_id, cwd, group_id, codex_mode, codex_target, codex_all } = req.body as LaunchRequest;
+
+    if (!tool_id || typeof tool_id !== "string") {
+      res.status(400).json({ error: "tool_id is required" });
+      return;
+    }
+
+    const knownIds = new Set(tmuxManager.getTools().map(t => t.id));
+    if (!knownIds.has(tool_id)) {
+      res.status(400).json({ error: `Unknown tool_id: ${tool_id}` });
+      return;
+    }
+
+    // Codex 固有バリデーション
+    if (tool_id === "codex") {
+      const validModes: CodexLaunchMode[] = ["new", "resume", "fork"];
+      if (codex_mode && !validModes.includes(codex_mode)) {
+        res.status(400).json({ error: `Invalid codex_mode: ${codex_mode}. Must be one of: ${validModes.join(", ")}` });
+        return;
+      }
+      if ((codex_mode === "resume" || codex_mode === "fork") && codex_target && typeof codex_target !== "string") {
+        res.status(400).json({ error: "codex_target must be a string" });
+        return;
+      }
+      if (codex_all !== undefined && typeof codex_all !== "boolean") {
+        res.status(400).json({ error: "codex_all must be a boolean" });
+        return;
+      }
+    }
+
+    if (group_id) {
+      if (typeof group_id !== "string" || !groupStore.get(group_id)) {
+        res.status(400).json({ error: "Invalid group_id" });
+        return;
+      }
+    }
+
+    if (!tmuxManager.isAvailable()) {
+      res.status(503).json({ error: "tmux is not available" });
+      return;
+    }
+
+    let resolvedCwd: string | undefined;
+    if (cwd && typeof cwd === "string") {
+      const workDir = process.env.CLAUDE_MONITOR_WORK_DIR;
+      if (!workDir) {
+        res.status(400).json({ error: "CLAUDE_MONITOR_WORK_DIR is not set" });
+        return;
+      }
+
+      const normalized = path.resolve(cwd);
+      try {
+        const stat = await fsStatAsync(normalized);
+        if (!stat.isDirectory()) {
+          res.status(400).json({ error: "cwd is not a directory" });
+          return;
+        }
+      } catch {
+        res.status(400).json({ error: "cwd does not exist" });
+        return;
+      }
+
+      try {
+        const realCwd = await fsRealpathAsync(normalized);
+        const realWorkDir = await fsRealpathAsync(workDir);
+        if (realCwd !== realWorkDir && !realCwd.startsWith(realWorkDir + "/")) {
+          res.status(400).json({ error: "cwd is outside of CLAUDE_MONITOR_WORK_DIR" });
+          return;
+        }
+        resolvedCwd = normalized;
+      } catch {
+        res.status(400).json({ error: "Failed to resolve cwd path" });
+        return;
+      }
+    }
+
+    try {
+      // Codex オプションを渡す
+      const codexOpts = tool_id === "codex"
+        ? { mode: codex_mode, target: codex_target, all: codex_all }
+        : undefined;
+      const result = await tmuxManager.launchSession(tool_id, resolvedCwd, codexOpts);
+      // stale entryの除去を常に先に行い、pane再利用時の誤割り当てを防止
+      pendingGroupAssignments.delete(result.tmux_pane);
+      if (group_id) {
+        pendingGroupAssignments.set(result.tmux_pane, { groupId: group_id, createdAt: Date.now() });
+      }
+
+      // Copilot/Codex プレセッション: 合成 SessionStart イベントでセッションを先行作成
+      // Copilot/Codex CLI は最初のプロンプト実行まで sessionStart フックを発火しないため、
+      // Launch API 側で即座にセッションを作成し、ブラウザUIにカードを表示する。
+      // 実際の sessionStart 到達時は session-store がセッションの
+      // データを再初期化するため、重複 SessionStart は問題なく処理される。
+      if ((tool_id === "copilot" || tool_id === "codex") && result.tmux_pane) {
+        const paneNum = result.tmux_pane.replace("%", "");
+        const cliTool = tool_id as "copilot" | "codex";
+        const preSessionId = `${cliTool}-pane-${paneNum}`;
+        const syntheticEvent: HookEvent = {
+          event_type: "SessionStart",
+          session_id: preSessionId,
+          cwd: resolvedCwd || process.env.CLAUDE_MONITOR_WORK_DIR || "",
+          model: "",
+          title: "",
+          notification_type: "",
+          message: "",
+          tool_name: "",
+          file_path: "",
+          prompt: "",
+          questions: [],
+          last_message: "",
+          tmux_pane: result.tmux_pane,
+          reason: "",
+          transcript_path: "",
+          progress_text: "",
+          cli_tool: cliTool,
+          timestamp: new Date().toISOString(),
+        };
+        const preSession = sessionStore.processEvent(syntheticEvent, { codexCaptureApproval });
+
+        // グループ自動割り当て（共通ヘルパー経由）
+        if (preSession.tmux_pane) {
+          await assignPendingGroupToSession(
+            preSession.session_id,
+            preSession.tmux_pane,
+            { groupStore, pendingGroupAssignments, broadcast },
+          );
+        }
+      }
+
+      res.json(result);
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.startsWith("Pane limit reached")) {
+        res.status(409).json({ error: msg });
+      } else {
+        console.error("Launch session failed:", msg);
+        res.status(500).json({ error: "Failed to launch session" });
+      }
+    }
+  });
+
+  // --- MCP handler ---
+  const mcpHandler = createMcpHandler(sessionStore, questionStore);
+  app.post("/mcp", mcpHandler);
+  app.get("/mcp", mcpHandler);
+  app.delete("/mcp", mcpHandler);
+
+  // セッション削除時に prompt history をクリーンアップ
+  sessionStore.addOnDeleteHook((sessionId) => {
+    deletePromptHistory(`session:${sessionId}`);
+  });
+
+  return { app, completeSessionWithCleanup };
+}
+
+// ==========================================================================
+// Production startup（テスト時はスキップ）
+// ==========================================================================
+
+if (!process.env.VITEST) {
+  const PORT = 3456;
+  const HOST = "127.0.0.1";
+  const ALLOWED_ORIGINS = new Set([
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
+  ]);
+  const HOOK_TOKEN = process.env.CLAUDE_MONITOR_HOOK_TOKEN || "";
+
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+
+  // --- WebSocket broadcast ---
+  const clients = new Set<WebSocket>();
+
+  function broadcast(msg: WSMessage): void {
+    const data = JSON.stringify(msg);
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+      }
+    }
+  }
+
+  // --- Stores ---
+  const groupStore = new GroupStore((group) => {
+    broadcast({
+      type: "group_update",
+      payload: group,
+    });
+  });
+
+  const promptTemplateStore = new PromptTemplateStore(
+    (template) => {
+      broadcast({ type: "prompt_template_update", payload: template });
+    },
+    (id) => {
+      broadcast({ type: "prompt_template_delete", payload: { id } });
+    },
+  );
+
+  const sessionStore = new SessionStore(
+    (session) => {
+      broadcast({
+        type: "session_update",
+        payload: session,
+      });
+    },
+    (sessionId) => {
+      // onDelete: prompt history は createApp 内の addOnDeleteHook で管理。
+      // ここではグループ参照のクリーンアップのみ実施
+      groupStore.removeSessionFromAll(sessionId).catch(e => {
+        console.error("Failed to clean up group references for deleted session:", e);
+      });
+    },
+  );
+
+  const decisionStore = new DecisionStore({
+    onDecisionPending: (decision: Decision) => {
+      const session = sessionStore.get(decision.session_id);
+      if (session) {
+        session.status = "waiting_permission";
+        session.updated_at = new Date().toISOString();
+        broadcast({
+          type: "session_update",
+          payload: session,
+        });
+      }
+      broadcast({
+        type: "decision_pending",
+        payload: decision,
+      });
+    },
+    onDecisionResolved: (decision: Decision) => {
+      const session = sessionStore.get(decision.session_id);
+      if (session && session.status === "waiting_permission") {
+        session.status = "running";
+        session.updated_at = new Date().toISOString();
+        broadcast({
+          type: "session_update",
+          payload: session,
+        });
+      }
+      broadcast({
+        type: "decision_resolved",
+        payload: decision,
+      });
+    },
+    onDecisionTimeout: (decision: Decision) => {
+      sessionStore.setError(decision.session_id, `Decision timeout: ${decision.tool_name}`);
+    },
+  });
+
+  const questionStore = new QuestionStore({
+    onQuestionPending: (pq: PendingQuestion) => {
+      broadcast({
+        type: "question_pending",
+        payload: pq,
+      });
+    },
+    onQuestionAnswered: (pq: PendingQuestion) => {
+      broadcast({
+        type: "question_answered",
+        payload: pq,
+      });
+    },
+    onQuestionTimeout: (pq: PendingQuestion) => {
+      broadcast({
+        type: "question_answered",
+        payload: pq,
+      });
+    },
+  });
+
+  // --- TerminalEventStore ---
+  const captureConfig = parseCaptureConfig();
+  const terminalEventStore = new TerminalEventStore(captureConfig);
+
+  // --- Pending Group Assignments ---
+  const pendingGroupAssignments = new Map<string, PendingAssignment>();
+
+  // --- TmuxManager ---
+  const tmuxManager = new TmuxManager();
+
+  // --- Create Express app via factory ---
+  const publicDir = path.resolve(__dirname, "../public");
+
+  // --- broadcastTerminalEventBatch（TASK-023: バッチスロットリング付き） ---
+  const TERMINAL_BATCH_INTERVAL_MS = 200; // セッション毎のバッチ配信間隔
+
+  /** セッション別バッチバッファ */
+  const terminalBatchBuffers = new Map<string, import("./types.js").TerminalEvent[]>();
+  /** セッション別のフラッシュタイマー */
+  const terminalBatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function flushTerminalBatch(sessionId: string): void {
+    const buffer = terminalBatchBuffers.get(sessionId);
+    terminalBatchTimers.delete(sessionId);
+    if (!buffer || buffer.length === 0) {
+      terminalBatchBuffers.delete(sessionId);
+      return;
+    }
+    terminalBatchBuffers.delete(sessionId);
+
+    const fromSeq = buffer[0].sequence;
+    const toSeq = buffer[buffer.length - 1].sequence;
+    broadcast({
+      type: "terminal_event_batch",
+      payload: { session_id: sessionId, events: buffer, dropped_count: 0, from_seq: fromSeq, to_seq: toSeq },
+    });
+  }
+
+  function broadcastTerminalEventBatch(sessionId: string, events: import("./types.js").TerminalEvent[]): void {
+    if (events.length === 0) return;
+
+    let buffer = terminalBatchBuffers.get(sessionId);
+    if (!buffer) {
+      buffer = [];
+      terminalBatchBuffers.set(sessionId, buffer);
+    }
+    buffer.push(...events);
+
+    // タイマー未設定なら設定
+    if (!terminalBatchTimers.has(sessionId)) {
+      const timer = setTimeout(() => flushTerminalBatch(sessionId), TERMINAL_BATCH_INTERVAL_MS);
+      terminalBatchTimers.set(sessionId, timer);
+    }
+  }
+
+  // --- session_update コアレシング（TASK-023） ---
+  const SESSION_UPDATE_COALESCE_MS = 500;
+  const sessionUpdateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const sessionUpdatePending = new Map<string, Session>();
+
+  /** session_update をコアレシングして配信する broadcast ラッパー */
+  function coalescedBroadcast(msg: WSMessage): void {
+    if (msg.type === "session_update") {
+      const session = msg.payload as Session;
+      const id = session.session_id;
+      sessionUpdatePending.set(id, session);
+
+      if (!sessionUpdateTimers.has(id)) {
+        const timer = setTimeout(() => {
+          sessionUpdateTimers.delete(id);
+          const latest = sessionUpdatePending.get(id);
+          sessionUpdatePending.delete(id);
+          if (latest) {
+            const data = JSON.stringify({ type: "session_update", payload: latest });
+            for (const ws of clients) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+              }
+            }
+          }
+        }, SESSION_UPDATE_COALESCE_MS);
+        sessionUpdateTimers.set(id, timer);
+      }
+      return;
+    }
+    // session_update 以外は即座に配信
+    broadcast(msg);
+  }
+
+  // Codex hard timeout: SessionStore.cleanup から呼ばれるコールバックを事前宣言
+  // completeSessionWithCleanup は createApp 後に設定
+  let completeSessionWithCleanupRef: ((sessionId: string, message: string) => void) | null = null;
+  sessionStore.onHardTimeout = (sessionId: string) => {
+    if (completeSessionWithCleanupRef) {
+      completeSessionWithCleanupRef(sessionId, "codex フック未到達タイムアウト");
+    }
+  };
+
+  // SessionStart 再初期化時に前 run の pending/failed イベントを無効化
+  sessionStore.onInvalidateBySession = (sessionId: string) => {
+    terminalEventStore.invalidateBySession(sessionId);
+  };
+
+  const { app, completeSessionWithCleanup } = createApp({
+    sessionStore,
+    decisionStore,
+    questionStore,
+    groupStore,
+    promptTemplateStore,
+    terminalEventStore,
+    tmuxManager,
+    captureConfig,
+    pendingGroupAssignments,
+    broadcast,
+    hookToken: HOOK_TOKEN,
+    allowedOrigins: ALLOWED_ORIGINS,
+    publicDir,
+  });
+  completeSessionWithCleanupRef = completeSessionWithCleanup;
+
+  // --- HTTP Server + WebSocket ---
+  const server = createServer(app);
+
+  const wss = new WebSocketServer({
+    server,
+    verifyClient: (info, callback) => {
+      const origin = info.origin;
+      if (!origin || !ALLOWED_ORIGINS.has(origin)) {
+        callback(false, 403, "Forbidden: invalid origin");
+        return;
+      }
+      callback(true);
+    },
+  });
+
+  wss.on("connection", (ws) => {
+    clients.add(ws);
+    ws.on("close", () => {
+      clients.delete(ws);
+    });
+  });
+
+  // --- Pane Monitor ---
+  const PANE_CHECK_INTERVAL_MS = 5000;
+  let paneCheckTimer: ReturnType<typeof setInterval> | null = null;
+  let inFlight = false;
+
+  const loggedUnknownCommands = new Set<string>();
+
+  function startPaneMonitor(): void {
+    if (!tmuxManager.canManagePanes()) return;
+
+    const monitorCodexCaptureApproval = tmuxManager.canManagePanes() && isCaptureEnabled(captureConfig, "codex");
+
+    paneCheckTimer = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await runPaneMonitorTick({
+          tmuxManager,
+          sessionStore,
+          decisionStore,
+          pendingGroupAssignments,
+          completeSessionWithCleanup,
+          loggedUnknownCommands,
+          codexCaptureApproval: monitorCodexCaptureApproval,
+        });
+      } finally {
+        inFlight = false;
+      }
+    }, PANE_CHECK_INTERVAL_MS);
+  }
+
+  // --- Capture Tick ---
+  const CAPTURE_TICK_INTERVAL_MS = 1000;
+  let captureTickTimer: ReturnType<typeof setInterval> | null = null;
+
+  const paneCaptureDeps: PaneCaptureDeps = {
+    tmux: tmuxManager,
+    sessionStore,
+    terminalEventStore,
+    captureConfig,
+    broadcastTerminalEventBatch,
+  };
+
+  function startCaptureTick(): void {
+    if (!tmuxManager.canManagePanes()) return;
+    captureTickTimer = setInterval(async () => {
+      try {
+        await runCaptureTick(paneCaptureDeps);
+      } catch (e) {
+        console.warn("Capture tick error:", (e as Error).message);
+      }
+    }, CAPTURE_TICK_INTERVAL_MS);
+  }
+
+  // データストアとTmuxManagerを並列初期化してからサーバー起動
+  Promise.all([
+    groupStore.load(),
+    promptTemplateStore.load(),
+    tmuxManager.initialize(),
+  ]).then(() => {
+    server.listen(PORT, HOST, () => {
+      console.log(`Claude Monitor dashboard: http://${HOST}:${PORT}`);
+      console.log(`Listening on ${HOST}:${PORT}`);
+      startPaneMonitor();
+      startCaptureTick();
+    });
+  });
+
+  // Graceful shutdown
+  function shutdown(): void {
+    if (paneCheckTimer) clearInterval(paneCheckTimer);
+    if (captureTickTimer) clearInterval(captureTickTimer);
+    // バッチ / コアレシング タイマーのクリーンアップ
+    for (const timer of terminalBatchTimers.values()) clearTimeout(timer);
+    for (const timer of sessionUpdateTimers.values()) clearTimeout(timer);
+    terminalBatchTimers.clear();
+    sessionUpdateTimers.clear();
+    tmuxManager.destroy();
+    sessionStore.destroy();
+    decisionStore.destroy();
+    questionStore.destroy();
+    wss.close();
+    server.close(() => {
+      process.exit(0);
+    });
+  }
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}

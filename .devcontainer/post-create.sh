@@ -6,15 +6,20 @@ set -euo pipefail
 # ======================================
 # プロジェクトに .node-version や package.json の engines.node が
 # 指定されていない場合に使用されるデフォルトの Node.js バージョン
-DEFAULT_NODE_VERSION="22.21.1"
+DEFAULT_NODE_VERSION="22.23.4"
+# コンテナ内に python3 が存在しない場合に uv でインストールする Python バージョン
+DEFAULT_PYTHON_VERSION="3.12"
 
 # ======================================
 # 環境変数
 # ======================================
 HOME_DIR="/home/vscode"
+DEV_HOME_DATA_DIR="$HOME_DIR/.dev-home-data"
 ANYENV_DIR="$HOME_DIR/.anyenv"
 NODENV_DIR="$HOME_DIR/.nodenv"
 LOGFILE="$HOME_DIR/.anyenv_setup.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHELL_ALIASES_FILE="$SCRIPT_DIR/shell-aliases.sh"
 
 # ログファイルへの出力設定(詳細ログはファイルに記録、ターミナルには重要情報のみ)
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -29,9 +34,94 @@ on_error() {
 }
 trap on_error ERR
 
+# よく使うディレクトリへの移動エイリアスを読み込む
+echo "ワークスペース移動エイリアスの読み込み設定中..."
+for SHELL_RC in "$HOME_DIR/.bashrc" "$HOME_DIR/.zshrc"; do
+  if [ ! -f "$SHELL_RC" ]; then
+    touch "$SHELL_RC"
+  fi
+
+  if ! grep -qF "$SHELL_ALIASES_FILE" "$SHELL_RC"; then
+    {
+      echo ""
+      echo "# Workspace directory aliases"
+      echo "[ -f \"$SHELL_ALIASES_FILE\" ] && . \"$SHELL_ALIASES_FILE\""
+    } >> "$SHELL_RC"
+    echo "$(basename "$SHELL_RC") にワークスペース移動エイリアスの読み込み設定を追加しました。"
+  else
+    echo "$(basename "$SHELL_RC") にはワークスペース移動エイリアスの読み込み設定が既にあります（スキップ）。"
+  fi
+done
+
+# tmux のインストール
+echo "tmux を確認中..."
+if command -v tmux >/dev/null 2>&1; then
+  echo "tmux は既にインストールされています: $(tmux -V)"
+else
+  echo "tmux をインストール中..."
+  sudo apt-get update
+  sudo apt-get install -y --no-install-recommends tmux
+  echo "tmux をインストールしました: $(tmux -V)"
+fi
+
+# dev-home-data named volume は初回マウント時に root 所有になるため、利用前に所有者を補正する
+TARGET_UID="$(id -u)"
+TARGET_GID="$(id -g)"
+if ! sudo -n true 2>/dev/null; then
+  echo "[エラー] dev-home-data volume の初期化にはパスワード不要の sudo が必要です。"
+  exit 1
+fi
+
 # ホームディレクトリ配下の全権限を設定(以降の個別 chown は不要)
 echo "権限を設定中..."
-chown -R vscode:vscode "$HOME_DIR" || true
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$HOME_DIR" || true
+
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR"
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR/codex"
+sudo -n install -d -o "$TARGET_UID" -g "$TARGET_GID" -m 700 "$DEV_HOME_DATA_DIR/tmux"
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
+
+# dev-home-data volume 配下に永続化対象を集約
+echo "永続化ディレクトリをセットアップ中..."
+mkdir -p "$DEV_HOME_DATA_DIR/codex" "$DEV_HOME_DATA_DIR/tmux"
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
+chmod 700 "$DEV_HOME_DATA_DIR" "$DEV_HOME_DATA_DIR/codex" || true
+
+CODEX_HOME="$HOME_DIR/.codex"
+CODEX_DATA_DIR="$DEV_HOME_DATA_DIR/codex"
+TMUX_CONF="$HOME_DIR/.tmux.conf"
+TMUX_CONF_DATA="$DEV_HOME_DATA_DIR/tmux/tmux.conf"
+
+if [ -d "$CODEX_HOME" ] && [ ! -L "$CODEX_HOME" ]; then
+  if [ -z "$(find "$CODEX_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "既存の Codex 設定を dev-home-data に移行します..."
+    rsync -a "$CODEX_HOME/" "$CODEX_DATA_DIR/"
+  fi
+  mv "$CODEX_HOME" "$CODEX_HOME.pre-dev-home-data.$(date +%Y%m%d%H%M%S)"
+fi
+
+if [ ! -e "$CODEX_HOME" ] && [ ! -L "$CODEX_HOME" ]; then
+  ln -s "$CODEX_DATA_DIR" "$CODEX_HOME"
+fi
+
+if [ -f "$TMUX_CONF" ] && [ ! -L "$TMUX_CONF" ]; then
+  if [ ! -f "$TMUX_CONF_DATA" ]; then
+    echo "既存の tmux 設定を dev-home-data に移行します..."
+    cp "$TMUX_CONF" "$TMUX_CONF_DATA"
+  fi
+  mv "$TMUX_CONF" "$TMUX_CONF.pre-dev-home-data.$(date +%Y%m%d%H%M%S)"
+fi
+
+if [ ! -e "$TMUX_CONF_DATA" ]; then
+  printf 'set -g mouse on\n' > "$TMUX_CONF_DATA"
+fi
+
+if [ ! -e "$TMUX_CONF" ] && [ ! -L "$TMUX_CONF" ]; then
+  ln -s "$TMUX_CONF_DATA" "$TMUX_CONF"
+fi
+
+sudo -n chown -R "$TARGET_UID:$TARGET_GID" "$DEV_HOME_DATA_DIR"
+chmod -R go-rwx "$CODEX_DATA_DIR" || true
 
 # anyenv のインストール
 echo "anyenv をセットアップ中..."
@@ -147,7 +237,11 @@ echo "  export PATH=\"$ANYENV_DIR/bin:\$PATH\""
 echo "  eval \"\$(anyenv init -)\"" 
 echo "  [ -d $NODENV_DIR ] && export NODENV_ROOT=\"$NODENV_DIR\" && export PATH=\"$NODENV_DIR/bin:\$PATH\" && command -v nodenv >/dev/null 2>&1 && eval \"\$(nodenv init -)\""
 echo ""
-echo "使用例: nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
+echo "使用例:"
+echo "  nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
+echo ""
+echo "重要: pnpm add -g でグローバルパッケージをインストールした後は、"
+echo "      必ず 'nodenv rehash' を実行してください。"
 echo ""
 
 # Node.js バージョンの自動検出とインストール
@@ -195,6 +289,8 @@ detect_node_version() {
 
 # nodenv が利用可能な場合のみ、Node.js のセットアップを実行
 if command -v nodenv >/dev/null 2>&1; then
+  # node-build 本体の更新を待たず、同梱したチェックサム付き定義を利用する。
+  export NODE_BUILD_DEFINITIONS="$SCRIPT_DIR/node-build${NODE_BUILD_DEFINITIONS:+:$NODE_BUILD_DEFINITIONS}"
   # バージョン検出
   NODE_VER_RAW=$(detect_node_version || true)
   NODE_VER=$(echo "$NODE_VER_RAW" | tr -d ' \n\r' || true)
@@ -212,25 +308,35 @@ if command -v nodenv >/dev/null 2>&1; then
     # インストール処理
     if ! nodenv versions --bare | grep -qx "$NODE_VER"; then
       echo "Node.js $NODE_VER をインストール中..."
-      nodenv install -s "$NODE_VER" || nodenv install "$NODE_VER" || {
-        echo "[警告] Node.js $NODE_VER のインストールに失敗しました。"
+      nodenv install -s "$NODE_VER" || {
+        echo "[エラー] Node.js $NODE_VER のインストールに失敗しました。" >&2
+        exit 1
       }
     else
       echo "Node.js $NODE_VER は既にインストールされています。"
     fi
 
+    NODE_INSTALL_PREFIX="$(nodenv prefix "$NODE_VER")"
+    if [ "$("$NODE_INSTALL_PREFIX/bin/node" --version)" != "v$NODE_VER" ]; then
+      echo "[エラー] 導入された Node.js が指定バージョンと一致しません。" >&2
+      exit 1
+    fi
+
+    # 既存シェルから継承した旧バージョン指定を、このセットアップ内で切り替える。
+    export NODENV_VERSION="$NODE_VER"
+
     # グローバル設定（.node-versionがあってもglobalは設定する）
     echo "グローバルの Node.js バージョンを $NODE_VER に設定します。"
-    nodenv global "$NODE_VER" || echo "[警告] nodenv global の設定に失敗しました。"
+    nodenv global "$NODE_VER"
 
     # プロジェクトに.node-versionがある場合はローカル設定も行う
     if [ -f ".node-version" ]; then
       echo "ローカルの Node.js バージョンも $NODE_VER に設定します。"
-      nodenv local "$NODE_VER" || echo "[警告] nodenv local の設定に失敗しました。"
+      nodenv local "$NODE_VER"
     fi
 
     # rehash
-    nodenv rehash || echo "[警告] nodenv rehash に失敗しました。"
+    nodenv rehash
 
     # 設定確認
     CURRENT_GLOBAL=$(nodenv global 2>/dev/null || echo "未設定")
@@ -253,94 +359,6 @@ if command -v nodenv >/dev/null 2>&1; then
   fi
 else
   echo "[警告] nodenv がインストールされていません。Node.js のセットアップをスキップします。"
-fi
-
-# Claude Code CLI のネイティブインストール
-echo "Claude Code CLI をインストール中..."
-
-# インストール済みチェック(冪等性確保)
-if command -v claude >/dev/null 2>&1; then
-  INSTALLED_VERSION=$(claude --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
-  echo "Claude Code CLI は既にインストールされています: v${INSTALLED_VERSION}"
-  echo "再インストールをスキップします。"
-else
-  # ログファイルの設定(日付ローテーション)
-  LOG_DIR="${HOME}/.cache/claude-install-logs"
-  mkdir -p "$LOG_DIR"
-  LOGFILE_CLAUDE="${LOG_DIR}/install-$(date '+%Y%m%d').log"
-  touch "$LOGFILE_CLAUDE"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Claude Code CLI インストール開始" | tee -a "$LOGFILE_CLAUDE"
-
-  # 古いログファイルのクリーンアップ(7日以上前のログを削除)
-  find "$LOG_DIR" -name "install-*.log" -mtime +7 -delete 2>/dev/null || true
-
-  # アーキテクチャとOSの検出
-  ARCH=$(uname -m)
-  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-
-  # アーキテクチャの正規化
-  case "$ARCH" in
-    x86_64|amd64)
-      ARCH="x64"
-      ;;
-    aarch64|arm64)
-      ARCH="arm64"
-      ;;
-    *)
-      echo "[エラー] サポートされていないアーキテクチャ: $ARCH" | tee -a "$LOGFILE_CLAUDE"
-      ;;
-  esac
-
-  # インストールスクリプトのダウンロードと実行
-  INSTALL_URL="https://claude.ai/install.sh"
-  MAX_RETRIES=3
-  RETRY_COUNT=0
-
-  while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -fsSL "$INSTALL_URL" 2>&1 | tee -a "$LOGFILE_CLAUDE" | bash; then
-      echo "Claude Code CLI のインストールに成功しました。" | tee -a "$LOGFILE_CLAUDE"
-      break
-    else
-      RETRY_COUNT=$((RETRY_COUNT + 1))
-      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-        echo "[警告] インストール失敗。リトライ中... ($RETRY_COUNT/$MAX_RETRIES)" | tee -a "$LOGFILE_CLAUDE"
-        sleep 2
-      else
-        echo "[エラー] Claude Code CLI のインストールに失敗しました。ログを確認してください: $LOGFILE_CLAUDE" | tee -a "$LOGFILE_CLAUDE"
-      fi
-    fi
-  done
-
-  # インストール先の確認とPATH設定
-  CLAUDE_INSTALL_DIR="$HOME/.local/bin"
-  if [ ! -d "$CLAUDE_INSTALL_DIR" ]; then
-    CLAUDE_INSTALL_DIR="/usr/local/bin"
-  fi
-
-  # PATH への追加(存在しない場合のみ)
-  if [ -d "$CLAUDE_INSTALL_DIR" ]; then
-    export PATH="$CLAUDE_INSTALL_DIR:$PATH"
-    
-    # 各シェル設定ファイルへの PATH 追加(bash / zsh 対応)
-    for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [ -f "$SHELL_RC" ]; then
-        if ! grep -q "# Claude Code CLI" "$SHELL_RC"; then
-          echo "" >> "$SHELL_RC"
-          echo "# Claude Code CLI" >> "$SHELL_RC"
-          echo "export PATH=\"$CLAUDE_INSTALL_DIR:\$PATH\"" >> "$SHELL_RC"
-          echo "$(basename $SHELL_RC) に Claude Code CLI の PATH を追加しました" | tee -a "$LOGFILE_CLAUDE"
-        fi
-      fi
-    done
-  fi
-
-  # インストール確認
-  if command -v claude >/dev/null 2>&1; then
-    FINAL_VERSION=$(claude --version 2>/dev/null || echo "version check failed")
-    echo "Claude Code CLI が正常にインストールされました: ${FINAL_VERSION}" | tee -a "$LOGFILE_CLAUDE"
-  else
-    echo "[警告] Claude Code CLI が見つかりません。手動でインストールしてください。" | tee -a "$LOGFILE_CLAUDE"
-  fi
 fi
 
 # ======================================
@@ -435,12 +453,85 @@ else
   fi
 fi
 
-# Claude Code 環境変数(オプション)
-if ! grep -q "# Claude Code 環境変数" ~/.bashrc; then
-  echo "" >> ~/.bashrc
-  echo "# Claude Code 環境変数" >> ~/.bashrc
-  echo "export CLAUDE_CODE_EXIT_AFTER_STOP_DELAY=5000" >> ~/.bashrc
-  echo "export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0" >> ~/.bashrc
-  echo "export DISABLE_AUTOUPDATER=0" >> ~/.bashrc
-  echo "Claude Code 環境変数を .bashrc に追加しました"
+# ======================================
+# uv-managed Python のセットアップ
+# ======================================
+echo "Python を確認中..."
+
+UV_BIN_DIR="$HOME/.local/bin"
+mkdir -p "$UV_BIN_DIR"
+export PATH="$UV_BIN_DIR:$PATH"
+
+# uv が既に入っている環境でも python3 の PATH が通るようにする
+for SHELL_RC in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  if [ ! -f "$SHELL_RC" ]; then
+    touch "$SHELL_RC"
+  fi
+
+  if ! grep -qF "$UV_BIN_DIR" "$SHELL_RC"; then
+    {
+      echo ""
+      echo "# uv-managed Python"
+      echo "case \":\$PATH:\" in"
+      echo "  *:\"$UV_BIN_DIR\":*) ;;"
+      echo "  *) export PATH=\"$UV_BIN_DIR:\$PATH\" ;;"
+      echo "esac"
+    } >> "$SHELL_RC"
+    echo "$(basename "$SHELL_RC") に uv-managed Python の PATH を追加しました。"
+  fi
+done
+
+if command -v python3 >/dev/null 2>&1; then
+  echo "python3 は既に利用可能です: $(python3 --version 2>/dev/null || echo version unknown)"
+elif command -v uv >/dev/null 2>&1; then
+  echo "python3 が見つからないため、uv で Python $DEFAULT_PYTHON_VERSION をインストールします。"
+  if uv python install --preview-features python-install-default "$DEFAULT_PYTHON_VERSION" --default; then
+    echo "uv-managed Python をインストールしました。"
+  else
+    echo "[警告] uv-managed Python のインストールに失敗しました。"
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3 が利用可能になりました: $(python3 --version 2>/dev/null || echo version unknown)"
+  else
+    PYTHON_BIN="$(uv python find --managed-python --no-project "$DEFAULT_PYTHON_VERSION" 2>/dev/null || true)"
+    if [ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ]; then
+      ln -sfn "$PYTHON_BIN" "$UV_BIN_DIR/python3"
+      ln -sfn "$PYTHON_BIN" "$UV_BIN_DIR/python"
+      echo "python3/python を $PYTHON_BIN にリンクしました。"
+      python3 --version || echo "[警告] python3 の動作確認に失敗しました。"
+    else
+      echo "[警告] uv-managed Python の実体が見つかりません。"
+    fi
+  fi
+else
+  echo "[警告] uv が見つからないため、Python のセットアップをスキップします。"
+fi
+
+# ======================================
+# Codex 環境設定
+# ======================================
+
+# Codex 設定復元
+CODEX_BACKUP="/workspaces/ai-work-container/backup/.codex"
+
+if [ -z "$(find "$CODEX_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ] && [ -d "$CODEX_BACKUP" ]; then
+  echo "Codex 設定をバックアップから復元します..."
+  rsync -a "$CODEX_BACKUP/" "$CODEX_DATA_DIR/"
+  chown -R vscode:vscode "$CODEX_DATA_DIR"
+  chmod -R go-rwx "$CODEX_DATA_DIR"
+fi
+
+# pnpm・npm・Codex を検証済みバージョンにそろえる。
+# 新しい Node.js の prefix を明示し、古い runtime のツールを誤用しない。
+if ! command -v nodenv >/dev/null 2>&1 || [ -z "${NODE_VER:-}" ]; then
+  echo "[エラー] Node.js の準備が完了していないため、ツールの導入を停止します。" >&2
+  exit 1
+fi
+NODE_TOOLS_PREFIX="$(nodenv prefix "$NODE_VER")"
+bash "$SCRIPT_DIR/setup-node-tools.sh" "$NODE_TOOLS_PREFIX"
+
+# rehash
+if command -v nodenv >/dev/null 2>&1; then
+  nodenv rehash
 fi

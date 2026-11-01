@@ -1,0 +1,21 @@
+services:
+  devcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # ワークスペース全体をマウント
+      - ..:/workspaces/ai-work-container:cached
+      # 開発ツールの設定・状態を rebuild 後も保持
+      - dev-home-data:/home/vscode/.dev-home-data
+    # コンテナを起動し続ける
+    command: sleep infinity
+    # ネットワーク設定
+    networks:
+      - dev-network
+networks:
+  dev-network:
+    driver: bridge
+
+volumes:
+  dev-home-data:

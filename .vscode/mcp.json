@@ -1,45 +1,16 @@
 {
-	"servers": {
-		"msdocs": {
-			"type": "http",
-			"url": "https://learn.microsoft.com/api/mcp"
-		},
-		"context7": {
-			"type": "stdio",
-			"command": "npx",
-			"args": [
-				"-y",
-				"@upstash/context7-mcp@latest"
-			]
-		},
-		"github-mcp-server": {
-			"type": "http",
-			"url": "https://api.githubcopilot.com/mcp/",
-			"headers": {
-				"Authorization": "Bearer ${input:github_mcp_pat}"
-			}
-		},
-		"serena": {
-			"type": "stdio",
-			"command": "uvx",
-			"args": [
-				"--from",
-				"git+https://github.com/oraios/serena",
-				"serena",
-				"start-mcp-server",
-				"--context",
-				"ide-assistant",
-				"--project",
-				"$(pwd)"
-			]
-		}
-	},
-	"inputs": [
-		{
-			"type": "promptString",
-			"id": "github_mcp_pat",
-			"description": "GitHub Personal Access Token",
-			"password": true
-		}
-	]
+  "servers": {
+    "msdocs": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    },
+    "context7": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ]
+    }
+  }
 }
