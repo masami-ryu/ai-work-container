@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { createServer, get, type ClientRequest } from "node:http";
+import { once } from "node:events";
 import { QuestionStore } from "./question-store.js";
 import type { PendingQuestion } from "./types.js";
 
@@ -175,5 +177,67 @@ describe("QuestionStore", () => {
 
     // destroy が例外なく完了する
     expect(() => store.destroy()).not.toThrow();
+  });
+
+  it("destroy で複数の回答待ちを解放し、再実行してもタイマーを残さない", async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const store = createStore({ onQuestionTimeout: onTimeout });
+    const results: unknown[] = [];
+    for (const sessionId of ["s1", "s2"]) {
+      const question = store.register(sessionId, [{ question: "Q?" }]);
+      void store.waitForAnswer(question.id).then(result => results.push(result));
+    }
+
+    store.destroy();
+    store.destroy();
+    await Promise.resolve();
+
+    expect(results).toEqual([{ resolved: false }, { resolved: false }]);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("回答待ちのHTTPリクエストがあってもdestroy後にserver.closeが完了する", async () => {
+    const store = createStore();
+    const question = store.register("s1", [{ question: "Q?" }]);
+    let notifyWaiting!: () => void;
+    const waiting = new Promise<void>(resolve => { notifyWaiting = resolve; });
+    let result: unknown;
+    const server = createServer(async (_request, response) => {
+      const answer = store.waitForAnswer(question.id);
+      notifyWaiting();
+      result = await answer;
+      response.end(JSON.stringify(result));
+    });
+    let request: ClientRequest | undefined;
+    let closing: Promise<void> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("回答待ちまたはHTTPサーバーの終了が完了しません")), 2000);
+    });
+
+    try {
+      server.listen(0, "127.0.0.1");
+      await Promise.race([once(server, "listening"), timeout]);
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("検証用ポートを取得できません");
+      request = get({ host: "127.0.0.1", port: address.port, agent: false }, response => response.resume());
+      request.on("error", () => {});
+      await Promise.race([waiting, timeout]);
+
+      store.destroy();
+      closing = new Promise<void>(resolve => server.close(() => resolve()));
+      await Promise.race([closing, timeout]);
+      expect(result).toEqual({ resolved: false });
+    } finally {
+      clearTimeout(deadline);
+      store.destroy();
+      request?.destroy();
+      server.closeAllConnections();
+      if (closing) await closing;
+      else if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 });

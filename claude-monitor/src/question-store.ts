@@ -123,6 +123,7 @@ export class QuestionStore {
     clearInterval(this.cleanupTimer);
     for (const [, waiter] of this.waiters) {
       clearTimeout(waiter.timer);
+      waiter.resolve({ resolved: false });
     }
     this.waiters.clear();
   }
