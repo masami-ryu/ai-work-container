@@ -10,7 +10,7 @@ services:
     command: /usr/local/bin/start-playwright-vnc.sh
     shm_size: 1gb
     ports:
-      - "6080:6080"
+      - "127.0.0.1:6080:6080"
     networks:
       - dev-network
 
