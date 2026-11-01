@@ -15,19 +15,7 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# claude-monitor ビルド成果物
-claude-monitor/dist/
-
-# claude-monitor hooks 生成ファイル（テンプレートから環境ごとに生成）
-.github/hooks/claude-monitor*.json
-
-# slack-bridge のローカル生成物（コミットしない）
-slack-bridge/audit.db
-slack-bridge/session.db
-
 ai/**/*
-
-.vscode/claude-monitor-mcp.json
 
 tools/playwright-recorder/.auth/
 tools/playwright-recorder/node_modules/
