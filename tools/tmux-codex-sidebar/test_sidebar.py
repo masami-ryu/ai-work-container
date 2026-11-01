@@ -24,7 +24,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from codex_state import CodexRPC, CodexStates, RPCError, state_label, thread_prefix
-from sidebar import GEOMETRY, WIDTH, Row, Sidebar, Snapshot, StateCache, Tmux, clip, cell_width
+from sidebar import GEOMETRY, HOOK_INDEX, MARK, WIDTH, Row, Sidebar, Snapshot, StateCache, Tmux, clip, cell_width
 from setup import TITLE_ITEMS, codex_config, tmux_config, write_config
 
 
@@ -498,6 +498,138 @@ class TmuxTests(unittest.TestCase):
         time.sleep(.08)
         self.drain()
 
+    def test_exit_closes_window_and_last_window_session(self):
+        original = {pane: self.tmux.value(pane, "#{pane_pid}") for pane, *_ in self.tmux.pane_info(self.session)}
+        self.tmux.install()
+        for separate_session in (False, True):
+            with self.subTest(separate_session=separate_session):
+                command = ["new-session", "-d", "-s", "closing"] if separate_session else ["new-window", "-d", "-t", self.session]
+                session, window, work = self.tmux.run(*command, "-P", "-F",
+                    "#{session_id}\t#{window_id}\t#{pane_id}", "bash --noprofile --norc").split("\t")
+                self.wait(lambda: any(wid == window and mark == "1" for _, wid, _, _, mark in self.tmux.pane_info(session)))
+                self.tmux.run("send-keys", "-t", work, "exit", "Enter")
+                self.wait(lambda: window not in self.tmux.run("list-windows", "-a", "-F", "#{window_id}").splitlines())
+                if separate_session:
+                    self.assertNotIn(session, self.tmux.run("list-sessions", "-F", "#{session_id}").splitlines())
+                self.assertEqual([row.id for row in self.tmux.rows(self.session)], self.ids)
+                self.assertEqual({pane: self.tmux.value(pane, "#{pane_pid}") for pane in original}, original)
+
+    def test_exit_preserves_other_work_panes_until_the_last_exit(self):
+        window = self.tmux.run("new-window", "-d", "-t", self.session, "-P", "-F", "#{window_id}", "bash --noprofile --norc")
+        first = self.tmux.value(window, "#{pane_id}")
+        second = self.tmux.run("split-window", "-h", "-t", window, "-P", "-F", "#{pane_id}", "bash --noprofile --norc")
+        self.tmux.install()
+        self.tmux.run("set-option", "-t", self.session, WIDTH, "34")
+        self.tmux.ensure(self.session)
+        sidebar = self.sidebar(window)
+        self.tmux.run("send-keys", "-t", first, "exit", "Enter")
+        self.wait(lambda: first not in {pane for pane, *_ in self.tmux.pane_info(self.session)})
+        self.tmux.prune()
+        self.assertEqual(set(self.tmux.run("list-panes", "-t", window, "-F", "#{pane_id}").splitlines()), {second, sidebar})
+        self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
+        self.assertEqual(self.tmux.value(sidebar, "#{pane_width}"), "34")
+        self.tmux.select(self.session, self.ids[0])
+        self.assertEqual(self.tmux.value(self.sidebar(), "#{pane_width}"), "34")
+        self.tmux.run("send-keys", "-t", second, "exit", "Enter")
+        self.wait(lambda: window not in {row.id for row in self.tmux.rows(self.session)})
+        self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
+
+    def test_replacing_work_pane_preserves_width_when_pane_count_is_unchanged(self):
+        first = self.tmux.value(self.ids[0], "#{pane_id}")
+        second = self.tmux.run("split-window", "-h", "-t", first, "-P", "-F", "#{pane_id}", "sleep 300")
+        self.tmux.install()
+        self.tmux.run("set-option", "-t", self.session, WIDTH, "34")
+        self.tmux.ensure(self.session)
+        sidebar = self.sidebar()
+        with self.tmux.lock():
+            self.tmux.run("kill-pane", "-t", first)
+            added = self.tmux.run("split-window", "-h", "-t", second, "-P", "-F", "#{pane_id}", "sleep 300")
+            self.assertEqual(self.tmux.value(sidebar, "#{window_panes}"), "3")
+            self.tmux._sync_width(self.session, sidebar)
+            self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
+            self.assertEqual(self.tmux.value(sidebar, "#{pane_width}"), "34")
+        self.assertEqual(set(self.tmux.run("list-panes", "-t", self.ids[0], "-F", "#{pane_id}").splitlines()), {sidebar, second, added})
+
+    def test_vertical_pane_changes_do_not_discard_next_manual_resize(self):
+        work = self.tmux.value(self.ids[0], "#{pane_id}")
+        self.tmux.install()
+        sidebar = self.sidebar()
+        added = self.tmux.run("split-window", "-v", "-t", work, "-P", "-F", "#{pane_id}", "sleep 300")
+        self.wait(lambda: added + "." in self.tmux.option(sidebar, GEOMETRY))
+        self.tmux.run("resize-pane", "-t", sidebar, "-x", "34")
+        self.wait(lambda: self.tmux.option(self.session, WIDTH) == "34")
+        self.tmux.run("kill-pane", "-t", added)
+        self.wait(lambda: added + "." not in self.tmux.option(sidebar, GEOMETRY))
+        self.tmux.run("resize-pane", "-t", sidebar, "-x", "36")
+        self.wait(lambda: self.tmux.option(self.session, WIDTH) == "36")
+        self.assertEqual(self.tmux.value(sidebar, "#{pane_width}"), "36")
+
+    def test_last_work_exit_does_not_save_full_window_width(self):
+        window = self.tmux.run("new-window", "-d", "-t", self.session, "-P", "-F", "#{window_id}", "bash --noprofile --norc")
+        work = self.tmux.value(window, "#{pane_id}")
+        self.tmux.install()
+        self.tmux.run("set-option", "-t", self.session, WIDTH, "34")
+        self.tmux.ensure(self.session)
+        sidebar = self.sidebar(window)
+        layouts = {wid: self.tmux.value(wid, "#{window_layout}") for wid in self.ids}
+        self.tmux.select(self.session, window)
+        # 終了後のpruneを待たせ、幅更新が先に走る順序を再現する。
+        with self.tmux.lock():
+            self.tmux.run("send-keys", "-t", work, "exit", "Enter")
+            self.wait(lambda: self.tmux.value(sidebar, "#{window_panes}") == "1")
+            self.assertEqual(self.tmux.value(sidebar, "#{pane_width}"), self.tmux.value(sidebar, "#{window_width}"))
+            self.tmux._sync_width(self.session, sidebar)
+            self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
+        self.wait(lambda: window not in {row.id for row in self.tmux.rows(self.session)})
+        self.tmux.ensure(self.session)
+        self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
+        self.assertEqual({wid: self.tmux.value(wid, "#{window_layout}") for wid in self.ids}, layouts)
+        self.assertTrue(all(self.tmux.value(self.sidebar(wid), "#{pane_width}") == "34" for wid in self.ids))
+
+    def test_prune_preserves_remain_on_exit_until_pane_is_removed(self):
+        window = self.tmux.run("new-window", "-d", "-t", self.session, "-P", "-F", "#{window_id}", "bash --noprofile --norc")
+        work = self.tmux.value(window, "#{pane_id}")
+        self.tmux.run("set-option", "-w", "-t", window, "remain-on-exit", "on")
+        self.tmux.install()
+        self.tmux.run("send-keys", "-t", work, "exit", "Enter")
+        self.wait(lambda: self.tmux.value(work, "#{pane_dead}") == "1")
+        self.tmux.prune()
+        self.assertIsNotNone(self.sidebar(window))
+        self.assertEqual(self.tmux.value(work, "#{pane_dead}"), "1")
+        self.tmux.run("kill-pane", "-t", work)
+        self.wait(lambda: window not in {row.id for row in self.tmux.rows(self.session)})
+
+    def test_install_closes_existing_orphan_and_preserves_user_hooks(self):
+        window = self.tmux.run("new-window", "-d", "-t", self.session, "-P", "-F", "#{window_id}", "sleep 300")
+        sidebar = self.tmux.value(window, "#{pane_id}")
+        self.tmux.run("set-option", "-p", "-t", sidebar, MARK, "1")
+        self.tmux.run("set-hook", "-g", "pane-exited[2]", "set-option -g @user-exit-hook 1")
+        self.tmux.install()
+        self.assertNotIn(window, {row.id for row in self.tmux.rows(self.session)})
+        hooks = self.tmux.run("show-hooks", "-gw")
+        self.assertIn("pane-exited[2]", hooks)
+        self.assertIn(f"pane-exited[{HOOK_INDEX}]", hooks)
+        self.assertEqual(len(self.tmux.session_windows(self.session)), len(self.ids))
+
+    def test_prune_rechecks_pane_count_before_removal(self):
+        window = self.tmux.run("new-window", "-d", "-t", self.session, "-P", "-F", "#{window_id}", "sleep 300")
+        sidebar = self.tmux.value(window, "#{pane_id}")
+        self.tmux.run("set-option", "-p", "-t", sidebar, MARK, "1")
+        added = []
+
+        class AddingTmux(Tmux):
+            def run(backend, *args):
+                if args[0] == "if-shell" and not added:
+                    added.append(super().run("split-window", "-h", "-t", window, "-P", "-F", "#{pane_id}", "sleep 300"))
+                return super().run(*args)
+
+        AddingTmux(self.path).prune()
+        self.assertEqual(len(added), 1)
+        self.assertEqual(set(self.tmux.run("list-panes", "-t", window, "-F", "#{pane_id}").splitlines()), {sidebar, added[0]})
+        self.tmux.run("kill-pane", "-t", added[0])
+        self.tmux.prune()
+        self.assertNotIn(window, {row.id for row in self.tmux.rows(self.session)})
+
     def test_insert_reorder_name_and_selection(self):
         self.tmux.move(self.session, self.ids[0], self.ids[2], True)
         self.assertEqual([row.name for row in self.tmux.rows(self.session)], ["B", "C", "A", "D"])
@@ -665,7 +797,7 @@ class TmuxTests(unittest.TestCase):
         for columns, expected in [(60, 30), (120, 34)]:
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 35, columns, 0, 0))
             self.client.send_signal(signal.SIGWINCH)
-            self.wait(lambda: self.tmux.option(pane, GEOMETRY) == f"{columns}:{expected}")
+            self.wait(lambda: self.tmux.option(pane, GEOMETRY).split(":")[:2] == [str(columns), str(expected)])
             self.assertEqual(self.tmux.value(pane, "#{pane_width}"), str(expected))
             self.assertEqual(self.tmux.option(self.session, WIDTH), "34")
 
