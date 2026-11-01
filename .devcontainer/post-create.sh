@@ -237,8 +237,8 @@ echo "  export PATH=\"$ANYENV_DIR/bin:\$PATH\""
 echo "  eval \"\$(anyenv init -)\"" 
 echo "  [ -d $NODENV_DIR ] && export NODENV_ROOT=\"$NODENV_DIR\" && export PATH=\"$NODENV_DIR/bin:\$PATH\" && command -v nodenv >/dev/null 2>&1 && eval \"\$(nodenv init -)\""
 echo ""
-echo "使用例:"
-echo "  nodenv install 18.20.1 && nodenv global 18.20.1 && nodenv rehash"
+echo "Node.js はこの後、ワークスペースの .node-version 等から検出して導入します。"
+echo "バージョン指定がない場合は $DEFAULT_NODE_VERSION を使用します。"
 echo ""
 echo "重要: pnpm add -g でグローバルパッケージをインストールした後は、"
 echo "      必ず 'nodenv rehash' を実行してください。"
@@ -246,8 +246,8 @@ echo ""
 
 # Node.js バージョンの自動検出とインストール
 detect_node_version() {
-  # ワークスペースルートディレクトリを取得（post-create.shの実行ディレクトリの親）
-  # 通常 post-create.sh は /workspaces/<project>/.devcontainer で実行されるため
+  # リポジトリ内のスクリプトを直接実行する場合は、その親を参照する。
+  # /usr/local/bin のコピーから実行する場合は、後段でカレントの .node-version も探す。
   local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
   
@@ -348,7 +348,7 @@ if command -v nodenv >/dev/null 2>&1; then
     echo "npm shimパス: $NPM_PATH"
     echo "node shimパス: $NODE_PATH"
     
-    # /workspaces での動作確認（serenaの実行環境）
+    # プロジェクト外の /workspaces でも Node.js が利用できることを確認
     if (cd /workspaces && node -v >/dev/null 2>&1); then
       WORKSPACES_NODE_VER=$(cd /workspaces && node -v)
       echo "✓ /workspaces で node コマンドが正常に動作します: $WORKSPACES_NODE_VER"

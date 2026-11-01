@@ -4,7 +4,7 @@ Dev Container 本体ではなく、Playwright sidecar (`playwright-recorder`) �
 
 ## 手順
 
-ホスト側のターミナルで実行する。
+ホスト側のターミナルで実行する。`/path/to/ai-work-container` はホスト上で clone した実際のパスに置き換える。
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}'
@@ -13,7 +13,7 @@ docker ps --format 'table {{.Names}}\t{{.Label "com.docker.compose.project"}}\t{
 `com.docker.compose.service` が `devcontainer` または `playwright-recorder` の行から、`com.docker.compose.project` の値を確認する。
 
 ```bash
-cd /workspaces/ai-work-container/.devcontainer
+cd /path/to/ai-work-container/.devcontainer
 
 PROJECT_NAME=確認した_project_name
 
@@ -32,12 +32,14 @@ docker compose \
 
 ## pw_batch consumer について
 
+`works_pw_batch/pw_batch` は別途配置する独立リポジトリで、このリポジトリの clone には含まれない。以下はその作業環境を用意している場合の手順。
+
 Playwright sidecar は `pw_batch` consumer を自動起動しない。疎結合を保つため、consumer は必要なときだけ sidecar 内で手動起動する。
 
 queue も使う場合は、ホスト側で LocalStack を起動しておく。
 
 ```bash
-cd /workspaces/ai-work-container/.devcontainer
+cd /path/to/ai-work-container/.devcontainer
 
 PROJECT_NAME=確認した_project_name
 
@@ -48,7 +50,7 @@ docker compose \
   up -d localstack
 ```
 
-sidecar 内で起動する場合:
+共有 Chrome を起動した後、sidecar の noVNC デスクトップ内の xterm で consumer を起動する。ここで使うパスはコンテナ内のパス。
 
 ```bash
 cd /workspaces/ai-work-container/works_pw_batch/pw_batch
@@ -64,9 +66,4 @@ pnpm consumer
 
 `-p "$PROJECT_NAME"` を付けないと、VS Code Dev Containers が作成した compose project とは別扱いになり、新しいコンテナが作成される。
 
-環境によっては、例えば次のような値になる。
-
-```bash
-cd projects/private/ai-work-container/.devcontainer
-PROJECT_NAME=ai-work-container_devcontainer
-```
+project 名は環境ごとに異なるため、先頭の `docker ps` で確認した値を使う。
