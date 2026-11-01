@@ -10,7 +10,7 @@ interface PendingWaiter {
 
 export class DecisionStore {
   private decisions = new Map<string, Decision>();
-  private waiters = new Map<string, PendingWaiter>();
+  private waiters = new Map<string, Set<PendingWaiter>>();
   private cleanupTimer: ReturnType<typeof setInterval>;
   private onDecisionPending: (decision: Decision) => void;
   private onDecisionResolved: (decision: Decision) => void;
@@ -51,12 +51,7 @@ export class DecisionStore {
     decision.resolved_at = new Date().toISOString();
 
     // long-poll waiter に通知
-    const waiter = this.waiters.get(id);
-    if (waiter) {
-      clearTimeout(waiter.timer);
-      waiter.resolve({ resolved: true, decision: result });
-      this.waiters.delete(id);
-    }
+    this.resolveWaiters(id, { resolved: true, decision: result });
 
     this.onDecisionResolved(decision);
     return decision;
@@ -69,19 +64,30 @@ export class DecisionStore {
     if (decision && decision.status === "resolved") {
       return Promise.resolve({ resolved: true, decision: decision.result });
     }
+    if (decision && decision.status === "timeout") {
+      return Promise.resolve({ resolved: false });
+    }
 
     return new Promise((resolve) => {
+      const waiters = this.waiters.get(id) ?? new Set<PendingWaiter>();
       const timer = setTimeout(() => {
-        this.waiters.delete(id);
-        const d = this.decisions.get(id);
-        if (d && d.status === "pending") {
-          d.status = "timeout";
-          this.onDecisionTimeout(d);
+        waiters.delete(waiter);
+        // 他のリクエストが待機中なら decision 自体は失効させない。
+        if (waiters.size === 0) {
+          this.waiters.delete(id);
+          const d = this.decisions.get(id);
+          if (d && d.status === "pending") {
+            d.status = "timeout";
+            d.resolved_at = new Date().toISOString();
+            this.onDecisionTimeout(d);
+          }
         }
         resolve({ resolved: false });
       }, timeoutMs);
 
-      this.waiters.set(id, { resolve, timer });
+      const waiter = { resolve, timer };
+      waiters.add(waiter);
+      this.waiters.set(id, waiters);
     });
   }
 
@@ -96,12 +102,7 @@ export class DecisionStore {
         decision.status = "timeout";
         decision.resolved_at = new Date().toISOString();
         // waiter を解放
-        const waiter = this.waiters.get(id);
-        if (waiter) {
-          clearTimeout(waiter.timer);
-          waiter.resolve({ resolved: false });
-          this.waiters.delete(id);
-        }
+        this.resolveWaiters(id, { resolved: false });
         cancelled.push(decision);
       }
     }
@@ -115,12 +116,7 @@ export class DecisionStore {
         decision.status = "resolved";
         decision.result = "deny";
         decision.resolved_at = new Date().toISOString();
-        const waiter = this.waiters.get(id);
-        if (waiter) {
-          clearTimeout(waiter.timer);
-          waiter.resolve({ resolved: true, decision: "deny" });
-          this.waiters.delete(id);
-        }
+        this.resolveWaiters(id, { resolved: true, decision: "deny" });
         this.onDecisionResolved(decision);
         denied.push(decision);
       }
@@ -134,10 +130,19 @@ export class DecisionStore {
 
   destroy(): void {
     clearInterval(this.cleanupTimer);
-    for (const [, waiter] of this.waiters) {
-      clearTimeout(waiter.timer);
+    for (const id of this.waiters.keys()) {
+      this.resolveWaiters(id, { resolved: false });
     }
-    this.waiters.clear();
+  }
+
+  private resolveWaiters(id: string, result: { resolved: boolean; decision?: string }): void {
+    const waiters = this.waiters.get(id);
+    if (!waiters) return;
+    this.waiters.delete(id);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(result);
+    }
   }
 
   private cleanup(): void {
@@ -149,12 +154,7 @@ export class DecisionStore {
         decision.status = "timeout";
         decision.resolved_at = new Date().toISOString();
         // waiter が存在すれば解放
-        const waiter = this.waiters.get(id);
-        if (waiter) {
-          clearTimeout(waiter.timer);
-          waiter.resolve({ resolved: false });
-          this.waiters.delete(id);
-        }
+        this.resolveWaiters(id, { resolved: false });
         this.onDecisionTimeout(decision);
       } else if (decision.status !== "pending") {
         if (now - createdAt > DECISION_TIMEOUT_MS) {

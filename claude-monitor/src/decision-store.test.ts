@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DecisionStore } from "./decision-store.js";
 import type { DecisionRequest } from "./types.js";
 
@@ -25,6 +25,102 @@ function createStore(handlers?: Partial<{
     onDecisionTimeout: handlers?.onDecisionTimeout ?? vi.fn(),
   });
 }
+
+describe("DecisionStore の重複待機", () => {
+  let store: DecisionStore;
+  let onTimeout = vi.fn();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    onTimeout = vi.fn();
+    store = createStore({ onDecisionTimeout: onTimeout });
+    store.register(makeRequest());
+  });
+
+  afterEach(() => {
+    store.destroy();
+    vi.useRealTimers();
+  });
+
+  it.each(["allow", "deny"] as const)("%s を同じIDの全リクエストに返す", async (decision) => {
+    const waits = [store.waitForDecision("d1", 100), store.waitForDecision("d1", 200)];
+    store.respond("d1", decision);
+    expect(await Promise.all(waits)).toEqual([
+      { resolved: true, decision },
+      { resolved: true, decision },
+    ]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("先行リクエストのタイムアウト後も後続リクエストへ回答できる", async () => {
+    const first = store.waitForDecision("d1", 100);
+    const second = store.waitForDecision("d1", 200);
+    const secondResolved = vi.fn();
+    void second.then(secondResolved);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await first).toEqual({ resolved: false });
+    expect(secondResolved).not.toHaveBeenCalled();
+    expect(store.get("d1")?.status).toBe("pending");
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    store.respond("d1", "allow");
+    expect(await second).toEqual({ resolved: true, decision: "allow" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("最後の待機が失効したときだけdecisionをタイムアウトにする", async () => {
+    const waits = [store.waitForDecision("d1", 100), store.waitForDecision("d1", 200)];
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await Promise.all(waits)).toEqual([{ resolved: false }, { resolved: false }]);
+    expect(store.get("d1")?.status).toBe("timeout");
+    expect(onTimeout).toHaveBeenCalledOnce();
+    expect(await store.waitForDecision("d1")).toEqual({ resolved: false });
+  });
+
+  it("セッションのキャンセルで全リクエストを解放する", async () => {
+    const waits = [store.waitForDecision("d1"), store.waitForDecision("d1")];
+    store.cancelBySession("s1");
+    expect(await Promise.all(waits)).toEqual([{ resolved: false }, { resolved: false }]);
+  });
+
+  it("セッションの拒否を全リクエストに返す", async () => {
+    const waits = [store.waitForDecision("d1"), store.waitForDecision("d1")];
+    store.denyBySession("s1");
+    expect(await Promise.all(waits)).toEqual([
+      { resolved: true, decision: "deny" },
+      { resolved: true, decision: "deny" },
+    ]);
+  });
+
+  it("古いdecisionのクリーンアップで全リクエストを解放する", async () => {
+    store.register(makeRequest({ correlation_id: "stale", timestamp: new Date(Date.now() - 301_000).toISOString() }));
+    const waits = [store.waitForDecision("stale", 600_000), store.waitForDecision("stale", 600_000)];
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await Promise.all(waits)).toEqual([{ resolved: false }, { resolved: false }]);
+    expect(onTimeout).toHaveBeenCalledOnce();
+  });
+
+  it("破棄時に全リクエストとタイマーを解放する", async () => {
+    const waits = [store.waitForDecision("d1"), store.waitForDecision("d1")];
+    store.destroy();
+    expect(await Promise.all(waits)).toEqual([{ resolved: false }, { resolved: false }]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("別IDの待機には回答が混ざらない", async () => {
+    store.register(makeRequest({ correlation_id: "d2" }));
+    const first = store.waitForDecision("d1");
+    const other = store.waitForDecision("d2");
+    store.respond("d1", "allow");
+    expect(await first).toEqual({ resolved: true, decision: "allow" });
+    expect(store.get("d2")?.status).toBe("pending");
+    store.respond("d2", "deny");
+    expect(await other).toEqual({ resolved: true, decision: "deny" });
+  });
+});
 
 describe("DecisionStore.respond", () => {
   it("pending → resolved(allow) で onDecisionResolved が呼ばれる", () => {
