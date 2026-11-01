@@ -29,6 +29,7 @@ MARK = "@codex_sidebar"
 ENABLED = "@codex_sidebar_enabled"
 WIDTH = "@codex_sidebar_width"
 GEOMETRY = "@codex_sidebar_geometry"
+GEOMETRY_FORMAT = "#{window_width}:#{pane_width}:#{P:#{pane_id}.}"
 HOOK_INDEX = 7319
 
 
@@ -249,7 +250,7 @@ class Tmux:
             pane = self.run("split-window", "-h", "-b", "-f", "-d", "-l", str(width),
                             "-t", window, "-P", "-F", "#{pane_id}", command)
             self.run("set-option", "-p", "-t", pane, MARK, "1", ";",
-                     "set-option", "-p", "-F", "-t", pane, GEOMETRY, "#{window_width}:#{pane_width}")
+                     "set-option", "-p", "-F", "-t", pane, GEOMETRY, GEOMETRY_FORMAT)
 
     def sync_width(self, session, pane):
         with self.lock():
@@ -257,12 +258,19 @@ class Tmux:
 
     def _sync_width(self, session, pane):
         """手動変更を保存し、自動リサイズと端末サイズ変更では保存幅を変えない。"""
-        geometry = "#{window_width}:#{pane_width}"
-        current, previous, zoomed = self.value(pane, geometry + "\t#{" + GEOMETRY + "}\t#{window_zoomed_flag}").split("\t")
-        if zoomed == "1":
+        geometry = GEOMETRY_FORMAT
+        current, previous, zoomed, pane_count = self.value(
+            pane, geometry + "\t#{" + GEOMETRY + "}\t#{window_zoomed_flag}\t#{window_panes}"
+        ).split("\t")
+        # 最後の作業paneが閉じた直後の全幅化を、手動リサイズとして保存しない。
+        if zoomed == "1" or pane_count == "1":
             return
-        window_width, pane_width = map(int, current.split(":"))
-        manual = previous and previous.split(":")[0] == str(window_width) and current != previous
+        window_width, pane_width, members = current.split(":")
+        window_width, pane_width = int(window_width), int(pane_width)
+        old = previous.split(":")
+        # paneの追加・削除・入替による幅変更は保存しない。旧形式の記録も初期化する。
+        manual = (len(old) == 3 and old[0] == str(window_width) and old[2] == members
+                  and current != previous)
         requested = max(pane_width if manual else int(self.option(session, WIDTH, "28")), 16)
         width = min(requested, window_width - 30) if window_width >= 50 else pane_width
         commands = []
@@ -273,7 +281,8 @@ class Tmux:
         if commands or current != previous:
             commands.append(shlex.join(["set-option", "-p", "-F", "-t", pane, GEOMETRY, geometry]))
             # 読み取り後に境界が動いた場合は適用しない。判定と変更をtmux内で連続実行する。
-            condition = "#{&&:#{==:" + geometry + "," + current + "},#{==:#{window_zoomed_flag},0}}"
+            condition = ("#{&&:#{==:" + geometry + "," + current + "},"
+                         "#{&&:#{==:#{window_zoomed_flag},0},#{>:#{window_panes},1}}}")
             self.run("if-shell", "-F", "-t", pane, condition, " ; ".join(commands))
 
     def toggle(self, session):
@@ -287,11 +296,36 @@ class Tmux:
                 self.run("set-option", "-t", session, ENABLED, "1")
                 self._ensure(session)
 
+    def prune(self):
+        """終了後の幅を復元し、作業paneがなくなったwindowのサイドバーを閉じる。"""
+        with self.lock():
+            try:
+                panes = self.run("list-panes", "-a", "-F", "#{pane_id}\t#{@codex_sidebar}\t#{session_id}").splitlines()
+            except RuntimeError:
+                return  # 最後のsessionが閉じたあとのhookは何もしない。
+            for line in panes:
+                pane, mark, session = line.split("\t")
+                if mark != "1":
+                    continue
+                # 判定と削除をtmux内で連続実行し、直前に追加された作業paneも保護する。
+                # remain-on-exitで残した作業paneもwindow_panesに含めて保持する。
+                condition = "#{&&:#{==:#{window_panes},1},#{==:#{@codex_sidebar},1}}"
+                try:
+                    # 上下分割など幅が変わらない終了でも、pane構成の記録を更新する。
+                    self._sync_width(session, pane)
+                    self.run("if-shell", "-F", "-t", pane, condition, shlex.join(["kill-pane", "-t", pane]))
+                except RuntimeError:
+                    continue  # 別の操作ですでに消えたpaneは読み飛ばす。
+
     def install(self):
         self.run("set-option", "-g", "mouse", "on")
         command = self.command("ensure") + " --session #{q:session_id}"
-        for event in ["after-new-window", "after-new-session", "session-window-changed", "client-attached", "client-resized"]:
+        for event in ["after-new-window", "after-new-session", "after-split-window",
+                      "session-window-changed", "client-attached", "client-resized"]:
             self.run("set-hook", "-g", f"{event}[{HOOK_INDEX}]", "run-shell -b " + shlex.quote(command))
+        # 終了通知のpaneはすでに消えているため、通知の対象sessionには依存しない。
+        for event in ["pane-exited", "after-kill-pane"]:
+            self.run("set-hook", "-g", f"{event}[{HOOK_INDEX}]", "run-shell -b " + shlex.quote(self.command("prune")))
         self.run("bind-key", "e", "run-shell", "-b", self.command("toggle") + " --session #{q:session_id}")
         # tmux 3.4は素早い2回目の押下をSecondClickにする。標準では未割当のため、
         # サイドバー内だけ転送する。既存のユーザー割当は上書きしない。
@@ -300,6 +334,7 @@ class Tmux:
         except RuntimeError:
             self.run("bind-key", "-T", "root", "SecondClick1Pane", "if-shell", "-F", "-t", "=",
                      "#{@codex_sidebar}", "select-pane -t = ; send-keys -M")
+        self.prune()  # 更新前から残っている空のwindowも整理する。
         try:
             sessions = self.run("list-sessions", "-F", "#{session_id}").splitlines()
         except RuntimeError:
@@ -592,13 +627,15 @@ class Sidebar:
 def main():
     parser = argparse.ArgumentParser(description="tmux Codexサイドバー")
     parser.add_argument("--socket", help="tmux socketのパス")
-    parser.add_argument("action", choices=["install", "ensure", "toggle", "ui"])
+    parser.add_argument("action", choices=["install", "ensure", "toggle", "prune", "ui"])
     parser.add_argument("--session", help="tmux session ID")
     parser.add_argument("--codex-socket", help="CodexのUnix socket。通常は自動取得")
     args = parser.parse_args()
     tmux = Tmux(args.socket)
     if args.action == "install":
         tmux.install()
+    elif args.action == "prune":
+        tmux.prune()
     else:
         session = args.session or tmux.value(os.environ.get("TMUX_PANE", ""), "#{session_id}")
         if args.action == "ensure":
