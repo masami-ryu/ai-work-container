@@ -27,14 +27,14 @@ PAYLOAD=$(printf '%s\n' "$INPUT" | jq -c --arg tmux_pane "$TMUX_PANE_INFO" '{
   timestamp: now | todate
 }')
 
-HOOK_TOKEN_HEADER=""
+HOOK_TOKEN_ARGS=()
 if [ -n "${CLAUDE_MONITOR_HOOK_TOKEN:-}" ]; then
-  HOOK_TOKEN_HEADER="-H X-Hook-Token: $CLAUDE_MONITOR_HOOK_TOKEN"
+  HOOK_TOKEN_ARGS=(-H "X-Hook-Token: $CLAUDE_MONITOR_HOOK_TOKEN")
 fi
 
 curl -s -X POST http://localhost:3456/api/events \
   -H "Content-Type: application/json" \
-  $HOOK_TOKEN_HEADER \
+  "${HOOK_TOKEN_ARGS[@]}" \
   -d "$PAYLOAD" -o /dev/null || true
 
 exit 0
