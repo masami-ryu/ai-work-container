@@ -11,20 +11,63 @@
 3. **Git worktree サポート**: `/workspaces/` のパーミッション調整により、Git worktree 作成をサポート
 4. **開発ツール設定の永続化**: Docker volume `dev-home-data` を `/home/vscode/.dev-home-data` にマウントし、Codex と tmux の設定を保持
 
-## Node.js のセキュリティ更新
+## 開発ツールのバージョン
 
-- 共通環境は `.node-version` と `post-create.sh` の既定値で `22.23.4` を指定する。
-- `node-build/22.23.4` に公式チェックサム付きの定義を同梱する。既存の node-build に新バージョンが登録されていなくても導入できる。
-- 導入失敗や実バージョンの不一致がある場合はセットアップを停止する。セットアップ中は選択したバージョンを `NODENV_VERSION` に設定する。
-- Playwright sidecar はベースイメージの Node.js 24 系を維持し、`Dockerfile.playwright` で修正版 `24.22.1` を指定する。変更後はホスト側で sidecar を再ビルド・再作成する。
-- 既存プロセスは旧 Node.js で動き続けるため、作業が終わった時点で再起動する。VS Code Server 内蔵の Node.js は別管理のため、VS Code 側の更新も確認する。
+Node.js はルートの `.node-version` を基準にする。フォールバックは `post-create.sh` の `DEFAULT_NODE_VERSION` に定義する。
 
-既存シェルの `NODENV_VERSION` が旧版を固定している場合は、修正版の導入後にワークスペースルートで次を実行する。
+`node-build/22.23.4` に公式チェックサム付きの定義を同梱する。既存の node-build に新バージョンが登録されていなくても導入できる。導入失敗や実バージョンの不一致がある場合は、セットアップを停止する。
+
+pnpm・npm・Codex の固定バージョンは `node-tools.env` に定義する。`post-create.sh` は `setup-node-tools.sh` を呼び、選択した Node.js に対応するツールを導入する。
+
+| ツール | バージョン |
+| --- | --- |
+| Node.js | 22.23.4 |
+| pnpm | 11.28.6 |
+| npm | 11.21.1 |
+| Codex | 0.163.0 |
+
+- npm は Node.js 同梱版の依存に脆弱性が残っていたため、同梱依存の監査を通過した 11.21.1 に更新する。
+- Node.js の依存管理には pnpm を使う。ツール導入時のライフサイクルスクリプトは無効にする。
+- インストールに失敗した場合、未固定の最新版へフォールバックせず処理を停止する。
+- バージョン変更後は新しいターミナルを開く。既存の開発サーバーは旧 Node.js で動き続けるため、作業が終わった時点で再起動する。
+
+Playwright sidecar はベースイメージの Node.js 24 系を維持し、`Dockerfile.playwright` でセキュリティ修正版 `24.22.1` を指定する。変更後はホスト側で sidecar を再ビルド・再作成する。VS Code Server 内蔵の Node.js は別管理のため、VS Code 側の更新も確認する。
+
+既存シェルの `NODENV_VERSION` が旧版を固定している場合は、ワークスペースルートで次を実行する。
 
 ```bash
 unset NODENV_VERSION NODENV_DIR
 eval "$(nodenv init -)"
 node --version
+pnpm --version
+```
+
+既存コンテナの選択済み Node.js にツールを導入し直す場合:
+
+```bash
+bash .devcontainer/setup-node-tools.sh "$(nodenv prefix)"
+nodenv rehash
+```
+
+### pnpm のグローバル配置先
+
+`setup-node-tools.sh` は、以下の配置先を pnpm のユーザー設定（通常は `~/.config/pnpm/config.yaml`）に保存する。通常の `pnpm add -g` と Codex 内の更新にも適用される。
+
+| 設定 | 配置先 |
+| --- | --- |
+| `global-dir` | `<nodenv prefix>/lib/pnpm-global` |
+| `global-bin-dir` | `<nodenv prefix>/bin` |
+
+コンテナ再構築時は `post-create.sh` 経由で再設定する。配置先はセットアップ対象の Node.js に固定されるため、別の Node.js に移行するときも `setup-node-tools.sh` を実行する。
+
+既存コンテナで、パッケージを再インストールせずに配置先だけ設定する場合:
+
+```bash
+NODE_TOOLS_PREFIX="$(nodenv prefix)"
+pnpm config set --global global-dir "$NODE_TOOLS_PREFIX/lib/pnpm-global"
+pnpm config set --global global-bin-dir "$NODE_TOOLS_PREFIX/bin"
+pnpm bin -g
+pnpm list -g --depth 0
 ```
 
 ## スクリプト一覧
