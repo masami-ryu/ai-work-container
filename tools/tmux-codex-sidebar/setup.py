@@ -21,31 +21,75 @@ BEGIN = "# BEGIN tmux-codex-sidebar"
 END = "# END tmux-codex-sidebar"
 
 
+def toml_parts(text, delimiter="\n", inline=False):
+    """tomllibで文の完結を確認し、文字列・配列内の区切りを読み飛ばす。"""
+    start = 0
+    for end in [match.start() for match in re.finditer(re.escape(delimiter), text)] + [len(text)]:
+        part = text[start:end]
+        try:
+            parsed = tomllib.loads("value = {" + part + "}")["value"] if inline else tomllib.loads(part)
+        except tomllib.TOMLDecodeError:
+            continue
+        yield start, end, parsed
+        start = end + 1
+
+
+def title_assignment(part):
+    return part.split("=", 1)[0] + "= " + TITLE_LINE.split("=", 1)[1].strip()
+
+
+def inline_tui(part):
+    opening = part.index("{")
+    # 最初に文として完結する閉じ括弧を選ぶ。値や末尾コメント内の } は使わない。
+    for closing in range(opening + 1, len(part)):
+        if part[closing] != "}":
+            continue
+        try:
+            tomllib.loads(part[:closing + 1])
+            break
+        except tomllib.TOMLDecodeError:
+            continue
+    body = part[opening + 1:closing]
+    for start, end, entry in toml_parts(body, ",", inline=True):
+        if "terminal_title" in entry:
+            suffix = body[start:end][len(body[start:end].rstrip()):]
+            body = body[:start] + title_assignment(body[start:end]) + suffix + body[end:]
+            break
+    else:
+        body = body.rstrip() + (", " if body.strip() else " ") + TITLE_LINE.strip() + " "
+    return part[:opening + 1] + body + part[closing:]
+
+
 def codex_config(text):
     original = tomllib.loads(text)
     if original.get("tui", {}).get("terminal_title") == TITLE_ITEMS:
         return text
-    lines = text.splitlines(keepends=True)
-    section = next((i for i, line in enumerate(lines)
-                    if re.match(r'''^\s*\[\s*(?:tui|"tui"|'tui')\s*\]\s*(?:#.*)?$''', line)), None)
-    if section is None:
-        result = text.rstrip() + "\n\n[tui]\n" + TITLE_LINE
-    else:
-        end = next((i for i in range(section + 1, len(lines)) if re.match(r"^\s*\[", lines[i])), len(lines))
-        entry = next((i for i in range(section + 1, end)
-                      if re.match(r'''^\s*(?:terminal_title|"terminal_title"|'terminal_title')\s*=''', lines[i])), None)
-        if entry is None:
-            lines.insert(section + 1, TITLE_LINE)
+    root, in_tui, section_end, result = True, False, None, None
+    for start, end, entry in toml_parts(text):
+        part = text[start:end]
+        if part.lstrip().startswith("["):
+            root, in_tui = False, entry == {"tui": {}}
+            if in_tui:
+                section_end = end
+        elif root and "tui" in entry:
+            key = part.split("=", 1)[0]
+            if tomllib.loads(key + "= 0") == {"tui": 0}:
+                result = text[:start] + inline_tui(part) + text[end:]
+                break
+            if "terminal_title" in entry["tui"]:
+                result = text[:start] + title_assignment(part) + text[end:]
+                break
+        elif in_tui and "terminal_title" in entry:
+            result = text[:start] + title_assignment(part) + text[end:]
+            break
+    if result is None:
+        if section_end is not None:
+            result = text[:section_end] + "\n" + TITLE_LINE.rstrip() + text[section_end:]
+        elif "tui" in original:
+            # ドット形式のテーブルに[tui]を再宣言せず、ルートにキーを追加する。
+            result = "tui." + TITLE_LINE + text
         else:
-            last = entry + 1
-            while last <= end:
-                try:
-                    tomllib.loads("".join(lines[entry:last]))
-                    break
-                except tomllib.TOMLDecodeError:
-                    last += 1
-            lines[entry:last] = [TITLE_LINE]
-        result = "".join(lines)
+            result = text.rstrip() + "\n\n[tui]\n" + TITLE_LINE
     expected = copy.deepcopy(original)
     expected.setdefault("tui", {})["terminal_title"] = TITLE_ITEMS
     if tomllib.loads(result) != expected:

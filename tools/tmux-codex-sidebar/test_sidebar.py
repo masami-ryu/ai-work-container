@@ -130,6 +130,70 @@ class StateTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def test_inline_and_dotted_tui_preserve_settings_and_idempotency(self):
+        cases = [
+            'tui = { notifications = false }\n',
+            'tui = {} # empty\n',
+            '"tui" = { notifications = false, terminal_title = ["project"], theme = "dark" } # keep\n',
+            "'tui' = { 'terminal_title' = [\"project\", \"status\"], notifications = true }\n",
+            'tui = { notifications = ["comma,brace}"], nested = { value = "x,y}" }, terminal_title = ["project"] } # }\n',
+            'tui = { notifications = [\n "event", # array comment\n], terminal_title = [\n "project",\n] } # keep\n',
+            'tui.notifications = false\n',
+            '"tui" . "terminal_title" = ["project"]\ntui.notifications = false\n',
+            "'tui'.notifications = false\n 'tui'.'terminal_title' = [\n 'project',\n 'status',\n ]\n",
+        ]
+        for config in cases:
+            with self.subTest(config=config):
+                original = '# before\nmodel = "existing"\n' + config + '\n[other]\nvalue = 4 # after\n'
+                expected = tomllib.loads(original)
+                expected['tui']['terminal_title'] = TITLE_ITEMS
+                result = codex_config(original)
+                self.assertEqual(tomllib.loads(result), expected)
+                self.assertTrue(result.endswith('\n[other]\nvalue = 4 # after\n'))
+                self.assertIn('# before\nmodel = "existing"\n', result)
+                self.assertEqual(codex_config(result), result)
+                if '# keep' in original:
+                    self.assertIn('# keep', result)
+
+    def test_tui_update_ignores_strings_and_other_tables(self):
+        for config in [
+            'tui = { notifications = false }\n',
+            'tui.notifications = false\n',
+            '[tui]\nnotifications = false\n',
+        ]:
+            with self.subTest(config=config):
+                before = 'note = """\n[tui]\nterminal_title = ["literal"]\ntui = { terminal_title = ["literal"] }\n"""\n'
+                after = '\n[other]\ntui = { terminal_title = ["untouched"] }\n'
+                original = before + config + after
+                expected = tomllib.loads(original)
+                expected['tui']['terminal_title'] = TITLE_ITEMS
+                result = codex_config(original)
+                self.assertEqual(tomllib.loads(result), expected)
+                self.assertTrue(result.endswith(after))
+                self.assertIn(before, result)
+
+    def test_cli_installs_inline_and_dotted_tui_with_backups(self):
+        for source in ['tui = { notifications = false }\n', 'tui.notifications = false\n']:
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config, tmux = root / 'config.toml', root / 'tmux.conf'
+                config.write_text(source)
+                tmux.write_text('set -g history-limit 1234\n')
+                command = [sys.executable, str(Path(__file__).with_name('setup.py')), '--no-load',
+                           '--codex-config', str(config), '--tmux-config', str(tmux)]
+                first = subprocess.run(command, capture_output=True, text=True, timeout=5)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                self.assertEqual(tomllib.loads(config.read_text()), {
+                    'tui': {'notifications': False, 'terminal_title': TITLE_ITEMS}})
+                backups = list(root.glob('*.bak'))
+                self.assertEqual(len(backups), 2)
+                self.assertIn(source, [backup.read_text() for backup in backups])
+                installed = (config.read_bytes(), tmux.read_bytes())
+                second = subprocess.run(command, capture_output=True, text=True, timeout=5)
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertEqual((config.read_bytes(), tmux.read_bytes()), installed)
+                self.assertEqual(set(root.glob('*.bak')), set(backups))
+
     def test_cli_expands_home_paths_before_reading_existing_settings(self):
         with tempfile.TemporaryDirectory(prefix=".sidebar-tests-", dir=Path.home()) as directory:
             root = Path(directory)

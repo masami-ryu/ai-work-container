@@ -13,6 +13,7 @@ python3 /workspaces/ai-work-container/tools/tmux-codex-sidebar/setup.py
 - `~/.tmux.conf`にサイドバーの読み込みを追加し、起動中のtmuxに反映します。
 - Codexの`config.toml`で、端末タイトルにthread IDを含めます。`CODEX_HOME`を設定している場合はその保存先を使います。
 - 既存の設定は保持します。変更前のファイルは同じディレクトリに日時付きでバックアップします。
+- Codexの`tui`設定は、`[tui]`・`tui = { ... }`・`tui.notifications = false`などの記述形式に対応します。
 - 設定ファイルのsymlinkを維持するため、このコンテナの永続化設定でも使用できます。
 - 再実行しても読み込み設定やpaneは重複しません。
 
