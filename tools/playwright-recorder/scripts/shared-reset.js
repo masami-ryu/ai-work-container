@@ -47,7 +47,9 @@ function runPlaywrightCliClose(options = {}) {
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => {
-        if (!settled) child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
       }, 2000).unref();
       finish({
         code: 124,
